@@ -3,6 +3,7 @@ package providers
 import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"net/url"
 	"strings"
 )
 
@@ -39,4 +40,10 @@ func (p *NnmProvider) GetRssLink(doc *goquery.Document) string {
 func (p *NnmProvider) GetTitle(doc *goquery.Document) string {
 	title := doc.Find("div.postbody span[style='font-size: 20px; line-height: normal'] span[style='font-weight: bold']").Text()
 	return strings.TrimSpace(title)
+}
+
+func (p *NnmProvider) GetId(originalUrl string) string {
+	u, _ := url.Parse(originalUrl)
+
+	return u.Query().Get("t")
 }

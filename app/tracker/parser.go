@@ -12,6 +12,7 @@ import (
 )
 
 type FileMetadata struct {
+	ID          string `json:"-"`
 	OriginalUrl string `json:"-"`
 	RssUrl      string `json:"rss_url"`
 	Magnet      string `json:"magnet"`
@@ -39,12 +40,14 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	magnet := provider.GetMagnetLink(doc)
 	rss := provider.GetRssLink(doc)
 	title := provider.GetTitle(doc)
+	id := provider.GetId(url)
 
 	return &FileMetadata{
 		OriginalUrl: url,
 		Magnet:      magnet,
 		RssUrl:      rss,
 		Name:        title,
+		ID:          id,
 	}, nil
 }
 
