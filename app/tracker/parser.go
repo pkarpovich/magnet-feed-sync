@@ -3,7 +3,9 @@ package tracker
 import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html/charset"
 	"io"
+	"log"
 	"magnet-feed-sync/app/tracker/providers"
 	"net/http"
 	"strings"
@@ -27,10 +29,9 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer body.Close()
 
 	provider := getProviderByUrl(url)
-	doc, err := goquery.NewDocumentFromReader(body)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
 	}
@@ -53,15 +54,30 @@ func getProviderByUrl(url string) providers.Service {
 	return nil
 }
 
-func getPageBody(url string) (io.ReadCloser, error) {
+func getPageBody(url string) ([]byte, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("[ERROR] error closing response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	return resp.Body, nil
+	utf8Reader, err := charset.NewReader(resp.Body, resp.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := io.ReadAll(utf8Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }
