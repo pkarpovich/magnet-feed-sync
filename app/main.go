@@ -1,33 +1,49 @@
 package main
 
 import (
+	"fmt"
+	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	downloadStation "magnet-feed-sync/app/download-station"
+	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/tracker"
 )
 
 func main() {
-	url := "https://nnmclub.to/forum/viewtopic.php?t=1701587&start=15#pagestart"
+	log.Printf("[INFO] Starting app")
 
-	config, err := config.Init()
+	cfg, err := config.Init()
 	if err != nil {
-		log.Fatalf("Error reading config: %s", err)
+		log.Fatalf("[ERROR] Error reading config: %s", err)
 	}
 
+	if err := run(cfg); err != nil {
+		log.Fatalf("[ERROR] Error running app: %s", err)
+	}
+}
+
+func run(cfg *config.Config) error {
 	t := tracker.NewParser()
-	metadata, err := t.Parse(url)
+	dsClient := downloadStation.NewClient(cfg.Synology)
+
+	downloadTasksClient := downloadTasks.NewClient(t, dsClient)
+
+	tbAPI, err := tbapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
-		log.Fatalf("Error parsing url: %s", err)
+		return fmt.Errorf("failed to create Telegram events: %w", err)
 	}
 
-	log.Printf("Title: %s", metadata.Name)
-	log.Printf("Magnet: %s", metadata.Magnet)
-	log.Printf("Rss: %s", metadata.RssUrl)
-
-	downloadClient := downloadStation.NewClient(config.Synology)
-	err = downloadClient.CreateDownloadTask(metadata.Magnet)
-	if err != nil {
-		log.Fatalf("Error creating download task: %s", err)
+	tgListener := &events.TelegramListener{
+		SuperUsers: cfg.Telegram.SuperUsers,
+		TbAPI:      tbAPI,
+		Bot:        downloadTasksClient,
 	}
+
+	if err := tgListener.Do(); err != nil {
+		return fmt.Errorf("failed to start Telegram listener: %w", err)
+	}
+
+	return nil
 }

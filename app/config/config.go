@@ -12,8 +12,14 @@ type SynologyConfig struct {
 	Password string `env:"SYNOLOGY_PASSWORD"`
 }
 
+type TelegramConfig struct {
+	Token      string  `env:"TELEGRAM_TOKEN"`
+	SuperUsers []int64 `env:"TELEGRAM_SUPER_USERS" env-separator:","`
+}
+
 type Config struct {
 	Synology SynologyConfig
+	Telegram TelegramConfig
 }
 
 func Init() (*Config, error) {
