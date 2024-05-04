@@ -12,9 +12,10 @@ import (
 )
 
 type FileMetadata struct {
-	RssUrl string
-	Magnet string
-	Name   string
+	OriginalUrl string
+	RssUrl      string
+	Magnet      string
+	Name        string
 }
 
 type Parser struct {
@@ -40,9 +41,10 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	title := provider.GetTitle(doc)
 
 	return &FileMetadata{
-		Name:   title,
-		Magnet: magnet,
-		RssUrl: rss,
+		OriginalUrl: url,
+		Magnet:      magnet,
+		RssUrl:      rss,
+		Name:        title,
 	}, nil
 }
 
