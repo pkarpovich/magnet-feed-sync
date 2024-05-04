@@ -19,9 +19,14 @@ func main() {
 		log.Fatalf("[ERROR] Error reading config: %s", err)
 	}
 
+	if cfg.DryMode {
+		log.Printf("[WARN] Dry mode is enabled")
+	}
+
 	if err := run(cfg); err != nil {
 		log.Fatalf("[ERROR] Error running app: %s", err)
 	}
+
 }
 
 func run(cfg *config.Config) error {

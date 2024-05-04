@@ -14,7 +14,7 @@ const (
 )
 
 type Bot interface {
-	OnMessage(msg bot.Message) (bool, error)
+	OnMessage(msg bot.Message) (bool, string, error)
 }
 
 type TbAPI interface {
@@ -80,7 +80,7 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	}
 
 	msg := tl.transform(update.Message)
-	saved, err := tl.Bot.OnMessage(msg)
+	saved, replyMsg, err := tl.Bot.OnMessage(msg)
 	if err != nil {
 		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
 		_, err := tl.TbAPI.Send(errMsg)
@@ -114,6 +114,12 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	_, err = tl.TbAPI.Request(reactionMsg)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
+	}
+
+	if len(replyMsg) > 0 {
+		if _, err := tl.TbAPI.Send(newMarkdownMessage(update.Message.Chat.ID, replyMsg)); err != nil {
+			return fmt.Errorf("failed to reply send message: %w", err)
+		}
 	}
 
 	return nil
@@ -171,4 +177,19 @@ func (tl *TelegramListener) isSuperUser(userID int64) bool {
 	}
 
 	return false
+}
+
+func newMarkdownMessage(chatID int64, text string) tbapi.MessageConfig {
+	return tbapi.MessageConfig{
+		BaseChat: tbapi.BaseChat{
+			ChatConfig: tbapi.ChatConfig{
+				ChatID: chatID,
+			},
+		},
+		LinkPreviewOptions: tbapi.LinkPreviewOptions{
+			IsDisabled: false,
+		},
+		ParseMode: tbapi.ModeMarkdownV2,
+		Text:      text,
+	}
 }

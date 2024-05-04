@@ -23,30 +23,37 @@ func NewClient(tracker *tracker.Parser, dsClient *downloadStation.Client, dryMod
 	}
 }
 
-func (c *Client) OnMessage(msg bot.Message) (bool, error) {
+func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 	url := msg.Text
 
 	metadata, err := c.tracker.Parse(url)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	msgJSON, errJSON := json.Marshal(metadata)
 	if errJSON != nil {
-		return false, fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
+		return false, "", fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
 	}
 	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
+	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return false, "", err
+	}
+
+	replyMsg := fmt.Sprintf("✅ Download task created:\n\n```json\n%s\n```", string(jsonData))
+
 	if c.dryMode {
-		return true, nil
+		return true, replyMsg, nil
 	}
 
 	err = c.dsClient.CreateDownloadTask(metadata.Magnet)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	log.Printf("[INFO] Download task created: %s", metadata.Name)
 
-	return true, nil
+	return true, replyMsg, nil
 }

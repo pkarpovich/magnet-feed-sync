@@ -12,10 +12,10 @@ import (
 )
 
 type FileMetadata struct {
-	OriginalUrl string
-	RssUrl      string
-	Magnet      string
-	Name        string
+	OriginalUrl string `json:"-"`
+	RssUrl      string `json:"rss_url"`
+	Magnet      string `json:"magnet"`
+	Name        string `json:"name"`
 }
 
 type Parser struct {
