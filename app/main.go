@@ -28,7 +28,7 @@ func run(cfg *config.Config) error {
 	t := tracker.NewParser()
 	dsClient := downloadStation.NewClient(cfg.Synology)
 
-	downloadTasksClient := downloadTasks.NewClient(t, dsClient)
+	downloadTasksClient := downloadTasks.NewClient(t, dsClient, cfg.DryMode)
 
 	tbAPI, err := tbapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {

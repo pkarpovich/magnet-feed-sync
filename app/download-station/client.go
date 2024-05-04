@@ -11,16 +11,18 @@ import (
 )
 
 type Client struct {
-	baseUrl  string
-	username string
-	password string
+	baseUrl            string
+	username           string
+	password           string
+	defaultDestination string
 }
 
 func NewClient(config config.SynologyConfig) *Client {
 	return &Client{
-		baseUrl:  config.URL,
-		username: config.Username,
-		password: config.Password,
+		baseUrl:            config.URL,
+		username:           config.Username,
+		password:           config.Password,
+		defaultDestination: config.Destination,
 	}
 }
 
@@ -99,7 +101,7 @@ func (c *Client) CreateDownloadTask(magnet string) error {
 		"method":      {"create"},
 		"version":     {"2"},
 		"_sid":        {session.Sid},
-		"destination": {"media/tv shows"},
+		"destination": {c.defaultDestination},
 		"type":        {"url"},
 		"url":         {magnet},
 		"create_list": {"false"},

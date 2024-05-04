@@ -12,12 +12,14 @@ import (
 type Client struct {
 	tracker  *tracker.Parser
 	dsClient *downloadStation.Client
+	dryMode  bool
 }
 
-func NewClient(tracker *tracker.Parser, dsClient *downloadStation.Client) *Client {
+func NewClient(tracker *tracker.Parser, dsClient *downloadStation.Client, dryMode bool) *Client {
 	return &Client{
 		tracker:  tracker,
 		dsClient: dsClient,
+		dryMode:  dryMode,
 	}
 }
 
@@ -35,10 +37,16 @@ func (c *Client) OnMessage(msg bot.Message) (bool, error) {
 	}
 	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
+	if c.dryMode {
+		return true, nil
+	}
+
 	err = c.dsClient.CreateDownloadTask(metadata.Magnet)
 	if err != nil {
 		return false, err
 	}
+
+	log.Printf("[INFO] Download task created: %s", metadata.Name)
 
 	return true, nil
 }

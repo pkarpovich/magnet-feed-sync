@@ -7,9 +7,10 @@ import (
 )
 
 type SynologyConfig struct {
-	URL      string `env:"SYNOLOGY_URL" env-default:"http://localhost:5000"`
-	Username string `env:"SYNOLOGY_USERNAME"`
-	Password string `env:"SYNOLOGY_PASSWORD"`
+	URL         string `env:"SYNOLOGY_URL" env-default:"http://localhost:5000"`
+	Username    string `env:"SYNOLOGY_USERNAME"`
+	Password    string `env:"SYNOLOGY_PASSWORD"`
+	Destination string `env:"SYNOLOGY_DESTINATION"`
 }
 
 type TelegramConfig struct {
@@ -20,6 +21,7 @@ type TelegramConfig struct {
 type Config struct {
 	Synology SynologyConfig
 	Telegram TelegramConfig
+	DryMode  bool `env:"DRY_MODE" env-default:"false"`
 }
 
 func Init() (*Config, error) {
