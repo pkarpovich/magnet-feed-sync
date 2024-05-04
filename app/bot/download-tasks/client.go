@@ -6,20 +6,30 @@ import (
 	"log"
 	"magnet-feed-sync/app/bot"
 	downloadStation "magnet-feed-sync/app/download-station"
+	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 )
 
 type Client struct {
 	tracker  *tracker.Parser
 	dsClient *downloadStation.Client
+	store    *taskStore.Repository
 	dryMode  bool
 }
 
-func NewClient(tracker *tracker.Parser, dsClient *downloadStation.Client, dryMode bool) *Client {
+type ClientCtx struct {
+	Tracker  *tracker.Parser
+	DSClient *downloadStation.Client
+	Store    *taskStore.Repository
+	DryMode  bool
+}
+
+func NewClient(ctx *ClientCtx) *Client {
 	return &Client{
-		tracker:  tracker,
-		dsClient: dsClient,
-		dryMode:  dryMode,
+		tracker:  ctx.Tracker,
+		dsClient: ctx.DSClient,
+		dryMode:  ctx.DryMode,
+		store:    ctx.Store,
 	}
 }
 
@@ -43,6 +53,11 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 	}
 
 	replyMsg := fmt.Sprintf("✅ Download task created:\n\n```json\n%s\n```", string(jsonData))
+
+	err = c.store.CreateOrReplace(metadata)
+	if err != nil {
+		return false, "", err
+	}
 
 	if c.dryMode {
 		return true, replyMsg, nil

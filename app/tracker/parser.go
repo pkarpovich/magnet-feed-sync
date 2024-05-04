@@ -9,14 +9,16 @@ import (
 	"magnet-feed-sync/app/tracker/providers"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type FileMetadata struct {
-	ID          string `json:"-"`
-	OriginalUrl string `json:"-"`
-	RssUrl      string `json:"rss_url"`
-	Magnet      string `json:"magnet"`
-	Name        string `json:"name"`
+	ID          string    `json:"-"`
+	OriginalUrl string    `json:"-"`
+	RssUrl      string    `json:"rss_url"`
+	Magnet      string    `json:"magnet"`
+	Name        string    `json:"name"`
+	CreatedAt   time.Time `json:"_"`
 }
 
 type Parser struct {
@@ -43,6 +45,7 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	id := provider.GetId(url)
 
 	return &FileMetadata{
+		CreatedAt:   time.Now(),
 		OriginalUrl: url,
 		Magnet:      magnet,
 		RssUrl:      rss,

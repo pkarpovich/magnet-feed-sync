@@ -6,8 +6,10 @@ import (
 	"log"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
+	"magnet-feed-sync/app/database"
 	downloadStation "magnet-feed-sync/app/download-station"
 	"magnet-feed-sync/app/events"
+	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 )
 
@@ -33,7 +35,21 @@ func run(cfg *config.Config) error {
 	t := tracker.NewParser()
 	dsClient := downloadStation.NewClient(cfg.Synology)
 
-	downloadTasksClient := downloadTasks.NewClient(t, dsClient, cfg.DryMode)
+	db, err := database.NewClient("tasks.db")
+	if err != nil {
+		return fmt.Errorf("failed to create database client: %w", err)
+	}
+	store, err := taskStore.NewRepository(db)
+	if err != nil {
+		return fmt.Errorf("failed to create task store: %w", err)
+	}
+
+	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
+		Tracker:  t,
+		DSClient: dsClient,
+		Store:    store,
+		DryMode:  cfg.DryMode,
+	})
 
 	tbAPI, err := tbapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
