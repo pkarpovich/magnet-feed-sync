@@ -34,8 +34,8 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				rss_url,
 				magnet,
 				name,
-				torrent_updated_at,
-				last_sync_at
+				last_sync_at,
+				torrent_updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		metadata.ID,
 		metadata.OriginalUrl,
