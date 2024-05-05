@@ -47,12 +47,12 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 	}
 	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
-	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	formatedMsg, err := metadataToMsg(metadata)
 	if err != nil {
 		return false, "", err
 	}
 
-	replyMsg := fmt.Sprintf("✅ Download task created:\n\n```json\n%s\n```", string(jsonData))
+	replyMsg := fmt.Sprintf("✅ Download task created:\n\n%s", formatedMsg)
 
 	err = c.store.CreateOrReplace(metadata)
 	if err != nil {
@@ -71,4 +71,32 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 	log.Printf("[INFO] Download task created: %s", metadata.Name)
 
 	return true, replyMsg, nil
+}
+
+func (c *Client) GetActiveTasks() ([]string, error) {
+	metadata, err := c.store.GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	var tasks []string
+	for _, m := range metadata {
+		formatedMsg, err := metadataToMsg(m)
+		if err != nil {
+			return nil, err
+		}
+
+		tasks = append(tasks, formatedMsg)
+	}
+
+	return tasks, nil
+}
+
+func metadataToMsg(metadata *tracker.FileMetadata) (string, error) {
+	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("```json\n%s\n```", string(jsonData)), nil
 }

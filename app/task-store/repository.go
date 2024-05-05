@@ -50,7 +50,7 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 }
 
 func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
-	rows, err := r.db.Query(`SELECT * FROM events`)
+	rows, err := r.db.Query(`SELECT * FROM files`)
 	if err != nil {
 		return nil, err
 	}

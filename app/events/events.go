@@ -10,11 +10,13 @@ import (
 )
 
 const (
-	PingCommand = "ping"
+	PingCommand           = "ping"
+	GetActiveTasksCommand = "get_active_tasks"
 )
 
 type Bot interface {
 	OnMessage(msg bot.Message) (bool, string, error)
+	GetActiveTasks() ([]string, error)
 }
 
 type TbAPI interface {
@@ -76,6 +78,10 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	switch update.Message.Command() {
 	case PingCommand:
 		tl.handlePingCommand(update)
+		return nil
+
+	case GetActiveTasksCommand:
+		tl.handleGetActiveTasksCommand(update)
 		return nil
 	}
 
@@ -166,6 +172,31 @@ func (tl *TelegramListener) handlePingCommand(update tbapi.Update) {
 	_, err := tl.TbAPI.Send(msg)
 	if err != nil {
 		log.Printf("[ERROR] failed to send message: %v", err)
+	}
+}
+
+func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
+	msg, err := tl.Bot.GetActiveTasks()
+	if err != nil {
+		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
+		_, err := tl.TbAPI.Send(errMsg)
+		if err != nil {
+			log.Printf("[ERROR] failed to send error message: %v", err)
+		}
+
+		return
+	}
+
+	if len(msg) == 0 {
+		msg = []string{"No active tasks"}
+	}
+
+	for _, m := range msg {
+		replyMsg := newMarkdownMessage(update.Message.Chat.ID, m)
+		_, err := tl.TbAPI.Send(replyMsg)
+		if err != nil {
+			log.Printf("[ERROR] failed to send message: %v", err)
+		}
 	}
 }
 
