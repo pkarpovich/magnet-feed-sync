@@ -13,14 +13,15 @@ import (
 )
 
 type FileMetadata struct {
-	ID               string    `json:"-"`
-	OriginalUrl      string    `json:"original_url"`
-	RssUrl           string    `json:"rss_url"`
-	Magnet           string    `json:"magnet"`
-	Name             string    `json:"name"`
-	LastSyncAt       time.Time `json:"last_sync_at"`
-	TorrentUpdatedAt time.Time `json:"torrent_updated_at"`
-	CreatedAt        time.Time `json:"-"`
+	ID               string     `json:"-"`
+	OriginalUrl      string     `json:"original_url"`
+	RssUrl           string     `json:"rss_url"`
+	Magnet           string     `json:"magnet"`
+	Name             string     `json:"name"`
+	LastSyncAt       time.Time  `json:"last_sync_at"`
+	TorrentUpdatedAt time.Time  `json:"torrent_updated_at"`
+	CreatedAt        time.Time  `json:"-"`
+	DeleteAt         *time.Time `json:"-"`
 }
 
 type Parser struct {

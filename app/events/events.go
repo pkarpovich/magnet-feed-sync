@@ -7,16 +7,18 @@ import (
 	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
 	"magnet-feed-sync/app/bot"
+	downloadTask "magnet-feed-sync/app/bot/download-tasks"
+	taskStore "magnet-feed-sync/app/task-store"
 )
 
 const (
 	PingCommand           = "ping"
 	GetActiveTasksCommand = "get_active_tasks"
+	RemoveTaskCallback    = "remove_task"
 )
 
 type Bot interface {
 	OnMessage(msg bot.Message) (bool, string, error)
-	GetActiveTasks() ([]string, error)
 }
 
 type TbAPI interface {
@@ -29,6 +31,12 @@ type TelegramListener struct {
 	SuperUsers []int64
 	TbAPI      TbAPI
 	Bot        Bot
+	Store      *taskStore.Repository
+}
+
+type RemoveTaskData struct {
+	TaskID string `json:"taskId"`
+	Type   string `json:"type"`
 }
 
 func (tl *TelegramListener) Do() error {
@@ -43,6 +51,14 @@ func (tl *TelegramListener) Do() error {
 		case update, ok := <-updates:
 			if !ok {
 				return fmt.Errorf("telegram update chan closed")
+			}
+
+			if update.CallbackQuery != nil {
+				if err := tl.processCallbackQuery(update); err != nil {
+					log.Printf("[ERROR] %v", err)
+				}
+
+				continue
 			}
 
 			if update.Message == nil {
@@ -101,30 +117,46 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 		return nil
 	}
 
-	reactionMsg := tbapi.SetMessageReactionConfig{
-		BaseChatMessage: tbapi.BaseChatMessage{
-			ChatConfig: tbapi.ChatConfig{
-				ChatID: update.Message.Chat.ID,
-			},
-			MessageID: update.Message.MessageID,
-		},
-		Reaction: []tbapi.ReactionType{
-			{
-				Type:  "emoji",
-				Emoji: "👍",
-			},
-		},
-		IsBig: false,
-	}
-
-	_, err = tl.TbAPI.Request(reactionMsg)
-	if err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+	if err := tl.reactToMessage(update.Message.Chat.ID, update.Message.MessageID, tbapi.ReactionType{
+		Type:  "emoji",
+		Emoji: "👍",
+	}); err != nil {
+		return fmt.Errorf("failed to react to message: %w", err)
 	}
 
 	if len(replyMsg) > 0 {
-		if _, err := tl.TbAPI.Send(newMarkdownMessage(update.Message.Chat.ID, replyMsg)); err != nil {
+		if _, err := tl.TbAPI.Send(newMarkdownMessage(update.Message.Chat.ID, replyMsg, nil)); err != nil {
 			return fmt.Errorf("failed to reply send message: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (tl *TelegramListener) processCallbackQuery(update tbapi.Update) error {
+	rawMsgData := update.CallbackQuery.Data
+	var data RemoveTaskData
+
+	if err := json.Unmarshal([]byte(rawMsgData), &data); err != nil {
+		return fmt.Errorf("failed to unmarshal callback data: %w", err)
+	}
+
+	switch data.Type {
+	case RemoveTaskCallback:
+		if err := tl.Store.Remove(data.TaskID); err != nil {
+			errMsg := tbapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "💥 Error: "+err.Error())
+			_, err := tl.TbAPI.Send(errMsg)
+			if err != nil {
+				return fmt.Errorf("failed to send error message: %w", err)
+			}
+
+			return errors.New(errMsg.Text)
+		}
+
+		msg := tbapi.NewDeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
+		_, err := tl.TbAPI.Send(msg)
+		if err != nil {
+			return fmt.Errorf("failed to delete message: %w", err)
 		}
 	}
 
@@ -176,7 +208,7 @@ func (tl *TelegramListener) handlePingCommand(update tbapi.Update) {
 }
 
 func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
-	msg, err := tl.Bot.GetActiveTasks()
+	tasks, err := tl.Store.GetAll()
 	if err != nil {
 		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
 		_, err := tl.TbAPI.Send(errMsg)
@@ -187,13 +219,47 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 		return
 	}
 
-	if len(msg) == 0 {
-		msg = []string{"No active tasks"}
+	if err := tl.reactToMessage(update.Message.Chat.ID, update.Message.MessageID, tbapi.ReactionType{
+		Type:  "emoji",
+		Emoji: "👍",
+	}); err != nil {
+		log.Printf("[ERROR] failed to react to message: %v", err)
+
+		return
 	}
 
-	for _, m := range msg {
-		replyMsg := newMarkdownMessage(update.Message.Chat.ID, m)
-		_, err := tl.TbAPI.Send(replyMsg)
+	if len(tasks) == 0 {
+		msg := tbapi.NewMessage(update.Message.Chat.ID, "📭 No active tasks")
+		_, err := tl.TbAPI.Send(msg)
+		if err != nil {
+			log.Printf("[ERROR] failed to send message: %v", err)
+		}
+
+		return
+	}
+
+	for _, task := range tasks {
+		replyMsg, err := downloadTask.MetadataToMsg(task)
+		if err != nil {
+			log.Printf("[ERROR] failed to format metadata: %v", err)
+			continue
+		}
+
+		replyMarkup, err := buildReplyMarkup([]ReplyMarkupButton{
+			{
+				Text: "❌",
+				Data: map[string]interface{}{
+					"type":   RemoveTaskCallback,
+					"taskId": task.ID,
+				},
+			},
+		})
+		if err != nil {
+			log.Printf("[ERROR] failed to build reply markup: %v", err)
+		}
+
+		msg := newMarkdownMessage(update.Message.Chat.ID, replyMsg, &replyMarkup)
+		_, err = tl.TbAPI.Send(msg)
 		if err != nil {
 			log.Printf("[ERROR] failed to send message: %v", err)
 		}
@@ -210,12 +276,33 @@ func (tl *TelegramListener) isSuperUser(userID int64) bool {
 	return false
 }
 
-func newMarkdownMessage(chatID int64, text string) tbapi.MessageConfig {
+func (tl *TelegramListener) reactToMessage(chatID int64, messageID int, reaction tbapi.ReactionType) error {
+	reactionMsg := tbapi.SetMessageReactionConfig{
+		BaseChatMessage: tbapi.BaseChatMessage{
+			ChatConfig: tbapi.ChatConfig{
+				ChatID: chatID,
+			},
+			MessageID: messageID,
+		},
+		Reaction: []tbapi.ReactionType{reaction},
+		IsBig:    false,
+	}
+
+	_, err := tl.TbAPI.Request(reactionMsg)
+	if err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return nil
+}
+
+func newMarkdownMessage(chatID int64, text string, replyMarkup *tbapi.InlineKeyboardMarkup) tbapi.MessageConfig {
 	return tbapi.MessageConfig{
 		BaseChat: tbapi.BaseChat{
 			ChatConfig: tbapi.ChatConfig{
 				ChatID: chatID,
 			},
+			ReplyMarkup: replyMarkup,
 		},
 		LinkPreviewOptions: tbapi.LinkPreviewOptions{
 			IsDisabled: false,

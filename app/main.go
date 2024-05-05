@@ -60,6 +60,7 @@ func run(cfg *config.Config) error {
 		SuperUsers: cfg.Telegram.SuperUsers,
 		TbAPI:      tbAPI,
 		Bot:        downloadTasksClient,
+		Store:      store,
 	}
 
 	if err := tgListener.Do(); err != nil {

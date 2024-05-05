@@ -18,7 +18,8 @@ func NewRepository(db *database.Client) (*Repository, error) {
     		name TEXT,
     		last_sync_at TIMESTAMP,
     		torrent_updated_at TIMESTAMP,
-    		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            delete_at TIMESTAMP DEFAULT NULL
 	)`)
 	if err != nil {
 		return nil, err
@@ -35,8 +36,9 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				magnet,
 				name,
 				last_sync_at,
-				torrent_updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				torrent_updated_at,
+				delete_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.RssUrl,
@@ -50,7 +52,7 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 }
 
 func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
-	rows, err := r.db.Query(`SELECT * FROM files`)
+	rows, err := r.db.Query(`SELECT * FROM files WHERE delete_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +70,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.LastSyncAt,
 			&m.TorrentUpdatedAt,
 			&m.CreatedAt,
+			&m.DeleteAt,
 		); err != nil {
 			return nil, err
 		}
@@ -76,4 +79,9 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 	}
 
 	return metadata, nil
+}
+
+func (r *Repository) Remove(id string) error {
+	_, err := r.db.Exec(`UPDATE files SET delete_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
 }
