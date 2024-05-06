@@ -13,4 +13,4 @@ services:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       TELEGRAM_SUPER_USERS: ${TELEGRAM_SUPER_USERS}
     volumes:
-      - .db:/bin/.db
+      - .db:/.db
