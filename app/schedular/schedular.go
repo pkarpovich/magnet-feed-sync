@@ -25,7 +25,7 @@ func NewService(cfg *config.Config) (*Service, error) {
 
 func (s *Service) Start(cb func()) error {
 	j, err := s.scheduler.NewJob(
-		gocron.CronJob("*/1 * * * *", false),
+		gocron.CronJob(s.cfg.Cron, false),
 		gocron.NewTask(cb),
 	)
 	if err != nil {

@@ -1,0 +1,16 @@
+services:
+  magnet-feed-sync:
+    container_name: magnet-feed-sync
+    build:
+      context: .
+      target: final
+    restart: unless-stopped
+    environment:
+      SYNOLOGY_URL: ${SYNOLOGY_URL}
+      SYNOLOGY_USERNAME: ${SYNOLOGY_USERNAME}
+      SYNOLOGY_PASSWORD: ${SYNOLOGY_PASSWORD}
+      SYNOLOGY_DESTINATION: ${SYNOLOGY_DESTINATION}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      TELEGRAM_SUPER_USERS: ${TELEGRAM_SUPER_USERS}
+    volumes:
+      - .db:/bin/.db

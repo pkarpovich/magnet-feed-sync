@@ -74,7 +74,7 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 }
 
 func (c *Client) CheckForUpdates() {
-	log.Printf("[INFO] Running scheduler")
+	log.Printf("[INFO] Checking for updates")
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
