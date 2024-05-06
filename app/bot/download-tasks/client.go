@@ -73,6 +73,45 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 	return true, replyMsg, nil
 }
 
+func (c *Client) CheckForUpdates() {
+	log.Printf("[INFO] Running scheduler")
+
+	filesMetadata, err := c.store.GetAll()
+	if err != nil {
+		log.Fatalf("[ERROR] Error getting files metadata: %s", err)
+	}
+
+	for _, metadata := range filesMetadata {
+		updatedMetadata, err := c.tracker.Parse(metadata.OriginalUrl)
+		if err != nil {
+			log.Printf("[ERROR] Error parsing metadata: %s", err)
+			continue
+		}
+
+		if metadata.TorrentUpdatedAt == updatedMetadata.TorrentUpdatedAt {
+			log.Printf("[INFO] Metadata is up to date: %s", metadata.ID)
+			continue
+		}
+		log.Printf("[INFO] Metadata is outdated: %s", metadata.ID)
+
+		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
+			log.Printf("[ERROR] Error updating metadata: %s", err)
+		}
+		log.Printf("[INFO] Metadata updated: %s", metadata.ID)
+
+		if c.dryMode {
+			log.Printf("[INFO] Dry mode is enabled, skipping download")
+			continue
+		}
+
+		if err := c.dsClient.CreateDownloadTask(updatedMetadata.Magnet); err != nil {
+			log.Printf("[ERROR] Error creating download task: %s", err)
+		}
+
+		log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
+	}
+}
+
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
 	jsonData, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {

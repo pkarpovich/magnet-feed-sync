@@ -3,13 +3,15 @@ package schedular
 import (
 	"github.com/go-co-op/gocron/v2"
 	"log"
+	"magnet-feed-sync/app/config"
 )
 
 type Service struct {
 	scheduler gocron.Scheduler
+	cfg       *config.Config
 }
 
-func NewService() (*Service, error) {
+func NewService(cfg *config.Config) (*Service, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -17,6 +19,7 @@ func NewService() (*Service, error) {
 
 	return &Service{
 		scheduler: s,
+		cfg:       cfg,
 	}, nil
 }
 

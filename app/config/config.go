@@ -21,7 +21,8 @@ type TelegramConfig struct {
 type Config struct {
 	Synology SynologyConfig
 	Telegram TelegramConfig
-	DryMode  bool `env:"DRY_MODE" env-default:"false"`
+	DryMode  bool   `env:"DRY_MODE" env-default:"false"`
+	Cron     string `env:"CRON" env-default:"0 * * * *"`
 }
 
 func Init() (*Config, error) {
