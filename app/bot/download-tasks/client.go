@@ -11,25 +11,28 @@ import (
 )
 
 type Client struct {
-	tracker  *tracker.Parser
-	dsClient *downloadStation.Client
-	store    *taskStore.Repository
-	dryMode  bool
+	messagesForSend chan string
+	tracker         *tracker.Parser
+	dsClient        *downloadStation.Client
+	store           *taskStore.Repository
+	dryMode         bool
 }
 
 type ClientCtx struct {
-	Tracker  *tracker.Parser
-	DSClient *downloadStation.Client
-	Store    *taskStore.Repository
-	DryMode  bool
+	MessagesForSend chan string
+	Tracker         *tracker.Parser
+	DSClient        *downloadStation.Client
+	Store           *taskStore.Repository
+	DryMode         bool
 }
 
 func NewClient(ctx *ClientCtx) *Client {
 	return &Client{
-		tracker:  ctx.Tracker,
-		dsClient: ctx.DSClient,
-		dryMode:  ctx.DryMode,
-		store:    ctx.Store,
+		messagesForSend: ctx.MessagesForSend,
+		tracker:         ctx.Tracker,
+		dsClient:        ctx.DSClient,
+		dryMode:         ctx.DryMode,
+		store:           ctx.Store,
 	}
 }
 
@@ -98,6 +101,14 @@ func (c *Client) CheckForUpdates() {
 			log.Printf("[ERROR] Error updating metadata: %s", err)
 		}
 		log.Printf("[INFO] Metadata updated: %s", metadata.ID)
+
+		formatedMsg, err := MetadataToMsg(metadata)
+		if err != nil {
+			log.Printf("[ERROR] Error formatting metadata: %s", err)
+			continue
+		}
+
+		c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
 
 		if c.dryMode {
 			log.Printf("[INFO] Dry mode is enabled, skipping download")

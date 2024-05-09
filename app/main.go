@@ -45,11 +45,14 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("failed to create task store: %w", err)
 	}
 
+	messagesForSend := make(chan string)
+
 	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
-		Tracker:  t,
-		DSClient: dsClient,
-		Store:    store,
-		DryMode:  cfg.DryMode,
+		Tracker:         t,
+		DSClient:        dsClient,
+		Store:           store,
+		DryMode:         cfg.DryMode,
+		MessagesForSend: messagesForSend,
 	})
 
 	s, err := schedular.NewService(cfg)
@@ -70,11 +73,14 @@ func run(cfg *config.Config) error {
 	}
 
 	tgListener := &events.TelegramListener{
-		SuperUsers: cfg.Telegram.SuperUsers,
-		TbAPI:      tbAPI,
-		Bot:        downloadTasksClient,
-		Store:      store,
+		SuperUsers:      cfg.Telegram.SuperUsers,
+		TbAPI:           tbAPI,
+		Bot:             downloadTasksClient,
+		Store:           store,
+		MessagesForSend: messagesForSend,
 	}
+
+	go tgListener.SendMessagesForAdmins()
 
 	if err := tgListener.Do(); err != nil {
 		return fmt.Errorf("failed to start Telegram listener: %w", err)

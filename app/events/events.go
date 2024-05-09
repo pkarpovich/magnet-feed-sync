@@ -28,10 +28,11 @@ type TbAPI interface {
 }
 
 type TelegramListener struct {
-	SuperUsers []int64
-	TbAPI      TbAPI
-	Bot        Bot
-	Store      *taskStore.Repository
+	SuperUsers      []int64
+	TbAPI           TbAPI
+	Bot             Bot
+	Store           *taskStore.Repository
+	MessagesForSend chan string
 }
 
 type RemoveTaskData struct {
@@ -125,7 +126,7 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	}
 
 	if len(replyMsg) > 0 {
-		if _, err := tl.TbAPI.Send(newMarkdownMessage(update.Message.Chat.ID, replyMsg, nil)); err != nil {
+		if _, err := tl.TbAPI.Send(NewMarkdownMessage(update.Message.Chat.ID, replyMsg, nil)); err != nil {
 			return fmt.Errorf("failed to reply send message: %w", err)
 		}
 	}
@@ -258,10 +259,26 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 			log.Printf("[ERROR] failed to build reply markup: %v", err)
 		}
 
-		msg := newMarkdownMessage(update.Message.Chat.ID, replyMsg, &replyMarkup)
+		msg := NewMarkdownMessage(update.Message.Chat.ID, replyMsg, &replyMarkup)
 		_, err = tl.TbAPI.Send(msg)
 		if err != nil {
 			log.Printf("[ERROR] failed to send message: %v", err)
+		}
+	}
+}
+
+func (tl *TelegramListener) SendMessagesForAdmins() {
+	adminIds := tl.SuperUsers
+
+	for {
+		select {
+		case msg := <-tl.MessagesForSend:
+			for _, adminID := range adminIds {
+				_, err := tl.TbAPI.Send(NewMarkdownMessage(adminID, msg, nil))
+				if err != nil {
+					log.Printf("[ERROR] failed to send message: %v", err)
+				}
+			}
 		}
 	}
 }
@@ -296,7 +313,7 @@ func (tl *TelegramListener) reactToMessage(chatID int64, messageID int, reaction
 	return nil
 }
 
-func newMarkdownMessage(chatID int64, text string, replyMarkup *tbapi.InlineKeyboardMarkup) tbapi.MessageConfig {
+func NewMarkdownMessage(chatID int64, text string, replyMarkup *tbapi.InlineKeyboardMarkup) tbapi.MessageConfig {
 	return tbapi.MessageConfig{
 		BaseChat: tbapi.BaseChat{
 			ChatConfig: tbapi.ChatConfig{
@@ -310,4 +327,8 @@ func newMarkdownMessage(chatID int64, text string, replyMarkup *tbapi.InlineKeyb
 		ParseMode: tbapi.ModeMarkdownV2,
 		Text:      text,
 	}
+}
+
+func NewMessage(chatID int64, text string) tbapi.MessageConfig {
+	return tbapi.NewMessage(chatID, text)
 }
