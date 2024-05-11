@@ -38,10 +38,15 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	}
 
 	provider := getProviderByUrl(url)
+	if provider == nil {
+		return nil, fmt.Errorf("provider not found for url: %s", url)
+	}
+
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
 	}
+
 	magnet := provider.GetMagnetLink(doc)
 	rss := provider.GetRssLink(doc)
 	title := provider.GetTitle(doc)
@@ -62,6 +67,10 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 func getProviderByUrl(url string) providers.Service {
 	if strings.HasPrefix(url, providers.NnmUrl) {
 		return &providers.NnmProvider{}
+	}
+
+	if strings.HasPrefix(url, providers.RutrackerUrl) {
+		return &providers.RutrackerProvider{}
 	}
 
 	return nil

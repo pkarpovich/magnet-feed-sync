@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"log"
+	"magnet-feed-sync/app/utils"
 	"net/url"
 	"strings"
 	"time"
@@ -45,7 +46,11 @@ func (p *NnmProvider) GetTitle(doc *goquery.Document) string {
 }
 
 func (p *NnmProvider) GetId(originalUrl string) string {
-	u, _ := url.Parse(originalUrl)
+	u, err := url.Parse(originalUrl)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse nnm url: %s, %v", originalUrl, err)
+		return ""
+	}
 
 	return u.Query().Get("t")
 }
@@ -55,7 +60,7 @@ func (p *NnmProvider) GetLastUpdatedDate(doc *goquery.Document) (registrationDat
 		label := s.Find("td.genmed").First().Text()
 		if strings.Contains(label, "Зарегистрирован:") {
 			rawDate := strings.TrimSpace(s.Find("td.genmed").Last().Text())
-			date, err := parseRussianDate(rawDate)
+			date, err := utils.ParseRussianDate(rawDate)
 			if err != nil {
 				log.Printf("[ERROR] Failed to parse nnm torrent registration date: %s, %v", rawDate, err)
 			}
@@ -65,27 +70,4 @@ func (p *NnmProvider) GetLastUpdatedDate(doc *goquery.Document) (registrationDat
 	})
 
 	return registrationDate
-}
-
-func parseRussianDate(dateStr string) (time.Time, error) {
-	russianMonths := map[string]string{
-		"Янв": "Jan", "Фев": "Feb", "Мар": "Mar", "Апр": "Apr",
-		"Май": "May", "Июн": "Jun", "Июл": "Jul", "Авг": "Aug",
-		"Сен": "Sep", "Окт": "Oct", "Ноя": "Nov", "Дек": "Dec",
-	}
-
-	parts := strings.Fields(dateStr)
-	if len(parts) != 4 {
-		return time.Time{}, fmt.Errorf("incorrect date format")
-	}
-
-	if engMonth, ok := russianMonths[parts[1]]; ok {
-		parts[1] = engMonth
-	} else {
-		return time.Time{}, fmt.Errorf("invalid month")
-	}
-
-	normalizedDateStr := strings.Join(parts, " ")
-
-	return time.Parse("02 Jan 2006 15:04:05", normalizedDateStr)
 }
