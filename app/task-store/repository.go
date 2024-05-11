@@ -13,7 +13,6 @@ func NewRepository(db *database.Client) (*Repository, error) {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS files (
     		id TEXT PRIMARY KEY,
     		original_url TEXT,
-    		rss_url TEXT,
     		magnet TEXT,
     		name TEXT,
     		last_sync_at TIMESTAMP,
@@ -32,7 +31,6 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 	_, err := r.db.Exec(`INSERT OR REPLACE INTO files (
 				id,
 				original_url,
-				rss_url,
 				magnet,
 				name,
 				last_sync_at,
@@ -41,7 +39,6 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 			) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 		metadata.ID,
 		metadata.OriginalUrl,
-		metadata.RssUrl,
 		metadata.Magnet,
 		metadata.Name,
 		metadata.LastSyncAt,
@@ -64,7 +61,6 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 		if err := rows.Scan(
 			&m.ID,
 			&m.OriginalUrl,
-			&m.RssUrl,
 			&m.Magnet,
 			&m.Name,
 			&m.LastSyncAt,

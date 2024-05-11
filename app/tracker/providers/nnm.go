@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"log"
 	"magnet-feed-sync/app/utils"
@@ -25,19 +24,6 @@ func (p *NnmProvider) GetMagnetLink(doc *goquery.Document) string {
 	})
 
 	return magnetLink
-}
-
-func (p *NnmProvider) GetRssLink(doc *goquery.Document) string {
-	var rssLink string
-
-	doc.Find("td a").Each(func(index int, item *goquery.Selection) {
-		href, exists := item.Attr("href")
-		if exists && strings.HasPrefix(href, "rss.php") {
-			rssLink = href
-		}
-	})
-
-	return fmt.Sprintf("%s/%s", NnmUrl, rssLink)
 }
 
 func (p *NnmProvider) GetTitle(doc *goquery.Document) string {

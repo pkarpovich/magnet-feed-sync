@@ -25,19 +25,6 @@ func (p *RutrackerProvider) GetMagnetLink(doc *goquery.Document) (magnetLink str
 	return magnetLink
 }
 
-func (p *RutrackerProvider) GetRssLink(doc *goquery.Document) string {
-	var rssLink string
-
-	doc.Find("a").Each(func(index int, item *goquery.Selection) {
-		href, exists := item.Attr("href")
-		if exists && href == "rss" {
-			rssLink = href
-		}
-	})
-
-	return rssLink
-}
-
 func (p *RutrackerProvider) GetTitle(doc *goquery.Document) string {
 	return doc.Find("div.post_body > span + hr").Prev().Find("span.post-b").Text()
 }
