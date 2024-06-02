@@ -155,10 +155,11 @@ func (tl *TelegramListener) processCallbackQuery(update tbapi.Update) error {
 		}
 
 		msg := tbapi.NewDeleteMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID)
-		_, err := tl.TbAPI.Send(msg)
+		_, err := tl.TbAPI.Request(msg)
 		if err != nil {
 			return fmt.Errorf("failed to delete message: %w", err)
 		}
+		log.Printf("[DEBUG] Task %s removed", data.TaskID)
 	}
 
 	return nil
