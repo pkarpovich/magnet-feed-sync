@@ -26,7 +26,18 @@ func (p *RutrackerProvider) GetMagnetLink(doc *goquery.Document) (magnetLink str
 }
 
 func (p *RutrackerProvider) GetTitle(doc *goquery.Document) string {
-	return doc.Find("div.post_body > span + hr").Prev().Find("span.post-b").Text()
+	attempt1 := doc.Find("div.post_body > span + hr").Prev().Find("span.post-b").Text()
+	if len(attempt1) > 0 {
+		return strings.TrimSpace(attempt1)
+	}
+
+	attempt2 := doc.Find("div.post_body > span").Find("span.post-b").First().Text()
+	if len(attempt2) > 0 {
+		return strings.TrimSpace(attempt2)
+	}
+
+	log.Printf("[WARN] title not found in rutracker page")
+	return ""
 }
 
 func (p *RutrackerProvider) GetId(originalUrl string) string {
