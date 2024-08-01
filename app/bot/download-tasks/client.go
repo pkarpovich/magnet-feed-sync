@@ -102,7 +102,7 @@ func (c *Client) CheckForUpdates() {
 		}
 		log.Printf("[INFO] Metadata updated: %s", metadata.ID)
 
-		formatedMsg, err := MetadataToMsg(metadata)
+		formatedMsg, err := MetadataToMsg(updatedMetadata)
 		if err != nil {
 			log.Printf("[ERROR] Error formatting metadata: %s", err)
 			continue
