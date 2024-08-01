@@ -3,6 +3,7 @@ module magnet-feed-sync
 go 1.22
 
 require (
+	github.com/NullpointerW/go-qbittorrent-apiv2 v0.0.16
 	github.com/PuerkitoBio/goquery v1.9.2
 	github.com/go-co-op/gocron/v2 v2.4.1
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1

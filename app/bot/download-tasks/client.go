@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"magnet-feed-sync/app/bot"
-	downloadStation "magnet-feed-sync/app/download-station"
+	downloadClient "magnet-feed-sync/app/download-client"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 )
@@ -13,7 +13,7 @@ import (
 type Client struct {
 	messagesForSend chan string
 	tracker         *tracker.Parser
-	dsClient        *downloadStation.Client
+	dClient         downloadClient.Client
 	store           *taskStore.Repository
 	dryMode         bool
 }
@@ -21,7 +21,7 @@ type Client struct {
 type ClientCtx struct {
 	MessagesForSend chan string
 	Tracker         *tracker.Parser
-	DSClient        *downloadStation.Client
+	DClient         downloadClient.Client
 	Store           *taskStore.Repository
 	DryMode         bool
 }
@@ -30,7 +30,7 @@ func NewClient(ctx *ClientCtx) *Client {
 	return &Client{
 		messagesForSend: ctx.MessagesForSend,
 		tracker:         ctx.Tracker,
-		dsClient:        ctx.DSClient,
+		dClient:         ctx.DClient,
 		dryMode:         ctx.DryMode,
 		store:           ctx.Store,
 	}
@@ -66,7 +66,7 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 		return true, replyMsg, nil
 	}
 
-	err = c.dsClient.CreateDownloadTask(metadata.Magnet)
+	err = c.dClient.CreateDownloadTask(metadata.Magnet)
 	if err != nil {
 		return false, "", err
 	}
@@ -115,7 +115,7 @@ func (c *Client) CheckForUpdates() {
 			continue
 		}
 
-		if err := c.dsClient.CreateDownloadTask(updatedMetadata.Magnet); err != nil {
+		if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet); err != nil {
 			log.Printf("[ERROR] Error creating download task: %s", err)
 		}
 

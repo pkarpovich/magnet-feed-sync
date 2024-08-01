@@ -13,16 +13,25 @@ type SynologyConfig struct {
 	Destination string `env:"SYNOLOGY_DESTINATION"`
 }
 
+type QBittorrentConfig struct {
+	URL         string `env:"QBITTORRENT_URL"`
+	Username    string `env:"QBITTORRENT_USERNAME"`
+	Password    string `env:"QBITTORRENT_PASSWORD"`
+	Destination string `env:"QBITTORRENT_DESTINATION"`
+}
+
 type TelegramConfig struct {
 	Token      string  `env:"TELEGRAM_TOKEN"`
 	SuperUsers []int64 `env:"TELEGRAM_SUPER_USERS" env-separator:","`
 }
 
 type Config struct {
-	Synology SynologyConfig
-	Telegram TelegramConfig
-	DryMode  bool   `env:"DRY_MODE" env-default:"false"`
-	Cron     string `env:"CRON" env-default:"0 * * * *"`
+	Synology       SynologyConfig
+	QBittorrent    QBittorrentConfig
+	Telegram       TelegramConfig
+	DownloadClient string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
+	DryMode        bool   `env:"DRY_MODE" env-default:"false"`
+	Cron           string `env:"CRON" env-default:"0 * * * *"`
 }
 
 func Init() (*Config, error) {

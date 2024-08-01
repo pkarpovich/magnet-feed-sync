@@ -7,7 +7,7 @@ import (
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
-	downloadStation "magnet-feed-sync/app/download-station"
+	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
@@ -34,7 +34,10 @@ func main() {
 
 func run(cfg *config.Config) error {
 	t := tracker.NewParser()
-	dsClient := downloadStation.NewClient(cfg.Synology)
+	dClient, err := downloadClient.NewClient(*cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create download client: %w", err)
+	}
 
 	db, err := database.NewClient("tasks.db")
 	if err != nil {
@@ -49,7 +52,7 @@ func run(cfg *config.Config) error {
 
 	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
 		Tracker:         t,
-		DSClient:        dsClient,
+		DClient:         dClient,
 		Store:           store,
 		DryMode:         cfg.DryMode,
 		MessagesForSend: messagesForSend,
