@@ -1,7 +1,9 @@
 package providers
 
 import (
+	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/mmcdole/gofeed"
 	"log"
 	"magnet-feed-sync/app/utils"
 	"net/url"
@@ -56,4 +58,38 @@ func (p *NnmProvider) GetLastUpdatedDate(doc *goquery.Document) (registrationDat
 	})
 
 	return registrationDate
+}
+
+func (p *NnmProvider) GetLastComment(doc *goquery.Document) string {
+	rssLink := getRssLink(doc)
+	if rssLink == "" {
+		log.Printf("[WARN] rss link not found in nnm page")
+		return ""
+	}
+
+	fp := gofeed.NewParser()
+	feed, _ := fp.ParseURL(rssLink)
+
+	commentBody := feed.Items[len(feed.Items)-1].Description
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse comment body: %v", err)
+		return ""
+	}
+
+	return strings.TrimSpace(doc.Find("span.postbody").Text())
+}
+
+func getRssLink(doc *goquery.Document) string {
+	var rssLink string
+
+	doc.Find("td a").Each(func(index int, item *goquery.Selection) {
+		href, exists := item.Attr("href")
+		if exists && strings.HasPrefix(href, "rss.php") {
+			rssLink = href
+		}
+	})
+
+	return fmt.Sprintf("%s/%s", NnmUrl, rssLink)
 }

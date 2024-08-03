@@ -16,6 +16,7 @@ func NewRepository(db *database.Client) (*Repository, error) {
     		magnet TEXT,
     		name TEXT,
     		last_sync_at TIMESTAMP,
+    		last_comment TEXT NOT NULL DEFAULT '',
     		torrent_updated_at TIMESTAMP,
     		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             delete_at TIMESTAMP DEFAULT NULL
@@ -34,14 +35,16 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				magnet,
 				name,
 				last_sync_at,
+				last_comment,
 				torrent_updated_at,
 				delete_at
-			) VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.Magnet,
 		metadata.Name,
 		metadata.LastSyncAt,
+		metadata.LastComment,
 		metadata.TorrentUpdatedAt,
 	)
 
@@ -64,6 +67,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.Magnet,
 			&m.Name,
 			&m.LastSyncAt,
+			&m.LastComment,
 			&m.TorrentUpdatedAt,
 			&m.CreatedAt,
 			&m.DeleteAt,

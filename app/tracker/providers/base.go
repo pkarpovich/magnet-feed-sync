@@ -10,4 +10,5 @@ type Service interface {
 	GetTitle(doc *goquery.Document) string
 	GetId(url string) string
 	GetLastUpdatedDate(doc *goquery.Document) time.Time
+	GetLastComment(doc *goquery.Document) string
 }

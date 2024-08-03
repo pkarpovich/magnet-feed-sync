@@ -17,6 +17,7 @@ type FileMetadata struct {
 	OriginalUrl      string     `json:"original_url"`
 	Magnet           string     `json:"magnet"`
 	Name             string     `json:"name"`
+	LastComment      string     `json:"last_comment"`
 	LastSyncAt       time.Time  `json:"last_sync_at"`
 	TorrentUpdatedAt time.Time  `json:"torrent_updated_at"`
 	CreatedAt        time.Time  `json:"-"`
@@ -50,10 +51,12 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	title := provider.GetTitle(doc)
 	id := provider.GetId(url)
 	updatedAt := provider.GetLastUpdatedDate(doc)
+	lastComment := provider.GetLastComment(doc)
 
 	return &FileMetadata{
 		LastSyncAt:       time.Now(),
 		TorrentUpdatedAt: updatedAt,
+		LastComment:      lastComment,
 		OriginalUrl:      url,
 		Magnet:           magnet,
 		Name:             title,

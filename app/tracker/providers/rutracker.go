@@ -77,9 +77,14 @@ func (p *RutrackerProvider) GetLastUpdatedDate(doc *goquery.Document) time.Time 
 
 	date, err := utils.ParseRussianDate(editedDate)
 	if err != nil {
-		log.Printf("[ERROR] Failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
+		log.Printf("[ERROR] failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
 		return time.Now()
 	}
 
 	return date
+}
+
+func (p *RutrackerProvider) GetLastComment(doc *goquery.Document) string {
+	log.Printf("[WARN] comments not supported in rutracker page")
+	return ""
 }
