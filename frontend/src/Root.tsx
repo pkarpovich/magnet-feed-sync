@@ -1,0 +1,42 @@
+import { SDKProvider, useLaunchParams } from "@telegram-apps/sdk-react";
+import { useEffect } from "react";
+
+import { App } from "./App.tsx";
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
+
+type ErrorBoundaryErrorProps = {
+    error: unknown;
+};
+
+const ErrorBoundaryError = ({ error }: ErrorBoundaryErrorProps) => (
+    <div>
+        <p>An unhandled error occurred:</p>
+        <blockquote>
+            <code>
+                {error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error)}
+            </code>
+        </blockquote>
+    </div>
+);
+
+export const Inner = () => {
+    const debug = useLaunchParams().startParam === "debug";
+
+    useEffect(() => {
+        if (debug) {
+            import("eruda").then((lib) => lib.default.init());
+        }
+    }, [debug]);
+
+    return (
+        <SDKProvider acceptCustomStyles={true} debug={debug}>
+            <App />
+        </SDKProvider>
+    );
+};
+
+export const Root = () => (
+    <ErrorBoundary fallback={ErrorBoundaryError}>
+        <Inner />
+    </ErrorBoundary>
+);

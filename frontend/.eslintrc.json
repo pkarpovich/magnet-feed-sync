@@ -1,0 +1,326 @@
+{
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "project": "./tsconfig.app.json",
+    "sourceType": "module",
+    "ecmaVersion": "latest",
+    "ecmaFeatures": {
+      "impliedStrict": true,
+      "jsx": true
+    }
+  },
+  "settings": {
+    "react": {
+      "version": "detect"
+    }
+  },
+  "reportUnusedDisableDirectives": true,
+  "plugins": [
+    "@typescript-eslint",
+    "simple-import-sort",
+    "react-refresh",
+    "no-secrets",
+    "jsx-a11y",
+    "prefer-arrow-functions",
+    "prettier",
+    "import",
+    "react",
+    "filename-rules",
+    "perfectionist"
+  ],
+  "extends": [
+    "eslint:recommended",
+    "plugin:react/jsx-runtime",
+    "plugin:react/recommended",
+    "plugin:import/recommended",
+    "plugin:@typescript-eslint/strict",
+    "plugin:jsx-a11y/recommended",
+    "plugin:prettier/recommended",
+    "plugin:perfectionist/recommended-natural-legacy",
+    "plugin:react-hooks/recommended"
+  ],
+  "rules": {
+    "no-unused-vars": "error",
+    "no-alert": "error",
+    "require-unicode-regexp": "error",
+    "no-template-curly-in-string": "error",
+    "prefer-template": "warn",
+    "no-implicit-coercion": "warn",
+    "require-await": "warn",
+    "no-plusplus": [
+      "warn",
+      {
+        "allowForLoopAfterthoughts": true
+      }
+    ],
+    "no-restricted-imports": "off",
+    "curly": "warn",
+    "object-shorthand": "warn",
+    // Disable console.log to encourage more explicit logging
+    "no-console": [
+      "warn",
+      {
+        "allow": [
+          "warn",
+          "error",
+          "info",
+          "dir",
+          "table",
+          "assert",
+          "count",
+          "time",
+          "timeLog",
+          "trace",
+          "groupCollapsed",
+          "groupEnd"
+        ]
+      }
+    ],
+    "@typescript-eslint/no-explicit-any": "error",
+    "@typescript-eslint/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "never"
+      }
+    ],
+    "@typescript-eslint/no-unnecessary-type-assertion": "error",
+    "@typescript-eslint/no-non-null-assertion": "off",
+    "@typescript-eslint/prefer-nullish-coalescing": "error",
+    "@typescript-eslint/prefer-ts-expect-error": "error",
+    "@typescript-eslint/ban-ts-comment": [
+      "error",
+      {
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "ts-check": false,
+        "minimumDescriptionLength": 3
+      }
+    ],
+    "@typescript-eslint/restrict-template-expressions": "error",
+    "@typescript-eslint/consistent-indexed-object-style": ["error", "record"],
+    "@typescript-eslint/consistent-type-definitions": ["error", "type"],
+    "@typescript-eslint/no-unused-expressions": [
+      "error",
+      {
+        "allowShortCircuit": true,
+        "allowTernary": true,
+        "enforceForJSX": true
+      }
+    ],
+    "@typescript-eslint/no-floating-promises": [
+      "error",
+      {
+        "ignoreVoid": true,
+        "ignoreIIFE": true
+      }
+    ],
+    "@typescript-eslint/no-misused-promises": [
+      "error",
+      {
+        "checksVoidReturn": {
+          "arguments": false,
+          "attributes": false
+        }
+      }
+    ],
+    "@typescript-eslint/no-unnecessary-type-arguments": "warn",
+    "@typescript-eslint/no-unnecessary-condition": "warn",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+    "@typescript-eslint/padding-line-between-statements": [
+      "warn",
+      {
+        "blankLine": "always",
+        "prev": "*",
+        "next": ["function", "interface", "type", "try", "throw", "case", "default"]
+      }
+    ],
+    "@typescript-eslint/switch-exhaustiveness-check": "warn",
+    "@typescript-eslint/naming-convention": [
+      "warn",
+      {
+        "selector": "default",
+        "format": ["camelCase"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "variable",
+        // Need to allow PascalCase for React components
+        "format": ["PascalCase", "camelCase", "UPPER_CASE"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "parameter",
+        // Need to allow PascalCase for React components
+        "format": ["camelCase", "PascalCase"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "property",
+        "format": ["camelCase", "PascalCase"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "typeMethod",
+        "format": ["camelCase", "PascalCase"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "objectLiteralMethod",
+        "format": ["camelCase", "PascalCase"],
+        "leadingUnderscore": "allow"
+      },
+      {
+        "selector": "objectLiteralProperty",
+        "format": null
+      },
+      {
+        "selector": "typeLike",
+        "format": ["PascalCase"]
+      },
+      {
+        // Ignore convention for 3rd party libraries
+        "selector": "import",
+        "format": null
+      }
+    ],
+    "@typescript-eslint/no-restricted-imports": [
+      "warn",
+      {
+        "name": "react-redux",
+        "importNames": ["useSelector", "useDispatch"],
+        "message": "Use typed hooks `useAppDispatch` and `useAppSelector` instead."
+      }
+    ],
+    "@typescript-eslint/no-shadow": "off",
+    "@typescript-eslint/quotes": "off",
+    "@typescript-eslint/comma-dangle": "off",
+    "react/prefer-stateless-function": "error",
+    "react/button-has-type": "error",
+    "react/jsx-pascal-case": "error",
+    "react/jsx-no-script-url": "error",
+    "react/no-children-prop": "error",
+    "react/no-danger": "error",
+    "react/no-danger-with-children": "error",
+    "react/no-unstable-nested-components": [
+      "error",
+      {
+        "allowAsProps": true
+      }
+    ],
+    "react/jsx-fragments": "error",
+    "react/destructuring-assignment": [
+      "error",
+      "always",
+      {
+        "destructureInSignature": "always"
+      }
+    ],
+    "react/jsx-no-leaked-render": [
+      "error",
+      {
+        "validStrategies": ["ternary"]
+      }
+    ],
+    "react/jsx-max-depth": [
+      "error",
+      {
+        "max": 5
+      }
+    ],
+    "react/function-component-definition": [
+      "warn",
+      {
+        "namedComponents": "arrow-function"
+      }
+    ],
+    "react/jsx-key": [
+      "error",
+      {
+        "checkFragmentShorthand": true,
+        "checkKeyMustBeforeSpread": true,
+        "warnOnDuplicates": true
+      }
+    ],
+    "react/jsx-no-useless-fragment": "warn",
+    "react/jsx-curly-brace-presence": "warn",
+    "react/no-typos": "warn",
+    "react/display-name": "off",
+    "react/self-closing-comp": "warn",
+    "react/jsx-sort-props": "off",
+    "react/react-in-jsx-scope": "off",
+    "react/jsx-one-expression-per-line": "off",
+    "react/prop-types": "off",
+    "react-refresh/only-export-components": "warn",
+    "import/no-extraneous-dependencies": [
+      "error",
+      // allow devDependencies to be imported into testing files, etc.
+      {
+        "devDependencies": ["**/*.{test,spec,story,stories}.{ts,tsx}"]
+      }
+    ],
+    "import/no-default-export": "error",
+    "import/named": "off",
+    "simple-import-sort/imports": "warn",
+    "simple-import-sort/exports": "warn",
+    "perfectionist/sort-imports": "off",
+    "perfectionist/sort-named-imports": "off",
+    "prefer-arrow-functions/prefer-arrow-functions": [
+      "warn",
+      {
+        "classPropertiesAllowed": true,
+        "disallowPrototype": true,
+        "returnStyle": "unchanged"
+      }
+    ],
+    "arrow-body-style": "warn",
+    "prefer-arrow-callback": [
+      "warn",
+      {
+        "allowNamedFunctions": true
+      }
+    ],
+    "filename-rules/match": [
+      2,
+      {
+        ".ts": "camelcase",
+        ".tsx": "pascalcase"
+      }
+    ],
+    "no-secrets/no-secrets": [
+      "error",
+      {
+        "ignoreContent": "https",
+        "tolerance": 4.2
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["pages/**/*", "app/**/*"],
+      "rules": {
+        "import/no-default-export": "off",
+        "react-refresh/only-export-components": "off"
+      }
+    },
+    {
+      "files": ["app/**/*", "hooks/**/*"],
+      "rules": {
+        "filename-rules/match": "off"
+      }
+    },
+    {
+      "files": ["options.tsx", "content.tsx", "main.tsx"],
+      "rules": {
+        "filename-rules/match": "off"
+      }
+    }
+  ]
+}
