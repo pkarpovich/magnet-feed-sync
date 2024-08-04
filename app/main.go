@@ -87,7 +87,7 @@ func run(cfg *config.Config) error {
 	}
 
 	go tgListener.SendMessagesForAdmins()
-	go http.NewClient(cfg.Http, store).Start(ctx)
+	go http.NewClient(cfg.Http, store, downloadTasksClient).Start(ctx)
 
 	if err := tgListener.Do(); err != nil {
 		return fmt.Errorf("failed to start Telegram listener: %w", err)

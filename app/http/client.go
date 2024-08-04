@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/rs/cors"
 	"log"
+	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	taskStore "magnet-feed-sync/app/task-store"
 	"net/http"
@@ -18,25 +19,33 @@ import (
 )
 
 type Client struct {
-	config config.HttpConfig
-	store  *taskStore.Repository
+	config              config.HttpConfig
+	store               *taskStore.Repository
+	downloadTasksClient *downloadTasks.Client
 }
 
-func NewClient(cfg config.HttpConfig, store *taskStore.Repository) *Client {
+func NewClient(cfg config.HttpConfig, store *taskStore.Repository, downloadTasksClient *downloadTasks.Client) *Client {
 	return &Client{
-		config: cfg,
-		store:  store,
+		downloadTasksClient: downloadTasksClient,
+		config:              cfg,
+		store:               store,
 	}
 }
 
 func (c *Client) Start(ctx context.Context) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", c.handleFiles)
+	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
+	mux.HandleFunc("PATCH /api/files/refresh", c.handleRefreshAllFiles)
+	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
 	mux.HandleFunc("GET /", c.fileHandler)
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", c.config.Port),
-		Handler: cors.Default().Handler(mux),
+		Addr: fmt.Sprintf(":%d", c.config.Port),
+		Handler: cors.New(cors.Options{
+			AllowedOrigins: []string{"*"},
+			AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE"},
+		}).Handler(mux),
 	}
 
 	go func() {
@@ -99,6 +108,38 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	fileId := r.PathValue("fileId")
+
+	err := c.store.Remove(fileId)
+	if err != nil {
+		log.Printf("[ERROR] failed to remove files: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	fileId := r.PathValue("fileId")
+	c.downloadTasksClient.CheckFileForUpdates(fileId)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	c.downloadTasksClient.CheckForUpdates()
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (c *Client) fileHandler(w http.ResponseWriter, r *http.Request) {

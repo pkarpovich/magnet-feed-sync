@@ -1,0 +1,44 @@
+.headerContainer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    background-color: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+    height: 30px;
+}
+
+.headerTitle {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--title);
+}
+
+.headerLogo {
+    display: flex;
+    justify-content: flex-start;
+    flex: 1;
+}
+
+.headerActions {
+    display: flex;
+    justify-content: flex-end;
+    flex: 1;
+}
+
+.headerIcon {
+    fill: var(--title);
+}
+
+.headerIconActive {
+    animation: endlessRotate 1.5s linear infinite;
+}
+
+@keyframes endlessRotate {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}

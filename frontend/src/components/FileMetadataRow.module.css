@@ -1,11 +1,11 @@
 .row {
     display: flex;
     flex-direction: column;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border);
     border-radius: 5px;
     margin: 10px 0;
     padding: 10px;
-    background-color: #f9f9f9;
+    background-color: var(--header-bg);
 }
 
 .header {
@@ -30,6 +30,27 @@
     gap: 5px;
 }
 
+.headerIcon {
+    fill: var(--title);
+}
+
+.headerIcon:focus {
+    outline: none;
+}
+
+.headerIconActive {
+    animation: endlessRotate 1.5s linear infinite;
+}
+
+@keyframes endlessRotate {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
 .name {
     font-size: 1.1em;
     color: #007bff;
@@ -43,7 +64,7 @@
 
 .date {
     font-size: 0.8em;
-    color: #888;
+    color: var(--title);
     display: flex;
     align-items: center;
 }

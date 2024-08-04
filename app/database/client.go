@@ -54,3 +54,7 @@ func (c *Client) Exec(query string, args ...any) (sql.Result, error) {
 func (c *Client) Query(query string, args ...any) (*sql.Rows, error) {
 	return c.db.Query(query, args...)
 }
+
+func (c *Client) QueryRow(query string, args ...any) *sql.Row {
+	return c.db.QueryRow(query, args...)
+}

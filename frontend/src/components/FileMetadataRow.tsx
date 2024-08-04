@@ -1,8 +1,10 @@
 import { IconButton } from "@telegram-apps/telegram-ui";
-import { useCallback } from "react";
+import clsx from "clsx";
+import { useCallback, useState } from "react";
 
 import MagnetIcon from "../icons/magnet.svg";
 import RefreshIcon from "../icons/refresh.svg";
+import RemoveIcon from "../icons/remove.svg";
 import ShareIcon from "../icons/share.svg";
 import styles from "./FileMetadataRow.module.css";
 
@@ -12,11 +14,25 @@ type Props = {
     lastSyncAt: Date;
     magnet: string;
     name: string;
+    onRefreshFileMetadata: (id: string) => Promise<void>;
+    onRemove: (id: string) => Promise<void>;
     originalUrl: string;
     torrentUpdatedAt: Date;
 };
 
-export const FileMetadataRow = ({ lastComment, lastSyncAt, magnet, name, originalUrl, torrentUpdatedAt }: Props) => {
+export const FileMetadataRow = ({
+    id,
+    lastComment,
+    lastSyncAt,
+    magnet,
+    name,
+    onRefreshFileMetadata,
+    onRemove,
+    originalUrl,
+    torrentUpdatedAt,
+}: Props) => {
+    const [isRefreshing, setIsRefreshing] = useState(false);
+
     const handleMagnetClick = useCallback(async () => {
         await navigator.clipboard.writeText(magnet);
     }, [magnet]);
@@ -26,8 +42,14 @@ export const FileMetadataRow = ({ lastComment, lastSyncAt, magnet, name, origina
     }, [originalUrl]);
 
     const handleRefreshClick = useCallback(async () => {
-        console.log("Refresh clicked");
-    }, []);
+        setIsRefreshing(true);
+        await onRefreshFileMetadata(id);
+        setIsRefreshing(false);
+    }, [id, onRefreshFileMetadata]);
+
+    const handleRemoveClick = useCallback(async () => {
+        await onRemove(id);
+    }, [id, onRemove]);
 
     return (
         <div className={styles.row}>
@@ -35,19 +57,25 @@ export const FileMetadataRow = ({ lastComment, lastSyncAt, magnet, name, origina
                 <div className={styles.headerUtil}>
                     <span className={styles.date}>Updated: {new Date(torrentUpdatedAt).toLocaleDateString()}</span>
                     <div className={styles.headerIcons}>
-                        <IconButton mode="bezeled" onClick={handleMagnetClick} size="s">
+                        <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleMagnetClick} size="s">
                             <MagnetIcon />
                         </IconButton>
-                        <IconButton mode="bezeled" onClick={handleShareClick} size="s">
+                        <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleShareClick} size="s">
                             <ShareIcon />
                         </IconButton>
                         <IconButton
+                            className={clsx(styles.headerIcon, {
+                                [styles.headerIconActive]: isRefreshing,
+                            })}
                             mode="bezeled"
                             onClick={handleRefreshClick}
                             size="s"
                             title={new Date(lastSyncAt).toLocaleString()}
                         >
                             <RefreshIcon />
+                        </IconButton>
+                        <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleRemoveClick} size="s">
+                            <RemoveIcon />
                         </IconButton>
                     </div>
                 </div>

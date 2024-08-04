@@ -1,0 +1,15 @@
+.loadingContainer {
+    display: flex;
+    flex: 1;
+    justify-content: center;
+    align-items: center;
+}
+
+.container {
+    display: flex;
+    flex: 1;
+    padding: 10px;
+    flex-direction: column;
+    overflow-y: auto;
+    max-height: calc(100vh - 100px);
+}

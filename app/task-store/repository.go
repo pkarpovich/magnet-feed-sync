@@ -1,6 +1,7 @@
 package task_store
 
 import (
+	"log"
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/tracker"
 )
@@ -67,12 +68,17 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			files
 		WHERE
 			delete_at IS NULL
-		ORDER BY torrent_updated_at DESC 
+		ORDER BY torrent_updated_at DESC
 	`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		err := rows.Close()
+		if err != nil {
+			log.Printf("[ERROR] failed to close rows: %s", err)
+		}
+	}()
 
 	var metadata []*tracker.FileMetadata
 	for rows.Next() {
@@ -95,6 +101,41 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 	}
 
 	return metadata, nil
+}
+
+func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
+	var m tracker.FileMetadata
+	err := r.db.QueryRow(`
+		SELECT
+			id,
+			original_url,
+			magnet,
+			name,
+			last_comment,
+			last_sync_at,
+			torrent_updated_at,
+			created_at,
+			delete_at
+		FROM
+			files
+		WHERE
+			id = ?
+	`, id).Scan(
+		&m.ID,
+		&m.OriginalUrl,
+		&m.Magnet,
+		&m.Name,
+		&m.LastComment,
+		&m.LastSyncAt,
+		&m.TorrentUpdatedAt,
+		&m.CreatedAt,
+		&m.DeleteAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &m, nil
 }
 
 func (r *Repository) Remove(id string) error {
