@@ -26,7 +26,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
-      - "traefik.http.routers.magnet-feed-sync.rule=Host(`omni-search.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.magnet-feed-sync.rule=Host(`magnet-feed-sync.${ROOT_DOMAIN}`)"
       - "traefik.http.routers.magnet-feed-sync.entrypoints=https"
       - "traefik.http.routers.magnet-feed-sync.tls.certresolver=le"
 
