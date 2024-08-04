@@ -25,10 +25,16 @@ type TelegramConfig struct {
 	SuperUsers []int64 `env:"TELEGRAM_SUPER_USERS" env-separator:","`
 }
 
+type HttpConfig struct {
+	Port           int    `env:"HTTP_PORT" env-default:"8080"`
+	BaseStaticPath string `env:"BASE_STATIC_PATH" env-default:"extension/dist-web"`
+}
+
 type Config struct {
 	Synology       SynologyConfig
 	QBittorrent    QBittorrentConfig
 	Telegram       TelegramConfig
+	Http           HttpConfig
 	DownloadClient string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
 	DryMode        bool   `env:"DRY_MODE" env-default:"false"`
 	Cron           string `env:"CRON" env-default:"0 * * * *"`

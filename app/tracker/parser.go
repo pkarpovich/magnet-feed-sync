@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"database/sql"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/html/charset"
@@ -13,15 +14,15 @@ import (
 )
 
 type FileMetadata struct {
-	ID               string     `json:"-"`
-	OriginalUrl      string     `json:"original_url"`
-	Magnet           string     `json:"magnet"`
-	Name             string     `json:"name"`
-	LastComment      string     `json:"last_comment"`
-	LastSyncAt       time.Time  `json:"last_sync_at"`
-	TorrentUpdatedAt time.Time  `json:"torrent_updated_at"`
-	CreatedAt        time.Time  `json:"-"`
-	DeleteAt         *time.Time `json:"-"`
+	ID               string       `json:"id"`
+	OriginalUrl      string       `json:"original_url"`
+	Magnet           string       `json:"magnet"`
+	Name             string       `json:"name"`
+	LastComment      string       `json:"last_comment"`
+	LastSyncAt       time.Time    `json:"last_sync_at"`
+	TorrentUpdatedAt time.Time    `json:"torrent_updated_at"`
+	CreatedAt        time.Time    `json:"-"`
+	DeleteAt         sql.NullTime `json:"-"`
 }
 
 type Parser struct {

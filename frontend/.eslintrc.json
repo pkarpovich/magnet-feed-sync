@@ -134,12 +134,12 @@
         "caughtErrorsIgnorePattern": "^_"
       }
     ],
-    "@typescript-eslint/padding-line-between-statements": [
+    "padding-line-between-statements": [
       "warn",
       {
         "blankLine": "always",
         "prev": "*",
-        "next": ["function", "interface", "type", "try", "throw", "case", "default"]
+        "next": ["function", "try", "throw", "case", "default"]
       }
     ],
     "@typescript-eslint/switch-exhaustiveness-check": "warn",

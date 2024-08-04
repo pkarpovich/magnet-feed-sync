@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"magnet-feed-sync/app/database"
 	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/events"
+	"magnet-feed-sync/app/http"
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
@@ -33,6 +35,7 @@ func main() {
 }
 
 func run(cfg *config.Config) error {
+	ctx := context.Background()
 	t := tracker.NewParser()
 	dClient, err := downloadClient.NewClient(*cfg)
 	if err != nil {
@@ -84,6 +87,7 @@ func run(cfg *config.Config) error {
 	}
 
 	go tgListener.SendMessagesForAdmins()
+	go http.NewClient(cfg.Http, store).Start(ctx)
 
 	if err := tgListener.Do(); err != nil {
 		return fmt.Errorf("failed to start Telegram listener: %w", err)

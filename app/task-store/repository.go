@@ -52,7 +52,23 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 }
 
 func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
-	rows, err := r.db.Query(`SELECT * FROM files WHERE delete_at IS NULL`)
+	rows, err := r.db.Query(`
+		SELECT
+			id,
+			original_url,
+			magnet,
+			name,
+			last_comment,
+			last_sync_at,
+			torrent_updated_at,
+			created_at,
+			delete_at
+		FROM
+			files
+		WHERE
+			delete_at IS NULL
+		ORDER BY torrent_updated_at DESC 
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +82,8 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.OriginalUrl,
 			&m.Magnet,
 			&m.Name,
-			&m.LastSyncAt,
 			&m.LastComment,
+			&m.LastSyncAt,
 			&m.TorrentUpdatedAt,
 			&m.CreatedAt,
 			&m.DeleteAt,

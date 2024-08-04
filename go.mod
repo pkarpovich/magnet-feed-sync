@@ -10,6 +10,7 @@ require (
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 	github.com/joho/godotenv v1.5.1
 	github.com/mmcdole/gofeed v1.3.0
+	github.com/rs/cors v1.11.0
 	golang.org/x/net v0.24.0
 	modernc.org/sqlite v1.29.8
 )
