@@ -10,13 +10,15 @@ type File = {
     torrentUpdatedAt: Date;
 };
 
+const BaseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+
 export const useFiles = () => {
     const [files, setFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        fetch("http://localhost:8080/files")
+        fetch(`${BaseUrl}/api/files`)
             .then((response) => response.json())
             .then((data) => {
                 setFiles(data);

@@ -27,7 +27,7 @@ type TelegramConfig struct {
 
 type HttpConfig struct {
 	Port           int    `env:"HTTP_PORT" env-default:"8080"`
-	BaseStaticPath string `env:"BASE_STATIC_PATH" env-default:"extension/dist-web"`
+	BaseStaticPath string `env:"BASE_STATIC_PATH" env-default:"frontend/dist"`
 }
 
 type Config struct {

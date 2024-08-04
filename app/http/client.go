@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 )
@@ -30,7 +31,8 @@ func NewClient(cfg config.HttpConfig, store *taskStore.Repository) *Client {
 
 func (c *Client) Start(ctx context.Context) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /files", c.handleFiles)
+	mux.HandleFunc("GET /api/files", c.handleFiles)
+	mux.HandleFunc("GET /", c.fileHandler)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", c.config.Port),
@@ -97,4 +99,14 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func (c *Client) fileHandler(w http.ResponseWriter, r *http.Request) {
+	fileMatcher := regexp.MustCompile(`^/.*\..+$`)
+	if fileMatcher.MatchString(r.URL.Path) {
+		http.ServeFile(w, r, fmt.Sprintf("%s/%s", c.config.BaseStaticPath, r.URL.Path[1:]))
+		return
+	}
+
+	http.ServeFile(w, r, fmt.Sprintf("%s/%s", c.config.BaseStaticPath, "index.html"))
 }
