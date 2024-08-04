@@ -21,6 +21,8 @@ services:
       HTTP_PORT: 8080
     volumes:
       - .db:/.db
+    expose:
+      - 8080
     networks:
       - proxy
     labels:
