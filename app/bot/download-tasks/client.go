@@ -8,6 +8,7 @@ import (
 	downloadClient "magnet-feed-sync/app/download-client"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
+	"time"
 )
 
 type Client struct {
@@ -91,8 +92,14 @@ func (c *Client) CheckForUpdates() {
 			continue
 		}
 
+		updatedMetadata.LastSyncAt = time.Now()
 		if metadata.TorrentUpdatedAt == updatedMetadata.TorrentUpdatedAt {
 			log.Printf("[INFO] Metadata is up to date: %s", metadata.ID)
+
+			if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
+				log.Printf("[ERROR] Error updating last sync at: %s", err)
+			}
+
 			continue
 		}
 		log.Printf("[INFO] Metadata is outdated: %s", metadata.ID)

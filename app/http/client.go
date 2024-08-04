@@ -58,6 +58,16 @@ func (c *Client) Start(ctx context.Context) {
 	log.Printf("[INFO] HTTP server shutdown")
 }
 
+type FileMetadataResponse struct {
+	ID               string    `json:"id"`
+	OriginalUrl      string    `json:"originalUrl"`
+	Name             string    `json:"name"`
+	LastComment      string    `json:"lastComment"`
+	LastSyncAt       time.Time `json:"lastSyncAt"`
+	Magnet           string    `json:"magnet"`
+	TorrentUpdatedAt time.Time `json:"torrentUpdatedAt"`
+}
+
 func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -68,7 +78,20 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(files)
+	var filesResponse []FileMetadataResponse
+	for _, f := range files {
+		filesResponse = append(filesResponse, FileMetadataResponse{
+			ID:               f.ID,
+			Name:             f.Name,
+			Magnet:           f.Magnet,
+			LastSyncAt:       f.LastSyncAt,
+			OriginalUrl:      f.OriginalUrl,
+			LastComment:      f.LastComment,
+			TorrentUpdatedAt: f.TorrentUpdatedAt,
+		})
+	}
+
+	err = json.NewEncoder(w).Encode(filesResponse)
 	if err != nil {
 		log.Printf("[ERROR] failed to encode files: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

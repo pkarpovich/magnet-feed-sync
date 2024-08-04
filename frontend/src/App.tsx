@@ -1,20 +1,25 @@
-import "./App.css";
+import { AppRoot } from "@telegram-apps/telegram-ui";
 
-import { SDKProvider, useLaunchParams } from "@telegram-apps/sdk-react";
-import { useEffect } from "react";
+import { FileMetadataRow } from "./components/FileMetadataRow.tsx";
+import { useFiles } from "./hooks/useFiles.ts";
 
 export const App = () => {
-    const debug = useLaunchParams().startParam === "debug";
-
-    useEffect(() => {
-        if (debug) {
-            import("eruda").then((lib) => lib.default.init());
-        }
-    }, [debug]);
+    const { files } = useFiles();
 
     return (
-        <SDKProvider acceptCustomStyles={true} debug={debug}>
-            <div>magnet-feed-sync</div>
-        </SDKProvider>
+        <AppRoot>
+            {files.map((file) => (
+                <FileMetadataRow
+                    id={file.id}
+                    key={file.id}
+                    lastComment={file.lastComment}
+                    lastSyncAt={file.lastSyncAt}
+                    magnet={file.magnet}
+                    name={file.name}
+                    originalUrl={file.originalUrl}
+                    torrentUpdatedAt={file.torrentUpdatedAt}
+                />
+            ))}
+        </AppRoot>
     );
 };
