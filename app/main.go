@@ -14,6 +14,10 @@ import (
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -35,7 +39,11 @@ func main() {
 }
 
 func run(cfg *config.Config) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+
 	dClient, err := downloadClient.NewClient(*cfg)
 	t := tracker.NewParser(dClient)
 	if err != nil {
@@ -86,11 +94,27 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	}
 
-	go tgListener.SendMessagesForAdmins()
-	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx)
+	go tgListener.SendMessagesForAdmins(ctx)
+	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx, done)
 
-	if err := tgListener.Do(); err != nil {
-		return fmt.Errorf("failed to start Telegram listener: %w", err)
+	go func() {
+		if err := tgListener.Do(); err != nil {
+			log.Printf("[ERROR] error in telegram listener: %s", err)
+			panic(err)
+		}
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	cancel()
+
+	select {
+	case <-done:
+		log.Println("[INFO] Application shutdown completed")
+	case <-time.After(15 * time.Second):
+		log.Println("[INFO] Application shutdown timed out")
 	}
 
 	return nil

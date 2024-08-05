@@ -12,10 +12,7 @@ import (
 	downloadClient "magnet-feed-sync/app/download-client"
 	taskStore "magnet-feed-sync/app/task-store"
 	"net/http"
-	"os"
-	"os/signal"
 	"regexp"
-	"syscall"
 	"time"
 )
 
@@ -40,7 +37,7 @@ func NewClient(
 	}
 }
 
-func (c *Client) Start(ctx context.Context) {
+func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", c.handleFiles)
 	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
@@ -67,9 +64,7 @@ func (c *Client) Start(ctx context.Context) {
 		log.Printf("[INFO] HTTP server stopped")
 	}()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+	<-ctx.Done()
 
 	shutdownCtx, shutdownRelease := context.WithTimeout(ctx, 10*time.Second)
 	defer shutdownRelease()
@@ -78,6 +73,8 @@ func (c *Client) Start(ctx context.Context) {
 		log.Printf("[ERROR] HTTP server error: %v", err)
 	}
 	log.Printf("[INFO] HTTP server shutdown")
+
+	close(done)
 }
 
 type FileMetadataResponse struct {

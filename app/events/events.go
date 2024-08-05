@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -268,7 +269,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 	}
 }
 
-func (tl *TelegramListener) SendMessagesForAdmins() {
+func (tl *TelegramListener) SendMessagesForAdmins(ctx context.Context) {
 	adminIds := tl.SuperUsers
 
 	for {
@@ -280,6 +281,9 @@ func (tl *TelegramListener) SendMessagesForAdmins() {
 					log.Printf("[ERROR] failed to send message: %v", err)
 				}
 			}
+		case <-ctx.Done():
+			log.Printf("[INFO] stop sending messages for admins")
+			return
 		}
 	}
 }
