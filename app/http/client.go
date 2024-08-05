@@ -48,6 +48,7 @@ func (c *Client) Start(ctx context.Context) {
 	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
 	mux.HandleFunc("GET /api/file-locations", c.handleGetFileLocations)
 	mux.HandleFunc("POST /api/file-locations", c.handleSetFileLocation)
+	mux.HandleFunc("GET /api/health", c.healthHandler)
 	mux.HandleFunc("GET /", c.fileHandler)
 
 	server := &http.Server{
@@ -211,6 +212,30 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	err = c.store.CreateOrReplace(file)
 	if err != nil {
 		log.Printf("[ERROR] failed to update file location: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+type HealthResponse struct {
+	Count   int    `json:"count"`
+	Message string `json:"message"`
+}
+
+func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
+	files, err := c.store.GetAll()
+	if err != nil {
+		log.Printf("[ERROR] failed to get files: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = json.NewEncoder(w).Encode(HealthResponse{
+		Count:   len(files),
+		Message: "OK",
+	})
+	if err != nil {
+		log.Printf("[ERROR] failed to encode health response: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
