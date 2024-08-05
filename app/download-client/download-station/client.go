@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"magnet-feed-sync/app/config"
+	"magnet-feed-sync/app/types"
 	"net/http"
 	"net/url"
 	"strings"
@@ -89,7 +91,7 @@ func (c *Client) createSession() (*Session, error) {
 	}, nil
 }
 
-func (c *Client) CreateDownloadTask(magnet string) error {
+func (c *Client) CreateDownloadTask(magnet, destination string) error {
 	session, err := c.createSession()
 	if err != nil {
 		return err
@@ -101,7 +103,7 @@ func (c *Client) CreateDownloadTask(magnet string) error {
 		"method":      {"create"},
 		"version":     {"2"},
 		"_sid":        {session.Sid},
-		"destination": {c.defaultDestination},
+		"destination": {destination},
 		"type":        {"url"},
 		"url":         {magnet},
 		"create_list": {"false"},
@@ -133,4 +135,23 @@ func (c *Client) CreateDownloadTask(magnet string) error {
 	fmt.Println(respBody)
 
 	return nil
+}
+
+func (c *Client) SetLocation(taskID, location string) error {
+	log.Printf("[WARN] SetLocation not implemented for DownloadStation")
+	return nil
+}
+
+func (c *Client) GetLocations() []types.Location {
+	log.Printf("[WARN] GetLocations not implemented for DownloadStation")
+	return nil
+}
+
+func (c *Client) GetHashByMagnet(magnet string) (string, error) {
+	log.Printf("[WARN] GetHashByMagnet not implemented for DownloadStation")
+	return "", nil
+}
+
+func (c *Client) GetDefaultLocation() string {
+	return c.defaultDestination
 }

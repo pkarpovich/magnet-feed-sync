@@ -5,10 +5,15 @@ import (
 	"magnet-feed-sync/app/config"
 	downloadStation "magnet-feed-sync/app/download-client/download-station"
 	"magnet-feed-sync/app/download-client/qbittorrent"
+	"magnet-feed-sync/app/types"
 )
 
 type Client interface {
-	CreateDownloadTask(url string) error
+	CreateDownloadTask(url, destination string) error
+	SetLocation(taskID, location string) error
+	GetLocations() []types.Location
+	GetHashByMagnet(magnet string) (string, error)
+	GetDefaultLocation() string
 }
 
 const (

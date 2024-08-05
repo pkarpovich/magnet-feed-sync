@@ -1,19 +1,24 @@
 import { IconButton } from "@telegram-apps/telegram-ui";
 import clsx from "clsx";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import type { FileLocation } from "../hooks/useFileLocations.ts";
 import MagnetIcon from "../icons/magnet.svg";
 import RefreshIcon from "../icons/refresh.svg";
 import RemoveIcon from "../icons/remove.svg";
 import ShareIcon from "../icons/share.svg";
 import styles from "./FileMetadataRow.module.css";
+import { SettingsModal } from "./SettingsModal.tsx";
 
 type Props = {
     id: string;
     lastComment: string;
     lastSyncAt: Date;
+    location: string;
+    locations: FileLocation[];
     magnet: string;
     name: string;
+    onLocationChange: (fileId: string, newLocation: string) => Promise<void>;
     onRefreshFileMetadata: (id: string) => Promise<void>;
     onRemove: (id: string) => Promise<void>;
     originalUrl: string;
@@ -24,14 +29,22 @@ export const FileMetadataRow = ({
     id,
     lastComment,
     lastSyncAt,
+    location,
+    locations,
     magnet,
     name,
+    onLocationChange,
     onRefreshFileMetadata,
     onRemove,
     originalUrl,
     torrentUpdatedAt,
 }: Props) => {
     const [isRefreshing, setIsRefreshing] = useState(false);
+
+    const displayLocation = useMemo(
+        () => locations.find((l) => l.id === location)?.name ?? location,
+        [location, locations],
+    );
 
     const handleMagnetClick = useCallback(async () => {
         await navigator.clipboard.writeText(magnet);
@@ -55,7 +68,9 @@ export const FileMetadataRow = ({
         <div className={styles.row}>
             <div className={styles.header}>
                 <div className={styles.headerUtil}>
-                    <span className={styles.date}>Updated: {new Date(torrentUpdatedAt).toLocaleDateString()}</span>
+                    <span className={styles.date}>
+                        <b>Updated:&nbsp;</b> {new Date(torrentUpdatedAt).toLocaleString()}
+                    </span>
                     <div className={styles.headerIcons}>
                         <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleMagnetClick} size="s">
                             <MagnetIcon />
@@ -74,6 +89,13 @@ export const FileMetadataRow = ({
                         >
                             <RefreshIcon />
                         </IconButton>
+                        <SettingsModal
+                            id={id}
+                            locations={locations}
+                            onChange={onLocationChange}
+                            title={name}
+                            value={location}
+                        />
                         <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleRemoveClick} size="s">
                             <RemoveIcon />
                         </IconButton>
@@ -85,7 +107,10 @@ export const FileMetadataRow = ({
             </div>
             <div className={styles.content}>
                 <div className={styles.field}>
-                    <strong>Last Comment:</strong> {lastComment ? lastComment : "No comments"}
+                    <b>Download Location:</b> {displayLocation}
+                </div>
+                <div className={styles.field}>
+                    <b>Last Comment:</b> {lastComment ? lastComment : "No comments"}
                 </div>
             </div>
         </div>

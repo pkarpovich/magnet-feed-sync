@@ -70,7 +70,10 @@ func (p *NnmProvider) GetLastComment(doc *goquery.Document) string {
 	fp := gofeed.NewParser()
 	feed, _ := fp.ParseURL(rssLink)
 
-	commentBody := feed.Items[len(feed.Items)-1].Description
+	commentBody := ""
+	if len(feed.Items) > 0 {
+		commentBody = feed.Items[len(feed.Items)-1].Description
+	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
 	if err != nil {

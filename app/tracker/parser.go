@@ -7,6 +7,7 @@ import (
 	"golang.org/x/net/html/charset"
 	"io"
 	"log"
+	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker/providers"
 	"net/http"
 	"strings"
@@ -21,15 +22,19 @@ type FileMetadata struct {
 	LastComment      string       `json:"last_comment"`
 	LastSyncAt       time.Time    `json:"last_sync_at"`
 	TorrentUpdatedAt time.Time    `json:"torrent_updated_at"`
+	Location         string       `json:"location"`
 	CreatedAt        time.Time    `json:"-"`
 	DeleteAt         sql.NullTime `json:"-"`
 }
 
 type Parser struct {
+	downloadClient downloadClient.Client
 }
 
-func NewParser() *Parser {
-	return &Parser{}
+func NewParser(downloadClient downloadClient.Client) *Parser {
+	return &Parser{
+		downloadClient,
+	}
 }
 
 func (p *Parser) Parse(url string) (*FileMetadata, error) {
@@ -55,6 +60,7 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	lastComment := provider.GetLastComment(doc)
 
 	return &FileMetadata{
+		Location:         p.downloadClient.GetDefaultLocation(),
 		LastSyncAt:       time.Now(),
 		TorrentUpdatedAt: updatedAt,
 		LastComment:      lastComment,

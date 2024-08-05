@@ -18,6 +18,7 @@ func NewRepository(db *database.Client) (*Repository, error) {
     		name TEXT,
     		last_sync_at TIMESTAMP,
     		last_comment TEXT NOT NULL DEFAULT '',
+    		location TEXT NOT NULL DEFAULT '/downloads/tv shows',
     		torrent_updated_at TIMESTAMP,
     		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             delete_at TIMESTAMP DEFAULT NULL
@@ -38,8 +39,9 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				last_sync_at,
 				last_comment,
 				torrent_updated_at,
+				location,
 				delete_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.Magnet,
@@ -47,6 +49,7 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 		metadata.LastSyncAt,
 		metadata.LastComment,
 		metadata.TorrentUpdatedAt,
+		metadata.Location,
 	)
 
 	return err
@@ -62,6 +65,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			last_comment,
 			last_sync_at,
 			torrent_updated_at,
+			location,
 			created_at,
 			delete_at
 		FROM
@@ -91,6 +95,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.LastComment,
 			&m.LastSyncAt,
 			&m.TorrentUpdatedAt,
+			&m.Location,
 			&m.CreatedAt,
 			&m.DeleteAt,
 		); err != nil {
@@ -114,6 +119,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 			last_comment,
 			last_sync_at,
 			torrent_updated_at,
+			location,
 			created_at,
 			delete_at
 		FROM
@@ -128,6 +134,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 		&m.LastComment,
 		&m.LastSyncAt,
 		&m.TorrentUpdatedAt,
+		&m.Location,
 		&m.CreatedAt,
 		&m.DeleteAt,
 	)

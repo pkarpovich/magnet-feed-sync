@@ -1,53 +1,53 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { BaseUrl } from "../constants/api.ts";
+import { uniqId } from "../utils/uniqId.ts";
+
 type File = {
     id: string;
     lastComment: string;
     lastSyncAt: Date;
+    location: string;
     magnet: string;
     name: string;
     originalUrl: string;
     torrentUpdatedAt: Date;
 };
 
-const BaseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin;
-
 export const useFiles = () => {
     const [files, setFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [refreshing, setRefreshing] = useState(true);
+    const [refreshing, setRefreshing] = useState<string>();
 
     useEffect(() => {
-        if (!refreshing) {
-            return;
-        }
-
         fetch(`${BaseUrl}/api/files`)
             .then((response) => response.json())
             .then(setFiles)
             .catch(setError)
             .finally(() => {
                 setLoading(false);
-                setRefreshing(false);
             });
     }, [refreshing]);
 
     const onRemove = useCallback(async (id: string) => {
         await fetch(`${BaseUrl}/api/files/${id}`, { method: "DELETE" });
-        setRefreshing(true);
+        setRefreshing(uniqId());
     }, []);
 
     const onRefreshFileMetadata = useCallback(async (id: string) => {
         await fetch(`${BaseUrl}/api/files/${id}/refresh`, { method: "PATCH" });
-        setRefreshing(true);
+        setRefreshing(uniqId());
     }, []);
 
     const onRefreshAllFilesMetadata = useCallback(async () => {
-        setRefreshing(true);
         await fetch(`${BaseUrl}/api/files/refresh`, { method: "PATCH" });
-        setRefreshing(true);
+        setRefreshing(uniqId());
     }, []);
 
-    return { error, files, loading, onRefreshAllFilesMetadata, onRefreshFileMetadata, onRemove };
+    const onReloadFiles = useCallback(() => {
+        setRefreshing(uniqId());
+    }, []);
+
+    return { error, files, loading, onRefreshAllFilesMetadata, onRefreshFileMetadata, onReloadFiles, onRemove };
 };

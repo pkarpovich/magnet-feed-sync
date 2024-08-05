@@ -36,8 +36,8 @@ func main() {
 
 func run(cfg *config.Config) error {
 	ctx := context.Background()
-	t := tracker.NewParser()
 	dClient, err := downloadClient.NewClient(*cfg)
+	t := tracker.NewParser(dClient)
 	if err != nil {
 		return fmt.Errorf("failed to create download client: %w", err)
 	}
@@ -87,7 +87,7 @@ func run(cfg *config.Config) error {
 	}
 
 	go tgListener.SendMessagesForAdmins()
-	go http.NewClient(cfg.Http, store, downloadTasksClient).Start(ctx)
+	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx)
 
 	if err := tgListener.Do(); err != nil {
 		return fmt.Errorf("failed to start Telegram listener: %w", err)

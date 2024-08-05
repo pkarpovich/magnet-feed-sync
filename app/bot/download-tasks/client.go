@@ -67,7 +67,7 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 		return true, replyMsg, nil
 	}
 
-	err = c.dClient.CreateDownloadTask(metadata.Magnet)
+	err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
 		return false, "", err
 	}
@@ -82,6 +82,10 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	if err != nil {
 		log.Printf("[ERROR] Error parsing metadata: %s", err)
 		return
+	}
+
+	if fileMetadata.Location != "" {
+		updatedMetadata.Location = fileMetadata.Location
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
@@ -114,7 +118,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 		return
 	}
 
-	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet); err != nil {
+	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
 		log.Printf("[ERROR] Error creating download task: %s", err)
 	}
 

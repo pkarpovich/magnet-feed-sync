@@ -80,8 +80,17 @@
     font-size: 0.9em;
 }
 
-.field strong {
+.field b {
     display: inline-block;
-    width: 120px;
-    font-weight: 600;
+    font-weight: 800;
+}
+
+.settingsContainer {
+    background-color: var(--app-bg);
+    padding: 0 10px;
+}
+
+.settingsTitle {
+    text-align: center;
+    margin-bottom: 15px;
 }

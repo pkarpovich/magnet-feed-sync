@@ -9,6 +9,7 @@ import (
 	"log"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
+	downloadClient "magnet-feed-sync/app/download-client"
 	taskStore "magnet-feed-sync/app/task-store"
 	"net/http"
 	"os"
@@ -22,11 +23,18 @@ type Client struct {
 	config              config.HttpConfig
 	store               *taskStore.Repository
 	downloadTasksClient *downloadTasks.Client
+	downloadClient      downloadClient.Client
 }
 
-func NewClient(cfg config.HttpConfig, store *taskStore.Repository, downloadTasksClient *downloadTasks.Client) *Client {
+func NewClient(
+	cfg config.HttpConfig,
+	store *taskStore.Repository,
+	downloadTasksClient *downloadTasks.Client,
+	downloadClient downloadClient.Client,
+) *Client {
 	return &Client{
 		downloadTasksClient: downloadTasksClient,
+		downloadClient:      downloadClient,
 		config:              cfg,
 		store:               store,
 	}
@@ -38,6 +46,8 @@ func (c *Client) Start(ctx context.Context) {
 	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
 	mux.HandleFunc("PATCH /api/files/refresh", c.handleRefreshAllFiles)
 	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
+	mux.HandleFunc("GET /api/file-locations", c.handleGetFileLocations)
+	mux.HandleFunc("POST /api/file-locations", c.handleSetFileLocation)
 	mux.HandleFunc("GET /", c.fileHandler)
 
 	server := &http.Server{
@@ -77,6 +87,7 @@ type FileMetadataResponse struct {
 	LastSyncAt       time.Time `json:"lastSyncAt"`
 	Magnet           string    `json:"magnet"`
 	TorrentUpdatedAt time.Time `json:"torrentUpdatedAt"`
+	Location         string    `json:"location"`
 }
 
 func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +106,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 			ID:               f.ID,
 			Name:             f.Name,
 			Magnet:           f.Magnet,
+			Location:         f.Location,
 			LastSyncAt:       f.LastSyncAt,
 			OriginalUrl:      f.OriginalUrl,
 			LastComment:      f.LastComment,
@@ -140,6 +152,68 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 	c.downloadTasksClient.CheckForUpdates()
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (c *Client) handleGetFileLocations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	locations := c.downloadClient.GetLocations()
+	err := json.NewEncoder(w).Encode(locations)
+	if err != nil {
+		log.Printf("[ERROR] failed to encode locations: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type SetFileLocationRequest struct {
+	FileId   string `json:"fileId"`
+	Location string `json:"location"`
+}
+
+func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req SetFileLocationRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Printf("[ERROR] failed to decode request: %s", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	file, err := c.store.GetById(req.FileId)
+	if err != nil {
+		log.Printf("[ERROR] failed to get file by id: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if file == nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	hash, err := c.downloadClient.GetHashByMagnet(file.Magnet)
+	if err != nil {
+		log.Printf("[ERROR] failed to get hash by magnet: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = c.downloadClient.SetLocation(hash, req.Location)
+	if err != nil {
+		log.Printf("[ERROR] failed to set location: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	file.Location = req.Location
+	err = c.store.CreateOrReplace(file)
+	if err != nil {
+		log.Printf("[ERROR] failed to update file location: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (c *Client) fileHandler(w http.ResponseWriter, r *http.Request) {

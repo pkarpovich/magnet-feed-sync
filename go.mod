@@ -17,6 +17,8 @@ require (
 
 replace github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1 => github.com/OvyFlash/telegram-bot-api/v5 v5.0.0-20240427121735-f3a5b4ed79f6
 
+replace github.com/NullpointerW/go-qbittorrent-apiv2 v0.0.16 => github.com/pkarpovich/go-qbittorrent-apiv2 v0.0.0-20240804211003-4f7990ac8518
+
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect
 	github.com/andybalholm/cascadia v1.3.2 // indirect
