@@ -1,6 +1,7 @@
 import { Text } from "@telegram-apps/telegram-ui";
 import clsx from "clsx";
-import { forwardRef, HTMLAttributes, ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
+import { forwardRef } from "react";
 
 import styles from "./SettingsModalHeader.module.css";
 

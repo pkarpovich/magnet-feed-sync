@@ -21,13 +21,24 @@ export const useFiles = () => {
     const [refreshing, setRefreshing] = useState<string>();
 
     useEffect(() => {
-        fetch(`${BaseUrl}/api/files`)
-            .then((response) => response.json())
+        const controller = new AbortController();
+        const signal = controller.signal;
+
+        fetch(`${BaseUrl}/api/files`, { signal })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error("Network response was not ok");
+                }
+
+                return response.json();
+            })
             .then(setFiles)
             .catch(setError)
             .finally(() => {
                 setLoading(false);
             });
+
+        return () => controller.abort();
     }, [refreshing]);
 
     const onRemove = useCallback(async (id: string) => {

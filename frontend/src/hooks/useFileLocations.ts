@@ -13,11 +13,22 @@ export const useFileLocations = () => {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        fetch(`${BaseUrl}/api/file-locations`)
-            .then((response) => response.json())
+        const controller = new AbortController();
+        const signal = controller.signal;
+
+        fetch(`${BaseUrl}/api/file-locations`, { signal })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error("Network response was not ok");
+                }
+
+                return response.json();
+            })
             .then(setLocations)
             .catch(setError)
             .finally(() => setLoading(false));
+
+        return () => controller.abort();
     }, []);
 
     const onUpdateFileLocation = useCallback(async (fileId: string, newLocation: string) => {

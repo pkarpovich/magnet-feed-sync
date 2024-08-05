@@ -69,7 +69,7 @@ export const FileMetadataRow = ({
             <div className={styles.header}>
                 <div className={styles.headerUtil}>
                     <span className={styles.date}>
-                        <b>Updated:&nbsp;</b> {new Date(torrentUpdatedAt).toLocaleString()}
+                        <b>{new Date(torrentUpdatedAt).toLocaleString("en-US")}</b>
                     </span>
                     <div className={styles.headerIcons}>
                         <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleMagnetClick} size="s">

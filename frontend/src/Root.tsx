@@ -1,5 +1,4 @@
 import { SDKProvider, useLaunchParams } from "@telegram-apps/sdk-react";
-import { useEffect } from "react";
 
 import { App } from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -21,12 +20,6 @@ const ErrorBoundaryError = ({ error }: ErrorBoundaryErrorProps) => (
 
 export const Inner = () => {
     const debug = useLaunchParams().startParam === "debug";
-
-    useEffect(() => {
-        if (debug) {
-            import("eruda").then((lib) => lib.default.init());
-        }
-    }, [debug]);
 
     return (
         <SDKProvider acceptCustomStyles={true} debug={debug}>

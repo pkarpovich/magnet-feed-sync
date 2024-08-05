@@ -16,7 +16,7 @@ if (import.meta.env.DEV) {
         // is the page could be reloaded, and we should apply mock again, because mocking also
         // enables modifying the window object.
         shouldMock = Boolean(sessionStorage.getItem("____mocked"));
-    } catch (e) {
+    } catch (_) {
         shouldMock = true;
     }
 
