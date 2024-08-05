@@ -29,7 +29,12 @@ func (p *NnmProvider) GetMagnetLink(doc *goquery.Document) string {
 }
 
 func (p *NnmProvider) GetTitle(doc *goquery.Document) string {
-	title := doc.Find("div.postbody span[style='font-size: 20px; line-height: normal'] span[style='font-weight: bold']").Text()
+	title := doc.Find("a.maintitle").Text()
+
+	if title == "" {
+		title = doc.Find("div.postbody span[style='font-size: 20px; line-height: normal'] span[style='font-weight: bold']").Text()
+	}
+
 	return strings.TrimSpace(title)
 }
 
