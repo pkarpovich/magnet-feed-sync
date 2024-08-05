@@ -1,8 +1,9 @@
 import { Divider, Headline, IconButton, Modal, Select } from "@telegram-apps/telegram-ui";
 import type { ChangeEvent } from "react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import type { FileLocation } from "../hooks/useFileLocations.ts";
+import CloseIcon from "../icons/close.svg";
 import SettingsIcon from "../icons/settings.svg";
 import styles from "./FileMetadataRow.module.css";
 import { SettingsModalHeader } from "./SettingsModalHeader.tsx";
@@ -16,6 +17,8 @@ type Props = {
 };
 
 export const SettingsModal = ({ id, locations, onChange, title, value }: Props) => {
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
     const handleChange = useCallback(
         async (e: ChangeEvent<HTMLSelectElement>) => {
             await onChange(id, e.target.value);
@@ -23,13 +26,33 @@ export const SettingsModal = ({ id, locations, onChange, title, value }: Props) 
         [id, onChange],
     );
 
+    const handleSettingsClose = useCallback(() => {
+        setIsSettingsOpen(false);
+    }, []);
+
+    const handleSettingsOpen = useCallback(() => {
+        setIsSettingsOpen(true);
+    }, []);
+
     return (
         <Modal
             className={styles.settingsContainer}
-            header={<SettingsModalHeader>Settings</SettingsModalHeader>}
+            dismissible={false}
+            header={
+                <SettingsModalHeader
+                    after={
+                        <IconButton className={styles.headerIcon} mode="plain" onClick={handleSettingsClose} size="m">
+                            <CloseIcon />
+                        </IconButton>
+                    }
+                >
+                    Settings
+                </SettingsModalHeader>
+            }
+            open={isSettingsOpen}
             trigger={
                 <div>
-                    <IconButton className={styles.headerIcon} mode="bezeled" size="s">
+                    <IconButton className={styles.headerIcon} mode="bezeled" onClick={handleSettingsOpen} size="s">
                         <SettingsIcon />
                     </IconButton>
                 </div>
