@@ -1,7 +1,9 @@
-import { SDKProvider, useLaunchParams } from "@telegram-apps/sdk-react";
+import { init } from "@telegram-apps/sdk-react";
 
 import { App } from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+
+init();
 
 type ErrorBoundaryErrorProps = {
     error: unknown;
@@ -18,18 +20,8 @@ const ErrorBoundaryError = ({ error }: ErrorBoundaryErrorProps) => (
     </div>
 );
 
-export const Inner = () => {
-    const debug = useLaunchParams().startParam === "debug";
-
-    return (
-        <SDKProvider acceptCustomStyles={true} debug={debug}>
-            <App />
-        </SDKProvider>
-    );
-};
-
 export const Root = () => (
     <ErrorBoundary fallback={ErrorBoundaryError}>
-        <Inner />
+        <App />
     </ErrorBoundary>
 );
