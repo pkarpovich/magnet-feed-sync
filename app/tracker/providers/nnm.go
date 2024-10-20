@@ -77,7 +77,17 @@ func (p *NnmProvider) GetLastComment(doc *goquery.Document) string {
 
 	commentBody := ""
 	if len(feed.Items) > 0 {
-		commentBody = feed.Items[len(feed.Items)-1].Description
+		var lastFeedItem *gofeed.Item
+
+		for _, item := range feed.Items {
+			if lastFeedItem == nil || item.PublishedParsed.After(*lastFeedItem.PublishedParsed) {
+				lastFeedItem = item
+			}
+		}
+
+		if lastFeedItem != nil {
+			commentBody = lastFeedItem.Description
+		}
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
