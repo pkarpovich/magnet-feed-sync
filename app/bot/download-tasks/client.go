@@ -149,6 +149,10 @@ func (c *Client) CheckFileForUpdates(fileId string) {
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
+	if len(metadata.LastComment) > 100 {
+		metadata.LastComment = metadata.LastComment[:100] + "..."
+	}
+
 	jsonData, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return "", err
