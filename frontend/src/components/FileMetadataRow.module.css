@@ -56,6 +56,10 @@
     color: #007bff;
     text-decoration: none;
     word-break: break-all;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
 }
 
 .name:hover {
@@ -78,6 +82,10 @@
 
 .field {
     font-size: 0.9em;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
 }
 
 .field b {

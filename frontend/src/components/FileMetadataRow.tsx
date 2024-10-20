@@ -101,7 +101,7 @@ export const FileMetadataRow = ({
                         </IconButton>
                     </div>
                 </div>
-                <a className={styles.name} href={originalUrl} rel="noopener noreferrer" target="_blank">
+                <a className={styles.name} href={originalUrl} rel="noopener noreferrer" target="_blank" title={name}>
                     {name}
                 </a>
             </div>
@@ -109,7 +109,7 @@ export const FileMetadataRow = ({
                 <div className={styles.field}>
                     <b>Download Location:</b> {displayLocation}
                 </div>
-                <div className={styles.field}>
+                <div className={styles.field} title={lastComment}>
                     <b>Last Comment:</b> {lastComment ? lastComment : "No comments"}
                 </div>
             </div>
