@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"log"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	tbapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"log"
 	"magnet-feed-sync/app/bot"
 	downloadTask "magnet-feed-sync/app/bot/download-tasks"

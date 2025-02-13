@@ -17,7 +17,25 @@ func NewClient(filename string) (*Client, error) {
 		return nil, err
 	}
 
+	if err := setSqlitePragma(db); err != nil {
+		return nil, err
+	}
+
 	return &Client{db: db}, nil
+}
+
+func setSqlitePragma(db *sql.DB) error {
+	pragmas := map[string]string{
+		"journal_mode": "DELETE",
+		"busy_timeout": "5000",
+	}
+
+	for name, value := range pragmas {
+		if _, err := db.Exec("PRAGMA " + name + " = " + value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func createFolderIfNotExists(folder string) error {
