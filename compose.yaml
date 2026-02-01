@@ -1,9 +1,7 @@
 services:
   magnet-feed-sync:
     container_name: magnet-feed-sync
-    build:
-      context: .
-      target: final
+    image: git.pkarpovich.space/pkarpovich/magnet-feed-sync:latest
     restart: unless-stopped
     environment:
       SYNOLOGY_URL: ${SYNOLOGY_URL}

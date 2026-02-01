@@ -89,6 +89,9 @@ func (c *Client) GetLocations() []types.Location {
 		{ID: "/downloads/books", Name: "Books"},
 		{ID: "/downloads/audiobooks", Name: "Audiobooks"},
 		{ID: "/downloads/music", Name: "Music"},
+		{ID: "/downloads/comics", Name: "Comics"},
+		{ID: "/downloads/podcasts", Name: "Podcasts"},
+		{ID: "/downloads/anime", Name: "Anime"},
 	}
 }
 

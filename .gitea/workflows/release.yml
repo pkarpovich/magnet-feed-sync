@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Gitea registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^release:' .semver.yaml | sed 's/release: *//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:latest
+            ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:${{ steps.version.outputs.version }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:cache,mode=max
+
+      - name: Trigger deployment
+        run: |
+          curl -sSf -X POST -H "Content-Type: application/json" \
+            -d '{"task":"magnet-feed-sync", "secret":"${{ secrets.UPDATER_KEY }}"}' \
+            "${{ secrets.UPDATER_URL }}/update"
+
+      - name: Notify Telegram
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          format: markdown
+          message: |
+            📥 *magnet-feed-sync*
+            Deployment ${{ job.status == 'success' && 'completed successfully' || 'failed' }}:
+            —
+            ${{ job.status == 'success' && '✅' || '❌' }} ${{ steps.version.outputs.version }}
+            —
+            *Commit:* [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            *Author:* ${{ github.actor }}
+            *Message:* ${{ github.event.head_commit.message }}
