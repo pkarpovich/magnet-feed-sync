@@ -1,0 +1,6 @@
+services:
+  magnet-feed-sync:
+    build:
+      context: .
+      target: final
+    image: magnet-feed-sync:local
