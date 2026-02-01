@@ -37,10 +37,10 @@ func NewClient(ctx *ClientCtx) *Client {
 	}
 }
 
-func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
+func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, error) {
 	url := msg.Text
 
-	metadata, err := c.tracker.Parse(url)
+	metadata, err := c.tracker.Parse(url, location)
 	if err != nil {
 		return false, "", err
 	}
@@ -78,7 +78,7 @@ func (c *Client) OnMessage(msg bot.Message) (bool, string, error) {
 }
 
 func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
-	updatedMetadata, err := c.tracker.Parse(fileMetadata.OriginalUrl)
+	updatedMetadata, err := c.tracker.Parse(fileMetadata.OriginalUrl, "")
 	if err != nil {
 		log.Printf("[ERROR] Error parsing metadata: %s", err)
 		return

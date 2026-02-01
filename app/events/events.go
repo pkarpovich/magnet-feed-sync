@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"log"
 	"magnet-feed-sync/app/bot"
 	downloadTask "magnet-feed-sync/app/bot/download-tasks"
 	taskStore "magnet-feed-sync/app/task-store"
+	"slices"
+
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 const (
@@ -18,8 +20,19 @@ const (
 	RemoveTaskCallback    = "remove_task"
 )
 
+var folderCommands = map[string]string{
+	"movies":     "/downloads/movies",
+	"books":      "/downloads/books",
+	"music":      "/downloads/music",
+	"other":      "/downloads/other",
+	"comics":     "/downloads/comics",
+	"podcasts":   "/downloads/podcasts",
+	"audiobooks": "/downloads/audiobooks",
+	"anime":      "/downloads/anime",
+}
+
 type Bot interface {
-	OnMessage(msg bot.Message) (bool, string, error)
+	OnMessage(msg bot.Message, location string) (bool, string, error)
 }
 
 type TbAPI interface {
@@ -47,31 +60,25 @@ func (tl *TelegramListener) Do() error {
 
 	updates := tl.TbAPI.GetUpdatesChan(u)
 
-	for {
-		select {
-
-		case update, ok := <-updates:
-			if !ok {
-				return fmt.Errorf("telegram update chan closed")
-			}
-
-			if update.CallbackQuery != nil {
-				if err := tl.processCallbackQuery(update); err != nil {
-					log.Printf("[ERROR] %v", err)
-				}
-
-				continue
-			}
-
-			if update.Message == nil {
-				continue
-			}
-
-			if err := tl.processEvent(update); err != nil {
+	for update := range updates {
+		if update.CallbackQuery != nil {
+			if err := tl.processCallbackQuery(update); err != nil {
 				log.Printf("[ERROR] %v", err)
 			}
+
+			continue
+		}
+
+		if update.Message == nil {
+			continue
+		}
+
+		if err := tl.processEvent(update); err != nil {
+			log.Printf("[ERROR] %v", err)
 		}
 	}
+
+	return fmt.Errorf("telegram update chan closed")
 }
 
 func (tl *TelegramListener) processEvent(update tbapi.Update) error {
@@ -104,7 +111,16 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	}
 
 	msg := tl.transform(update.Message)
-	saved, replyMsg, err := tl.Bot.OnMessage(msg)
+	location := ""
+
+	if cmd := update.Message.Command(); cmd != "" {
+		if loc, ok := folderCommands[cmd]; ok {
+			location = loc
+			msg.Text = update.Message.CommandArguments()
+		}
+	}
+
+	saved, replyMsg, err := tl.Bot.OnMessage(msg, location)
 	if err != nil {
 		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
 		_, err := tl.TbAPI.Send(errMsg)
@@ -251,7 +267,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 		replyMarkup, err := buildReplyMarkup([]ReplyMarkupButton{
 			{
 				Text: "❌",
-				Data: map[string]interface{}{
+				Data: map[string]any{
 					"type":   RemoveTaskCallback,
 					"taskId": task.ID,
 				},
@@ -289,13 +305,7 @@ func (tl *TelegramListener) SendMessagesForAdmins(ctx context.Context) {
 }
 
 func (tl *TelegramListener) isSuperUser(userID int64) bool {
-	for _, su := range tl.SuperUsers {
-		if su == userID {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(tl.SuperUsers, userID)
 }
 
 func (tl *TelegramListener) reactToMessage(chatID int64, messageID int, reaction tbapi.ReactionType) error {

@@ -37,7 +37,7 @@ func NewParser(downloadClient downloadClient.Client) *Parser {
 	}
 }
 
-func (p *Parser) Parse(url string) (*FileMetadata, error) {
+func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 	body, err := getPageBody(url)
 	if err != nil {
 		return nil, err
@@ -59,8 +59,12 @@ func (p *Parser) Parse(url string) (*FileMetadata, error) {
 	updatedAt := provider.GetLastUpdatedDate(doc)
 	lastComment := provider.GetLastComment(doc)
 
+	if location == "" {
+		location = p.downloadClient.GetDefaultLocation()
+	}
+
 	return &FileMetadata{
-		Location:         p.downloadClient.GetDefaultLocation(),
+		Location:         location,
 		LastSyncAt:       time.Now(),
 		TorrentUpdatedAt: updatedAt,
 		LastComment:      lastComment,
