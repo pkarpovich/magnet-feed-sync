@@ -56,37 +56,43 @@ func (p *RutrackerProvider) GetId(originalUrl string) string {
 }
 
 func (p *RutrackerProvider) GetLastUpdatedDate(doc *goquery.Document) time.Time {
-	editedText := doc.Find("table#topic_main > tbody").FilterFunction(func(i int, s *goquery.Selection) bool {
+	firstPost := doc.Find("table#topic_main > tbody").FilterFunction(func(i int, s *goquery.Selection) bool {
 		_, exists := s.Attr("id")
-		if exists {
-			return true
-		}
+		return exists
+	}).First()
 
-		return false
-	}).First().Find("p.post-time > span.posted_since").Text()
+	editedText := firstPost.Find("p.post-time > span.posted_since").Text()
 
 	var editedDate string
 	prefix := "ред. "
 	if pos := strings.Index(editedText, prefix); pos != -1 {
 		editedDate = strings.TrimSpace(editedText[pos+len(prefix):])
-
 		if len(editedDate) > 0 && editedDate[len(editedDate)-1] == ')' {
 			editedDate = editedDate[:len(editedDate)-1]
 		}
 	}
 
-	if len(editedDate) == 0 {
-		log.Printf("[WARN] edited date not found in rutracker page")
-		return time.Now()
+	if len(editedDate) > 0 {
+		date, err := utils.ParseRussianDate(editedDate)
+		if err != nil {
+			log.Printf("[ERROR] failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
+		} else {
+			return date
+		}
 	}
 
-	date, err := utils.ParseRussianDate(editedDate)
-	if err != nil {
-		log.Printf("[ERROR] failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
-		return time.Now()
+	postDateText := strings.TrimSpace(firstPost.Find("p.post-time a.p-link").Text())
+	if len(postDateText) > 0 {
+		date, err := utils.ParseRussianDate(postDateText)
+		if err != nil {
+			log.Printf("[ERROR] failed to parse rutracker torrent post date: %s, %v", postDateText, err)
+		} else {
+			return date
+		}
 	}
 
-	return date
+	log.Printf("[WARN] no date found in rutracker page")
+	return time.Time{}
 }
 
 func (p *RutrackerProvider) GetLastComment(doc *goquery.Document) string {
