@@ -1,0 +1,26 @@
+[
+  {
+    "label": "run app",
+    "command": "go run ./app",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false
+  },
+  {
+    "label": "test all",
+    "command": "go test -v ./...",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "test current package",
+    "command": "go test -v ./$ZED_DIRNAME/...",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": true
+  },
+  {
+    "label": "test current file",
+    "command": "go test -v -run $ZED_STEM ./$ZED_DIRNAME",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": true
+  }
+]
