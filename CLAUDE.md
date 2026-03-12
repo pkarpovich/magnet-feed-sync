@@ -48,7 +48,7 @@ docker compose up --build
   - `download-station/`: Synology DownloadStation API
   - `qbittorrent/`: qBittorrent API client
 - **events/**: Telegram event handlers for bot interactions
-- **http/**: HTTP server serving web UI and health endpoints
+- **http/**: HTTP server serving web UI, REST API (file management endpoints), and health checks
 - **schedular/**: Cron job scheduling via gocron
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction
@@ -89,8 +89,7 @@ Environment variables (see compose.yaml):
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
-- `JACKETT_URL`: Jackett instance base URL (optional)
-- `JACKETT_API_KEY`: Jackett API key (optional)
+- `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 
 ## Commit Convention
 

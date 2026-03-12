@@ -48,6 +48,9 @@ func (p *JackettProvider) parseXML(data []byte, originalURL string) (*Result, er
 	magnet := p.extractMagnet(item)
 	trackerURL := p.extractTrackerURL(item)
 	id := p.extractID(trackerURL, originalURL)
+	if id == "" {
+		id = extractBtihHash(magnet)
+	}
 
 	var updatedAt time.Time
 	if item.PubDate != "" {
@@ -74,7 +77,7 @@ func (p *JackettProvider) extractMagnet(item torznabItem) string {
 	if item.Enclosure.URL != "" && strings.HasPrefix(item.Enclosure.URL, "magnet:") {
 		return item.Enclosure.URL
 	}
-	return item.Link
+	return ""
 }
 
 func (p *JackettProvider) extractTrackerURL(item torznabItem) string {
@@ -103,6 +106,19 @@ func (p *JackettProvider) extractID(trackerURL, originalURL string) string {
 	}
 
 	return ""
+}
+
+func extractBtihHash(magnet string) string {
+	lower := strings.ToLower(magnet)
+	idx := strings.Index(lower, "urn:btih:")
+	if idx == -1 {
+		return ""
+	}
+	hash := magnet[idx+len("urn:btih:"):]
+	if ampIdx := strings.Index(hash, "&"); ampIdx != -1 {
+		hash = hash[:ampIdx]
+	}
+	return strings.ToLower(hash)
 }
 
 type torznabRSS struct {

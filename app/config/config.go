@@ -31,8 +31,7 @@ type HttpConfig struct {
 }
 
 type JackettConfig struct {
-	URL    string `env:"JACKETT_URL"`
-	APIKey string `env:"JACKETT_API_KEY"`
+	URL string `env:"JACKETT_URL"`
 }
 
 type Config struct {

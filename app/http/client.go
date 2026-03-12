@@ -43,6 +43,7 @@ type Client struct {
 	store          FileStore
 	taskCreator    TaskCreator
 	downloadClient DownloadClient
+	dryMode        bool
 }
 
 func NewClient(
@@ -50,12 +51,14 @@ func NewClient(
 	store FileStore,
 	taskCreator TaskCreator,
 	downloadClient DownloadClient,
+	dryMode bool,
 ) *Client {
 	return &Client{
 		taskCreator:    taskCreator,
 		downloadClient: downloadClient,
 		config:         cfg,
 		store:          store,
+		dryMode:        dryMode,
 	}
 }
 
@@ -89,7 +92,7 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 
 	<-ctx.Done()
 
-	shutdownCtx, shutdownRelease := context.WithTimeout(ctx, 10*time.Second)
+	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownRelease()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -123,16 +126,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	var filesResponse []FileMetadataResponse
 	for _, f := range files {
-		filesResponse = append(filesResponse, FileMetadataResponse{
-			ID:               f.ID,
-			Name:             f.Name,
-			Magnet:           f.Magnet,
-			Location:         f.Location,
-			LastSyncAt:       f.LastSyncAt,
-			OriginalUrl:      f.OriginalUrl,
-			LastComment:      f.LastComment,
-			TorrentUpdatedAt: f.TorrentUpdatedAt,
-		})
+		filesResponse = append(filesResponse, toResponse(f))
 	}
 
 	err = json.NewEncoder(w).Encode(filesResponse)
@@ -140,6 +134,19 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ERROR] failed to encode files: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+}
+
+func toResponse(f *tracker.FileMetadata) FileMetadataResponse {
+	return FileMetadataResponse{
+		ID:               f.ID,
+		Name:             f.Name,
+		Magnet:           f.Magnet,
+		Location:         f.Location,
+		LastSyncAt:       f.LastSyncAt,
+		OriginalUrl:      f.OriginalUrl,
+		LastComment:      f.LastComment,
+		TorrentUpdatedAt: f.TorrentUpdatedAt,
 	}
 }
 
@@ -168,17 +175,21 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
 		if err != nil {
 			log.Printf("[ERROR] failed to create file from URL: %s", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
 			return
 		}
 		metadata = m
 	} else {
+		hash := extractHashFromMagnet(req.Magnet)
+		if hash == "" {
+			http.Error(w, "could not extract hash from magnet link", http.StatusBadRequest)
+			return
+		}
+
 		location := req.Location
 		if location == "" {
 			location = c.downloadClient.GetDefaultLocation()
 		}
-
-		hash := extractHashFromMagnet(req.Magnet)
 
 		metadata = &tracker.FileMetadata{
 			ID:         hash,
@@ -190,29 +201,27 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 
 		if err := c.store.CreateOrReplace(metadata); err != nil {
 			log.Printf("[ERROR] failed to save file: %s", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to save file", http.StatusInternalServerError)
 			return
 		}
 
-		if err := c.downloadClient.CreateDownloadTask(req.Magnet, location); err != nil {
-			log.Printf("[ERROR] failed to create download task: %s", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if !c.dryMode {
+			if err := c.downloadClient.CreateDownloadTask(req.Magnet, location); err != nil {
+				log.Printf("[ERROR] failed to create download task: %s", err)
+				if removeErr := c.store.Remove(hash); removeErr != nil {
+					log.Printf("[ERROR] failed to remove file after download error: %s", removeErr)
+				}
+				http.Error(w, "failed to create download task", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(FileMetadataResponse{
-		ID:               metadata.ID,
-		OriginalUrl:      metadata.OriginalUrl,
-		Name:             metadata.Name,
-		LastComment:      metadata.LastComment,
-		LastSyncAt:       metadata.LastSyncAt,
-		Magnet:           metadata.Magnet,
-		TorrentUpdatedAt: metadata.TorrentUpdatedAt,
-		Location:         metadata.Location,
-	})
+	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
+		log.Printf("[ERROR] failed to encode response: %s", err)
+	}
 }
 
 func extractHashFromMagnet(magnet string) string {

@@ -97,7 +97,11 @@ func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
 	}
 
 	fp := gofeed.NewParser()
-	feed, _ := fp.ParseURL(rssLink)
+	feed, err := fp.ParseURL(rssLink)
+	if err != nil || feed == nil {
+		log.Printf("[ERROR] Failed to parse RSS feed: %v", err)
+		return ""
+	}
 
 	commentBody := ""
 	if len(feed.Items) > 0 {
@@ -114,13 +118,13 @@ func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
 		}
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
-	if err != nil {
-		log.Printf("[ERROR] Failed to parse comment body: %v", err)
+	commentDoc, parseErr := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
+	if parseErr != nil {
+		log.Printf("[ERROR] Failed to parse comment body: %v", parseErr)
 		return ""
 	}
 
-	return strings.TrimSpace(doc.Find("span.postbody").Text())
+	return strings.TrimSpace(commentDoc.Find("span.postbody").Text())
 }
 
 func (p *NnmProvider) getRssLink(doc *goquery.Document) string {

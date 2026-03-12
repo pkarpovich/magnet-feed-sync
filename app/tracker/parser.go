@@ -29,13 +29,6 @@ type Parser struct {
 }
 
 func NewParser(downloadClient downloadClient.Client, providerList ...providers.Provider) *Parser {
-	if len(providerList) == 0 {
-		providerList = []providers.Provider{
-			&providers.RutrackerProvider{},
-			&providers.NnmProvider{},
-		}
-	}
-
 	return &Parser{
 		downloadClient: downloadClient,
 		providers:      providerList,

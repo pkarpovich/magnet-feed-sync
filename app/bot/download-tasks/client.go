@@ -58,11 +58,7 @@ func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, err
 		return nil, err
 	}
 
-	msgJSON, errJSON := json.Marshal(metadata)
-	if errJSON != nil {
-		return nil, fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
-	}
-	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
+	log.Printf("[DEBUG] Metadata: %+v", metadata)
 
 	err = c.store.CreateOrReplace(metadata)
 	if err != nil {
