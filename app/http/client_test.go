@@ -281,7 +281,7 @@ func TestExtractHashFromMagnet(t *testing.T) {
 		{
 			name:     "uppercase URN",
 			magnet:   "magnet:?xt=URN:BTIH:ABC123&dn=test",
-			expected: "ABC123",
+			expected: "abc123",
 		},
 	}
 

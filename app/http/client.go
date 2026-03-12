@@ -234,7 +234,7 @@ func extractHashFromMagnet(magnet string) string {
 	if ampIdx := strings.Index(hash, "&"); ampIdx != -1 {
 		hash = hash[:ampIdx]
 	}
-	return hash
+	return strings.ToLower(hash)
 }
 
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {

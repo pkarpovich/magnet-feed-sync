@@ -108,7 +108,10 @@ func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
 		var lastFeedItem *gofeed.Item
 
 		for _, item := range feed.Items {
-			if lastFeedItem == nil || item.PublishedParsed.After(*lastFeedItem.PublishedParsed) {
+			if item.PublishedParsed == nil {
+				continue
+			}
+			if lastFeedItem == nil || lastFeedItem.PublishedParsed == nil || item.PublishedParsed.After(*lastFeedItem.PublishedParsed) {
 				lastFeedItem = item
 			}
 		}

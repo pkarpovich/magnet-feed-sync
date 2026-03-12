@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	downloadClient "magnet-feed-sync/app/download-client"
@@ -50,7 +52,7 @@ func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 		location = p.downloadClient.GetDefaultLocation()
 	}
 
-	originalURL := url
+	originalURL := stripAPIKey(url)
 	if result.TrackerURL != "" {
 		originalURL = result.TrackerURL
 	}
@@ -65,6 +67,26 @@ func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 		TorrentUpdatedAt: result.UpdatedAt,
 		Location:         location,
 	}, nil
+}
+
+func stripAPIKey(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	changed := false
+	for key := range q {
+		if strings.Contains(strings.ToLower(key), "apikey") || strings.Contains(strings.ToLower(key), "api_key") {
+			q.Del(key)
+			changed = true
+		}
+	}
+	if !changed {
+		return rawURL
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (p *Parser) getProvider(url string) providers.Provider {

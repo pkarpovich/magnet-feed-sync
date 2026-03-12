@@ -46,6 +46,10 @@ func (p *JackettProvider) parseXML(data []byte, originalURL string) (*Result, er
 	item := rss.Channel.Items[0]
 
 	magnet := p.extractMagnet(item)
+	if magnet == "" {
+		return nil, fmt.Errorf("no magnet link found in jackett response")
+	}
+
 	trackerURL := p.extractTrackerURL(item)
 	id := p.extractID(trackerURL, originalURL)
 	if id == "" {

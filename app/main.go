@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,7 +58,8 @@ func run(cfg *config.Config) error {
 		&providers.NnmProvider{},
 	}
 	if cfg.Jackett.URL != "" {
-		log.Printf("[INFO] Jackett provider enabled: %s", cfg.Jackett.URL)
+		redacted := redactURL(cfg.Jackett.URL)
+		log.Printf("[INFO] Jackett provider enabled: %s", redacted)
 		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
 	}
 	t := tracker.NewParser(dClient, providerList...)
@@ -129,4 +132,19 @@ func run(cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid url>"
+	}
+	q := u.Query()
+	for key := range q {
+		if strings.Contains(strings.ToLower(key), "apikey") || strings.Contains(strings.ToLower(key), "api_key") {
+			q.Set(key, "***")
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
