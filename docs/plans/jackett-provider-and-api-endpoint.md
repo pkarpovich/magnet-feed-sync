@@ -103,8 +103,8 @@
 - [x] run linter
 
 ### Task 8: [Final] Update compose and documentation
-- [ ] add `JACKETT_URL` and `JACKETT_API_KEY` env vars to docker-compose.yaml
-- [ ] update CLAUDE.md if new patterns discovered
+- [x] add `JACKETT_URL` and `JACKETT_API_KEY` env vars to docker-compose.yaml
+- [x] update CLAUDE.md if new patterns discovered
 
 ## Technical Details
 

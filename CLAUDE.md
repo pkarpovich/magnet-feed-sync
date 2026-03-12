@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub). It creates download tasks on Synology NAS DownloadStation or qBittorrent.
+Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub, Jackett/Torznab). It creates download tasks on Synology NAS DownloadStation or qBittorrent.
 
 ## Build and Development Commands
 
@@ -52,7 +52,7 @@ docker compose up --build
 - **schedular/**: Cron job scheduling via gocron
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction
-  - `providers/`: RuTracker and NNMClub implementations
+  - `providers/`: RuTracker, NNMClub, and Jackett implementations
 
 ### Frontend (`/frontend`)
 - React 18 + TypeScript 5 + Vite
@@ -89,6 +89,8 @@ Environment variables (see compose.yaml):
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
+- `JACKETT_URL`: Jackett instance base URL (optional)
+- `JACKETT_API_KEY`: Jackett API key (optional)
 
 ## Commit Convention
 
