@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
@@ -14,10 +19,7 @@ import (
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"magnet-feed-sync/app/tracker/providers"
 )
 
 func main() {
@@ -45,10 +47,19 @@ func run(cfg *config.Config) error {
 	done := make(chan struct{})
 
 	dClient, err := downloadClient.NewClient(*cfg)
-	t := tracker.NewParser(dClient)
 	if err != nil {
 		return fmt.Errorf("failed to create download client: %w", err)
 	}
+
+	providerList := []providers.Provider{
+		&providers.RutrackerProvider{},
+		&providers.NnmProvider{},
+	}
+	if cfg.Jackett.URL != "" {
+		log.Printf("[INFO] Jackett provider enabled: %s", cfg.Jackett.URL)
+		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
+	}
+	t := tracker.NewParser(dClient, providerList...)
 
 	db, err := database.NewClient("tasks.db")
 	if err != nil {

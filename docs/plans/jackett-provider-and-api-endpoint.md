@@ -83,11 +83,11 @@
 - [x] run tests — must pass before next task
 
 ### Task 5: Wire Jackett config and provider registration
-- [ ] pass Jackett config to parser/provider registration in `app/main.go`
-- [ ] register Jackett provider in the providers list (only if JACKETT_URL is configured)
-- [ ] pass download-tasks client to HTTP server for POST endpoint (or extract shared logic)
-- [ ] write integration-style test: Jackett URL → parsed → TrackerURL saved → update check uses HTML provider
-- [ ] run tests — must pass before next task
+- [x] pass Jackett config to parser/provider registration in `app/main.go`
+- [x] register Jackett provider in the providers list (only if JACKETT_URL is configured)
+- [x] pass download-tasks client to HTTP server for POST endpoint (or extract shared logic)
+- [x] write integration-style test: Jackett URL → parsed → TrackerURL saved → update check uses HTML provider
+- [x] run tests — must pass before next task
 
 ### Task 6: Bump version
 - [ ] bump minor version in `.semver.yaml` (new feature)
