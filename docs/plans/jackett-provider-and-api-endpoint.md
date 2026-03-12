@@ -71,16 +71,16 @@
 - [x] run tests — must pass before next task
 
 ### Task 4: Add POST /api/files endpoint
-- [ ] add `POST /api/files` handler in `app/http/client.go`
-- [ ] request body: `{ "url": "string", "location": "string" (optional), "magnet": "string" (optional) }`
-- [ ] if `url` provided: parse through tracker provider → save to DB → send to download client
-- [ ] if `magnet` provided (without url): save directly with name from request, no monitoring (no original_url for updates)
-- [ ] use same `processFileMetadata()` or equivalent logic from download-tasks
-- [ ] return created file as JSON response (same format as GET /api/files items)
-- [ ] return 400 for invalid input, 500 for processing errors
-- [ ] write tests for POST handler: valid URL, valid magnet, missing both, invalid URL
-- [ ] write tests for location fallback to default
-- [ ] run tests — must pass before next task
+- [x] add `POST /api/files` handler in `app/http/client.go`
+- [x] request body: `{ "url": "string", "location": "string" (optional), "magnet": "string" (optional) }`
+- [x] if `url` provided: parse through tracker provider → save to DB → send to download client
+- [x] if `magnet` provided (without url): save directly with name from request, no monitoring (no original_url for updates)
+- [x] use same `processFileMetadata()` or equivalent logic from download-tasks
+- [x] return created file as JSON response (same format as GET /api/files items)
+- [x] return 400 for invalid input, 500 for processing errors
+- [x] write tests for POST handler: valid URL, valid magnet, missing both, invalid URL
+- [x] write tests for location fallback to default
+- [x] run tests — must pass before next task
 
 ### Task 5: Wire Jackett config and provider registration
 - [ ] pass Jackett config to parser/provider registration in `app/main.go`

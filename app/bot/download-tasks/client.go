@@ -38,18 +38,10 @@ func NewClient(ctx *ClientCtx) *Client {
 }
 
 func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, error) {
-	url := msg.Text
-
-	metadata, err := c.tracker.Parse(url, location)
+	metadata, err := c.CreateFromURL(msg.Text, location)
 	if err != nil {
 		return false, "", err
 	}
-
-	msgJSON, errJSON := json.Marshal(metadata)
-	if errJSON != nil {
-		return false, "", fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
-	}
-	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
 	formatedMsg, err := MetadataToMsg(metadata)
 	if err != nil {
@@ -57,24 +49,38 @@ func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, erro
 	}
 
 	replyMsg := fmt.Sprintf("✅ Download task created:\n\n%s", formatedMsg)
+	return true, replyMsg, nil
+}
+
+func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
+	metadata, err := c.tracker.Parse(url, location)
+	if err != nil {
+		return nil, err
+	}
+
+	msgJSON, errJSON := json.Marshal(metadata)
+	if errJSON != nil {
+		return nil, fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
+	}
+	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
 	err = c.store.CreateOrReplace(metadata)
 	if err != nil {
-		return false, "", err
+		return nil, err
 	}
 
 	if c.dryMode {
-		return true, replyMsg, nil
+		return metadata, nil
 	}
 
 	err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
-		return false, "", err
+		return nil, err
 	}
 
 	log.Printf("[INFO] Download task created: %s", metadata.Name)
 
-	return true, replyMsg, nil
+	return metadata, nil
 }
 
 func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
