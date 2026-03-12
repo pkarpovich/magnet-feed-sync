@@ -80,6 +80,10 @@ func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, err
 }
 
 func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
+	if fileMetadata.OriginalUrl == "" {
+		return
+	}
+
 	updatedMetadata, err := c.tracker.Parse(fileMetadata.OriginalUrl, "")
 	if err != nil {
 		log.Printf("[ERROR] Error parsing metadata: %s", err)
