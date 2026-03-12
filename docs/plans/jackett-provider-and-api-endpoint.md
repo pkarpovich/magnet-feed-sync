@@ -93,14 +93,14 @@
 - [x] bump minor version in `.semver.yaml` (new feature)
 
 ### Task 7: Verify acceptance criteria
-- [ ] verify Jackett URL is recognized and creates a task with tracker's original_url
-- [ ] verify RuTracker/NNM URLs still work as before (backward compatibility)
-- [ ] verify `POST /api/files` with URL creates a task and returns result
-- [ ] verify `POST /api/files` with magnet creates a task without monitoring
-- [ ] verify hourly update check works for all provider types
-- [ ] verify existing tasks (RuTracker/NNM) are not broken
-- [ ] run full test suite
-- [ ] run linter
+- [x] verify Jackett URL is recognized and creates a task with tracker's original_url
+- [x] verify RuTracker/NNM URLs still work as before (backward compatibility)
+- [x] verify `POST /api/files` with URL creates a task and returns result
+- [x] verify `POST /api/files` with magnet creates a task without monitoring
+- [x] verify hourly update check works for all provider types
+- [x] verify existing tasks (RuTracker/NNM) are not broken
+- [x] run full test suite
+- [x] run linter
 
 ### Task 8: [Final] Update compose and documentation
 - [ ] add `JACKETT_URL` and `JACKETT_API_KEY` env vars to docker-compose.yaml
