@@ -32,10 +32,15 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 		return nil, fmt.Errorf("failed to parse nnm HTML: %w", err)
 	}
 
+	magnet := p.getMagnetLink(doc)
+	if magnet == "" {
+		return nil, fmt.Errorf("no magnet link found in nnm page")
+	}
+
 	return &Result{
 		ID:        p.getID(pageURL),
 		Title:     p.getTitle(doc),
-		Magnet:    p.getMagnetLink(doc),
+		Magnet:    magnet,
 		UpdatedAt: p.getLastUpdatedDate(doc),
 		Comment:   p.getLastComment(doc),
 	}, nil

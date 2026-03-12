@@ -52,9 +52,11 @@ func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 		location = p.downloadClient.GetDefaultLocation()
 	}
 
-	originalURL := stripAPIKey(url)
+	originalURL := url
 	if result.TrackerURL != "" {
 		originalURL = result.TrackerURL
+	} else if stripped := stripAPIKey(url); stripped != url {
+		originalURL = ""
 	}
 
 	return &FileMetadata{

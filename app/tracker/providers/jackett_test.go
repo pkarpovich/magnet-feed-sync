@@ -31,6 +31,12 @@ func TestJackettProvider_CanHandle(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "matching with full api path in base url",
+			baseURL: "http://nas:9117/api/v2.0/indexers/all/results/torznab?apikey=KEY",
+			url:     "http://nas:9117/api/v2.0/indexers/rutracker/results/torznab?apikey=KEY&t=details&id=6810475",
+			want:    true,
+		},
+		{
 			name:    "non-jackett url",
 			baseURL: "http://nas:9117",
 			url:     "https://rutracker.org/forum/viewtopic.php?t=6810475",

@@ -130,3 +130,7 @@ Temporary Items
 
 .env
 .db
+/server
+
+# ralphex progress logs
+.ralphex/progress/

@@ -14,7 +14,11 @@ type JackettProvider struct {
 }
 
 func NewJackettProvider(baseURL string) *JackettProvider {
-	return &JackettProvider{baseURL: strings.TrimRight(baseURL, "/")}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return &JackettProvider{baseURL: strings.TrimRight(baseURL, "/")}
+	}
+	return &JackettProvider{baseURL: u.Scheme + "://" + u.Host}
 }
 
 func (p *JackettProvider) CanHandle(u string) bool {

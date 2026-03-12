@@ -104,7 +104,7 @@ func TestIntegration_JackettWithoutTrackerURLFallsBackToJackettURL(t *testing.T)
 	metadata, err := parser.Parse(jackettURL, "")
 	require.NoError(t, err)
 
-	assert.Equal(t, "http://jackett:9117/api/v2.0/indexers/unknown/results/torznab?id=999&t=details", metadata.OriginalUrl)
+	assert.Empty(t, metadata.OriginalUrl)
 }
 
 func TestIntegration_RuTrackerURLStillWorksDirectly(t *testing.T) {
