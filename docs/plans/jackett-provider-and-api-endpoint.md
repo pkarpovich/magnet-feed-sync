@@ -90,7 +90,7 @@
 - [x] run tests — must pass before next task
 
 ### Task 6: Bump version
-- [ ] bump minor version in `.semver.yaml` (new feature)
+- [x] bump minor version in `.semver.yaml` (new feature)
 
 ### Task 7: Verify acceptance criteria
 - [ ] verify Jackett URL is recognized and creates a task with tracker's original_url
