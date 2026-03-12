@@ -37,16 +37,16 @@
 ## Implementation Steps
 
 ### Task 1: Refactor Provider interface
-- [ ] define new `Provider` interface in `app/tracker/providers/base.go`: `Parse(ctx, url) (*Result, error)`, `CanHandle(url) bool`
-- [ ] define `Result` struct: `ID string`, `Title string`, `Magnet string`, `UpdatedAt time.Time`, `Comment string`, `TrackerURL string` (for Jackett → original tracker URL)
-- [ ] refactor `RuTracker` to implement new interface — move HTML fetch + goquery parsing inside `Parse()` method
-- [ ] refactor `NNMClub` to implement new interface — same approach
-- [ ] update `app/tracker/parser.go` to use new interface: iterate providers via `CanHandle(url)`, call `Parse(ctx, url)`
-- [ ] remove old `getProviderByUrl()` and goquery fetch logic from parser
-- [ ] update existing tests in `rutracker_test.go` to match new interface (use httptest for HTML fixture serving)
-- [ ] update existing tests in `nnm_test.go` if present
-- [ ] update `parser_test.go` for new flow
-- [ ] run tests — must pass before next task
+- [x] define new `Provider` interface in `app/tracker/providers/base.go`: `Parse(ctx, url) (*Result, error)`, `CanHandle(url) bool`
+- [x] define `Result` struct: `ID string`, `Title string`, `Magnet string`, `UpdatedAt time.Time`, `Comment string`, `TrackerURL string` (for Jackett → original tracker URL)
+- [x] refactor `RuTracker` to implement new interface — move HTML fetch + goquery parsing inside `Parse()` method
+- [x] refactor `NNMClub` to implement new interface — same approach
+- [x] update `app/tracker/parser.go` to use new interface: iterate providers via `CanHandle(url)`, call `Parse(ctx, url)`
+- [x] remove old `getProviderByUrl()` and goquery fetch logic from parser
+- [x] update existing tests in `rutracker_test.go` to match new interface (use httptest for HTML fixture serving)
+- [x] update existing tests in `nnm_test.go` if present
+- [x] update `parser_test.go` for new flow
+- [x] run tests — must pass before next task
 
 ### Task 2: Add Jackett provider
 - [ ] add `JACKETT_URL` and `JACKETT_API_KEY` to config struct in `app/config/config.go`

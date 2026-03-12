@@ -1,31 +1,54 @@
 package providers
 
 import (
-	"github.com/PuerkitoBio/goquery"
+	"context"
+	"fmt"
 	"log"
-	"magnet-feed-sync/app/utils"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"magnet-feed-sync/app/utils"
 )
 
-type RutrackerProvider struct {
-}
+type RutrackerProvider struct{}
 
 const RutrackerUrl = "https://rutracker.org/forum"
 
-func (p *RutrackerProvider) GetMagnetLink(doc *goquery.Document) (magnetLink string) {
-	magnetLink, exists := doc.Find("a.magnet-link").Attr("href")
-	if exists {
-		return magnetLink
+func (p *RutrackerProvider) CanHandle(u string) bool {
+	return strings.HasPrefix(u, RutrackerUrl)
+}
+
+func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result, error) {
+	body, err := fetchPage(ctx, pageURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch rutracker page: %w", err)
 	}
 
-	log.Printf("[WARN] magnet link not found in rutracker page")
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse rutracker HTML: %w", err)
+	}
 
+	return &Result{
+		ID:        p.getID(pageURL),
+		Title:     p.getTitle(doc),
+		Magnet:    p.getMagnetLink(doc),
+		UpdatedAt: p.getLastUpdatedDate(doc),
+		Comment:   p.getLastComment(doc),
+	}, nil
+}
+
+func (p *RutrackerProvider) getMagnetLink(doc *goquery.Document) string {
+	magnetLink, exists := doc.Find("a.magnet-link").Attr("href")
+	if !exists {
+		log.Printf("[WARN] magnet link not found in rutracker page")
+	}
 	return magnetLink
 }
 
-func (p *RutrackerProvider) GetTitle(doc *goquery.Document) string {
+func (p *RutrackerProvider) getTitle(doc *goquery.Document) string {
 	attempt1 := doc.Find("a#topic-title").Text()
 	if len(attempt1) > 0 {
 		return strings.TrimSpace(attempt1)
@@ -45,17 +68,16 @@ func (p *RutrackerProvider) GetTitle(doc *goquery.Document) string {
 	return ""
 }
 
-func (p *RutrackerProvider) GetId(originalUrl string) string {
+func (p *RutrackerProvider) getID(originalUrl string) string {
 	u, err := url.Parse(originalUrl)
 	if err != nil {
 		log.Printf("[ERROR] Failed to parse rutracker url: %s, %v", originalUrl, err)
 		return ""
 	}
-
 	return u.Query().Get("t")
 }
 
-func (p *RutrackerProvider) GetLastUpdatedDate(doc *goquery.Document) time.Time {
+func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time {
 	firstPost := doc.Find("table#topic_main > tbody").FilterFunction(func(i int, s *goquery.Selection) bool {
 		_, exists := s.Attr("id")
 		return exists
@@ -95,7 +117,7 @@ func (p *RutrackerProvider) GetLastUpdatedDate(doc *goquery.Document) time.Time 
 	return time.Time{}
 }
 
-func (p *RutrackerProvider) GetLastComment(doc *goquery.Document) string {
+func (p *RutrackerProvider) getLastComment(doc *goquery.Document) string {
 	log.Printf("[WARN] comments not supported in rutracker page")
 	return ""
 }
