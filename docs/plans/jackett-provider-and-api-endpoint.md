@@ -49,18 +49,18 @@
 - [x] run tests — must pass before next task
 
 ### Task 2: Add Jackett provider
-- [ ] add `JACKETT_URL` and `JACKETT_API_KEY` to config struct in `app/config/config.go`
-- [ ] create `app/tracker/providers/jackett.go` implementing new `Provider` interface
-- [ ] `CanHandle(url)` — match by Jackett base URL prefix
-- [ ] `Parse(ctx, url)` — HTTP GET to Jackett Torznab API, parse XML response
-- [ ] extract from Torznab XML: title, magnet (from `<link>` or `<enclosure>`), size, seeders, tracker name
-- [ ] extract `TrackerURL` from `<comments>` or `<guid>` field (URL исходного трекера для мониторинга)
-- [ ] return `Result` with `TrackerURL` populated — parser will save this as `original_url` for future update checks
-- [ ] add testdata XML fixtures with sample Jackett Torznab responses
-- [ ] write tests for XML parsing: valid response, empty results, missing fields
-- [ ] write tests for CanHandle: Jackett URL match, non-Jackett URL reject
-- [ ] write tests for TrackerURL extraction from different indexer formats
-- [ ] run tests — must pass before next task
+- [x] add `JACKETT_URL` and `JACKETT_API_KEY` to config struct in `app/config/config.go`
+- [x] create `app/tracker/providers/jackett.go` implementing new `Provider` interface
+- [x] `CanHandle(url)` — match by Jackett base URL prefix
+- [x] `Parse(ctx, url)` — HTTP GET to Jackett Torznab API, parse XML response
+- [x] extract from Torznab XML: title, magnet (from `<link>` or `<enclosure>`), size, seeders, tracker name
+- [x] extract `TrackerURL` from `<comments>` or `<guid>` field (URL исходного трекера для мониторинга)
+- [x] return `Result` with `TrackerURL` populated — parser will save this as `original_url` for future update checks
+- [x] add testdata XML fixtures with sample Jackett Torznab responses
+- [x] write tests for XML parsing: valid response, empty results, missing fields
+- [x] write tests for CanHandle: Jackett URL match, non-Jackett URL reject
+- [x] write tests for TrackerURL extraction from different indexer formats
+- [x] run tests — must pass before next task
 
 ### Task 3: Update parser to handle TrackerURL swap
 - [ ] in `parser.go`, after Jackett provider returns `Result` with `TrackerURL`: save `TrackerURL` as `original_url` in database (not the Jackett URL)

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Some Movie 2024 1080p BluRay</title>
+      <guid>jackett-internal-12345</guid>
+      <link>magnet:?xt=urn:btih:xyz789&amp;dn=Some+Movie+2024</link>
+      <size>4294967296</size>
+      <pubDate>Sun, 09 Mar 2026 10:30:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Documentary 2025 4K UHD</title>
+      <guid>https://nnmclub.to/forum/viewtopic.php?t=999888</guid>
+      <comments>https://nnmclub.to/forum/viewtopic.php?t=999888</comments>
+      <link>https://some-torrent-file.torrent</link>
+      <size>10737418240</size>
+      <pubDate>Sat, 08 Mar 2026 08:00:00 +0000</pubDate>
+      <enclosure url="magnet:?xt=urn:btih:enc456&amp;dn=Documentary+2025" length="10737418240" type="application/x-bittorrent"/>
+    </item>
+  </channel>
+</rss>

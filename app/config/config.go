@@ -30,11 +30,17 @@ type HttpConfig struct {
 	BaseStaticPath string `env:"BASE_STATIC_PATH" env-default:"frontend/dist"`
 }
 
+type JackettConfig struct {
+	URL    string `env:"JACKETT_URL"`
+	APIKey string `env:"JACKETT_API_KEY"`
+}
+
 type Config struct {
 	Synology       SynologyConfig
 	QBittorrent    QBittorrentConfig
 	Telegram       TelegramConfig
 	Http           HttpConfig
+	Jackett        JackettConfig
 	DownloadClient string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
 	DryMode        bool   `env:"DRY_MODE" env-default:"false"`
 	Cron           string `env:"CRON" env-default:"0 * * * *"`
