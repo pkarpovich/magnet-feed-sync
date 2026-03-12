@@ -63,12 +63,12 @@
 - [x] run tests — must pass before next task
 
 ### Task 3: Update parser to handle TrackerURL swap
-- [ ] in `parser.go`, after Jackett provider returns `Result` with `TrackerURL`: save `TrackerURL` as `original_url` in database (not the Jackett URL)
-- [ ] this means future update checks via `CheckForUpdates()` will use the tracker URL → routed to RuTracker/NNM HTML provider
-- [ ] if `TrackerURL` is empty (indexer didn't provide it) — save Jackett URL as fallback, skip update monitoring for this file
-- [ ] write tests for TrackerURL swap logic
-- [ ] write tests for empty TrackerURL fallback
-- [ ] run tests — must pass before next task
+- [x] in `parser.go`, after Jackett provider returns `Result` with `TrackerURL`: save `TrackerURL` as `original_url` in database (not the Jackett URL)
+- [x] this means future update checks via `CheckForUpdates()` will use the tracker URL → routed to RuTracker/NNM HTML provider
+- [x] if `TrackerURL` is empty (indexer didn't provide it) — save Jackett URL as fallback, skip update monitoring for this file
+- [x] write tests for TrackerURL swap logic
+- [x] write tests for empty TrackerURL fallback
+- [x] run tests — must pass before next task
 
 ### Task 4: Add POST /api/files endpoint
 - [ ] add `POST /api/files` handler in `app/http/client.go`

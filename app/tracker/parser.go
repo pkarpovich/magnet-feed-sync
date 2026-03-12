@@ -57,9 +57,14 @@ func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 		location = p.downloadClient.GetDefaultLocation()
 	}
 
+	originalURL := url
+	if result.TrackerURL != "" {
+		originalURL = result.TrackerURL
+	}
+
 	return &FileMetadata{
 		ID:               result.ID,
-		OriginalUrl:      url,
+		OriginalUrl:      originalURL,
 		Magnet:           result.Magnet,
 		Name:             result.Title,
 		LastComment:      result.Comment,

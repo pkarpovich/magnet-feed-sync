@@ -157,6 +157,73 @@ func TestParser_LocationParameter(t *testing.T) {
 	}
 }
 
+func TestParser_TrackerURLSwap(t *testing.T) {
+	t.Run("TrackerURL replaces input URL as OriginalUrl", func(t *testing.T) {
+		jackettURL := "http://jackett:9117/api/v2.0/indexers/rutracker/results/torznab?t=details&id=123"
+		trackerURL := "https://rutracker.org/forum/viewtopic.php?t=123"
+
+		p := NewParser(
+			&mockDownloadClient{defaultLocation: "/default"},
+			&mockProvider{
+				canHandleResult: true,
+				result: &providers.Result{
+					ID:         "123",
+					Title:      "Test Torrent",
+					Magnet:     "magnet:?xt=urn:btih:abc",
+					TrackerURL: trackerURL,
+				},
+			},
+		)
+
+		metadata, err := p.Parse(jackettURL, "/downloads")
+		require.NoError(t, err)
+		assert.Equal(t, trackerURL, metadata.OriginalUrl)
+		assert.Equal(t, "123", metadata.ID)
+		assert.Equal(t, "Test Torrent", metadata.Name)
+	})
+
+	t.Run("empty TrackerURL falls back to input URL", func(t *testing.T) {
+		inputURL := "http://jackett:9117/api/v2.0/indexers/unknown/results/torznab?t=details&id=456"
+
+		p := NewParser(
+			&mockDownloadClient{defaultLocation: "/default"},
+			&mockProvider{
+				canHandleResult: true,
+				result: &providers.Result{
+					ID:         "456",
+					Title:      "Unknown Tracker Torrent",
+					Magnet:     "magnet:?xt=urn:btih:def",
+					TrackerURL: "",
+				},
+			},
+		)
+
+		metadata, err := p.Parse(inputURL, "")
+		require.NoError(t, err)
+		assert.Equal(t, inputURL, metadata.OriginalUrl)
+	})
+
+	t.Run("non-Jackett provider without TrackerURL keeps original URL", func(t *testing.T) {
+		rutrackerURL := "https://rutracker.org/forum/viewtopic.php?t=789"
+
+		p := NewParser(
+			&mockDownloadClient{defaultLocation: "/default"},
+			&mockProvider{
+				canHandleResult: true,
+				result: &providers.Result{
+					ID:     "789",
+					Title:  "Direct Tracker Torrent",
+					Magnet: "magnet:?xt=urn:btih:ghi",
+				},
+			},
+		)
+
+		metadata, err := p.Parse(rutrackerURL, "")
+		require.NoError(t, err)
+		assert.Equal(t, rutrackerURL, metadata.OriginalUrl)
+	})
+}
+
 func TestParser_ProviderSelection(t *testing.T) {
 	result1 := &providers.Result{ID: "from-provider-1", Title: "Provider 1", Magnet: "magnet:1"}
 	result2 := &providers.Result{ID: "from-provider-2", Title: "Provider 2", Magnet: "magnet:2"}
