@@ -49,7 +49,7 @@ func TestRutrackerProvider_Parse(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 
@@ -72,7 +72,7 @@ func TestRutrackerProvider_Parse_StableDate(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 

@@ -203,6 +203,27 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 		assert.Equal(t, inputURL, metadata.OriginalUrl)
 	})
 
+	t.Run("empty TrackerURL with apikey in URL blanks OriginalUrl", func(t *testing.T) {
+		inputURL := "http://jackett:9117/api/v2.0/indexers/unknown/results/torznab?apikey=SECRET123&t=details&id=789"
+
+		p := NewParser(
+			&mockDownloadClient{defaultLocation: "/default"},
+			&mockProvider{
+				canHandleResult: true,
+				result: &providers.Result{
+					ID:         "789",
+					Title:      "Secret Tracker Torrent",
+					Magnet:     "magnet:?xt=urn:btih:ghi",
+					TrackerURL: "",
+				},
+			},
+		)
+
+		metadata, err := p.Parse(inputURL, "")
+		require.NoError(t, err)
+		assert.Equal(t, "", metadata.OriginalUrl)
+	})
+
 	t.Run("non-Jackett provider without TrackerURL keeps original URL", func(t *testing.T) {
 		rutrackerURL := "https://rutracker.org/forum/viewtopic.php?t=789"
 

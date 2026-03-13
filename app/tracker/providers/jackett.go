@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"magnet-feed-sync/app/utils"
 )
 
 type JackettProvider struct {
@@ -85,7 +87,7 @@ func (p *JackettProvider) parseXML(data []byte, originalURL string) (*Result, er
 	trackerURL := p.extractTrackerURL(item)
 	id := p.extractID(trackerURL, originalURL)
 	if id == "" {
-		id = extractBtihHash(magnet)
+		id = utils.ExtractBtihHash(magnet)
 	}
 
 	var updatedAt time.Time
@@ -142,19 +144,6 @@ func (p *JackettProvider) extractID(trackerURL, originalURL string) string {
 	}
 
 	return ""
-}
-
-func extractBtihHash(magnet string) string {
-	lower := strings.ToLower(magnet)
-	idx := strings.Index(lower, "urn:btih:")
-	if idx == -1 {
-		return ""
-	}
-	hash := magnet[idx+len("urn:btih:"):]
-	if ampIdx := strings.Index(hash, "&"); ampIdx != -1 {
-		hash = hash[:ampIdx]
-	}
-	return strings.ToLower(hash)
 }
 
 type torznabRSS struct {

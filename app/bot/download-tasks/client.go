@@ -168,7 +168,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if current.TorrentUpdatedAt == updatedMetadata.TorrentUpdatedAt {
+	if current.TorrentUpdatedAt.Equal(updatedMetadata.TorrentUpdatedAt) {
 		log.Printf("[INFO] Metadata is up to date: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
@@ -213,7 +213,8 @@ func (c *Client) CheckForUpdates() {
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
-		log.Fatalf("[ERROR] Error getting files metadata: %s", err)
+		log.Printf("[ERROR] Error getting files metadata: %s", err)
+		return
 	}
 
 	for _, metadata := range filesMetadata {
@@ -255,11 +256,15 @@ func (c *Client) CheckFileForUpdates(fileId string) {
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
-	if len(metadata.LastComment) > 100 {
-		metadata.LastComment = metadata.LastComment[:100] + "..."
+	comment := metadata.LastComment
+	if len(comment) > 100 {
+		comment = comment[:100] + "..."
 	}
 
-	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	display := *metadata
+	display.LastComment = comment
+
+	jsonData, err := json.MarshalIndent(&display, "", "  ")
 	if err != nil {
 		return "", err
 	}

@@ -49,7 +49,7 @@
 - [x] run tests — must pass before next task
 
 ### Task 2: Add Jackett provider
-- [x] add `JACKETT_URL` and `JACKETT_API_KEY` to config struct in `app/config/config.go`
+- [x] add `JACKETT_URL` to config struct in `app/config/config.go` (API key is embedded in URL query string)
 - [x] create `app/tracker/providers/jackett.go` implementing new `Provider` interface
 - [x] `CanHandle(url)` — match by Jackett base URL prefix
 - [x] `Parse(ctx, url)` — HTTP GET to Jackett Torznab API, parse XML response
@@ -103,7 +103,7 @@
 - [x] run linter
 
 ### Task 8: [Final] Update compose and documentation
-- [x] add `JACKETT_URL` and `JACKETT_API_KEY` env vars to docker-compose.yaml
+- [x] add `JACKETT_URL` env var to docker-compose.yaml (API key is embedded in URL query string)
 - [x] update CLAUDE.md if new patterns discovered
 
 ## Technical Details
@@ -192,8 +192,7 @@ Response: 201 Created
 ### Config (new env vars)
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| JACKETT_URL | no | empty | Jackett instance base URL |
-| JACKETT_API_KEY | no | empty | Jackett API key |
+| JACKETT_URL | no | empty | Jackett instance base URL (include API key in query string) |
 
 ## Post-Completion
 
@@ -206,5 +205,5 @@ Response: 201 Created
 - Проверить что JARVIS может создавать задачи через POST endpoint
 
 **Deployment:**
-- Добавить `JACKETT_URL` и `JACKETT_API_KEY` в secrets на сервере
+- Добавить `JACKETT_URL` в secrets на сервере (API key included in URL)
 - Убедиться что magnet-feed-sync имеет сетевой доступ к Jackett

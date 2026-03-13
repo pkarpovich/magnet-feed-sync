@@ -8,13 +8,13 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/rs/cors"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
+	"magnet-feed-sync/app/utils"
 )
 
 type TaskCreator interface {
@@ -122,7 +122,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var filesResponse []FileMetadataResponse
+	filesResponse := make([]FileMetadataResponse, 0, len(files))
 	for _, f := range files {
 		filesResponse = append(filesResponse, toResponse(f))
 	}
@@ -182,7 +182,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		}
 		metadata = m
 	} else {
-		hash := extractHashFromMagnet(req.Magnet)
+		hash := utils.ExtractBtihHash(req.Magnet)
 		if hash == "" {
 			http.Error(w, "could not extract hash from magnet link", http.StatusBadRequest)
 			return
@@ -207,19 +207,6 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
 		log.Printf("[ERROR] failed to encode response: %s", err)
 	}
-}
-
-func extractHashFromMagnet(magnet string) string {
-	lower := strings.ToLower(magnet)
-	idx := strings.Index(lower, "urn:btih:")
-	if idx == -1 {
-		return ""
-	}
-	hash := magnet[idx+len("urn:btih:"):]
-	if ampIdx := strings.Index(hash, "&"); ampIdx != -1 {
-		hash = hash[:ampIdx]
-	}
-	return strings.ToLower(hash)
 }
 
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {

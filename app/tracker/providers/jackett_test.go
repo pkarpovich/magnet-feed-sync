@@ -106,7 +106,7 @@ func TestJackettProvider_Parse_ValidResponse(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 
@@ -128,7 +128,7 @@ func TestJackettProvider_Parse_EmptyResponse(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 
@@ -145,7 +145,7 @@ func TestJackettProvider_Parse_NoTrackerURL(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 
@@ -166,7 +166,7 @@ func TestJackettProvider_Parse_EnclosureMagnet(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write(fixtureData)
+		_, _ = w.Write(fixtureData)
 	}))
 	defer server.Close()
 
@@ -270,7 +270,7 @@ func TestJackettProvider_ExtractID(t *testing.T) {
 func TestJackettProvider_Parse_InvalidXML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write([]byte("not xml at all"))
+		_, _ = w.Write([]byte("not xml at all"))
 	}))
 	defer server.Close()
 
