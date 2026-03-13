@@ -19,6 +19,9 @@ import (
 
 type TaskCreator interface {
 	CreateFromURL(url, location string) (*tracker.FileMetadata, error)
+	CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error)
+	RemoveTask(id string) error
+	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(fileId string)
 	CheckForUpdates()
 }
@@ -26,8 +29,6 @@ type TaskCreator interface {
 type FileStore interface {
 	GetAll() ([]*tracker.FileMetadata, error)
 	GetById(id string) (*tracker.FileMetadata, error)
-	CreateOrReplace(metadata *tracker.FileMetadata) error
-	Remove(id string) error
 }
 
 type DownloadClient interface {
@@ -43,7 +44,6 @@ type Client struct {
 	store          FileStore
 	taskCreator    TaskCreator
 	downloadClient DownloadClient
-	dryMode        bool
 }
 
 func NewClient(
@@ -51,14 +51,12 @@ func NewClient(
 	store FileStore,
 	taskCreator TaskCreator,
 	downloadClient DownloadClient,
-	dryMode bool,
 ) *Client {
 	return &Client{
 		taskCreator:    taskCreator,
 		downloadClient: downloadClient,
 		config:         cfg,
 		store:          store,
-		dryMode:        dryMode,
 	}
 }
 
@@ -175,6 +173,10 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
 		if err != nil {
 			log.Printf("[ERROR] failed to create file from URL: %s", err)
+			if errors.Is(err, tracker.ErrProviderNotFound) {
+				http.Error(w, "unsupported URL", http.StatusBadRequest)
+				return
+			}
 			http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
 			return
 		}
@@ -191,30 +193,13 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 			location = c.downloadClient.GetDefaultLocation()
 		}
 
-		metadata = &tracker.FileMetadata{
-			ID:         hash,
-			Name:       req.Name,
-			Magnet:     req.Magnet,
-			Location:   location,
-			LastSyncAt: time.Now(),
-		}
-
-		if err := c.store.CreateOrReplace(metadata); err != nil {
-			log.Printf("[ERROR] failed to save file: %s", err)
-			http.Error(w, "failed to save file", http.StatusInternalServerError)
+		m, err := c.taskCreator.CreateFromMagnet(hash, req.Magnet, req.Name, location)
+		if err != nil {
+			log.Printf("[ERROR] failed to create file from magnet: %s", err)
+			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)
 			return
 		}
-
-		if !c.dryMode {
-			if err := c.downloadClient.CreateDownloadTask(req.Magnet, location); err != nil {
-				log.Printf("[ERROR] failed to create download task: %s", err)
-				if removeErr := c.store.Remove(hash); removeErr != nil {
-					log.Printf("[ERROR] failed to remove file after download error: %s", removeErr)
-				}
-				http.Error(w, "failed to create download task", http.StatusInternalServerError)
-				return
-			}
-		}
+		metadata = m
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -242,7 +227,7 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 
 	fileId := r.PathValue("fileId")
 
-	err := c.store.Remove(fileId)
+	err := c.taskCreator.RemoveTask(fileId)
 	if err != nil {
 		log.Printf("[ERROR] failed to remove files: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -322,8 +307,7 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file.Location = req.Location
-	err = c.store.CreateOrReplace(file)
+	err = c.taskCreator.UpdateTaskLocation(req.FileId, req.Location)
 	if err != nil {
 		log.Printf("[ERROR] failed to update file location: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

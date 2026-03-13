@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -25,6 +26,8 @@ type FileMetadata struct {
 	DeleteAt         sql.NullTime `json:"-"`
 }
 
+var ErrProviderNotFound = errors.New("provider not found")
+
 type Parser struct {
 	downloadClient downloadClient.Client
 	providers      []providers.Provider
@@ -40,7 +43,7 @@ func NewParser(downloadClient downloadClient.Client, providerList ...providers.P
 func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
 	provider := p.getProvider(url)
 	if provider == nil {
-		return nil, fmt.Errorf("provider not found for url: %s", url)
+		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, url)
 	}
 
 	result, err := provider.Parse(context.Background(), url)

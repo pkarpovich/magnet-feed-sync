@@ -18,14 +18,42 @@ func NewJackettProvider(baseURL string) *JackettProvider {
 	if err != nil || u.Host == "" {
 		return &JackettProvider{baseURL: strings.TrimRight(baseURL, "/")}
 	}
-	return &JackettProvider{baseURL: u.Scheme + "://" + u.Host}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	if idx := strings.Index(u.Path, "/api/v2.0/"); idx >= 0 {
+		u.Path = u.Path[:idx]
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	return &JackettProvider{baseURL: u.String()}
 }
 
 func (p *JackettProvider) CanHandle(u string) bool {
 	if p.baseURL == "" {
 		return false
 	}
-	return strings.HasPrefix(u, p.baseURL)
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	base, err := url.Parse(p.baseURL)
+	if err != nil || base.Host == "" {
+		return false
+	}
+	if parsed.Scheme != base.Scheme || parsed.Host != base.Host {
+		return false
+	}
+	if base.Path != "" && parsed.Path != base.Path && !strings.HasPrefix(parsed.Path, base.Path+"/") {
+		return false
+	}
+	remainder := parsed.Path
+	if base.Path != "" {
+		remainder = strings.TrimPrefix(parsed.Path, base.Path)
+	}
+	if !strings.HasPrefix(remainder, "/api/v2.0/") {
+		return false
+	}
+	return true
 }
 
 func (p *JackettProvider) Parse(ctx context.Context, pageURL string) (*Result, error) {

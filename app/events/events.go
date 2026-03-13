@@ -33,6 +33,7 @@ var folderCommands = map[string]string{
 
 type Bot interface {
 	OnMessage(msg bot.Message, location string) (bool, string, error)
+	RemoveTask(id string) error
 }
 
 type TbAPI interface {
@@ -161,7 +162,7 @@ func (tl *TelegramListener) processCallbackQuery(update tbapi.Update) error {
 
 	switch data.Type {
 	case RemoveTaskCallback:
-		if err := tl.Store.Remove(data.TaskID); err != nil {
+		if err := tl.Bot.RemoveTask(data.TaskID); err != nil {
 			errMsg := tbapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "💥 Error: "+err.Error())
 			_, err := tl.TbAPI.Send(errMsg)
 			if err != nil {

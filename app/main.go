@@ -109,7 +109,7 @@ func run(cfg *config.Config) error {
 	}
 
 	go tgListener.SendMessagesForAdmins(ctx)
-	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient, cfg.DryMode).Start(ctx, done)
+	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx, done)
 
 	go func() {
 		if err := tgListener.Do(); err != nil {

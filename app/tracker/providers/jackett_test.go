@@ -43,6 +43,12 @@ func TestJackettProvider_CanHandle(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:    "same host non-torznab path rejected",
+			baseURL: "http://nas:9117",
+			url:     "http://nas:9117/UI/Dashboard",
+			want:    false,
+		},
+		{
 			name:    "empty url",
 			baseURL: "http://nas:9117",
 			url:     "",
@@ -53,6 +59,36 @@ func TestJackettProvider_CanHandle(t *testing.T) {
 			baseURL: "",
 			url:     "http://nas:9117/api/v2.0/indexers/rutracker/results/torznab",
 			want:    false,
+		},
+		{
+			name:    "ssrf attempt with userinfo",
+			baseURL: "http://nas:9117",
+			url:     "http://nas:9117@evil.example/api/v2.0/indexers/rutracker/results/torznab",
+			want:    false,
+		},
+		{
+			name:    "subpath deployment matching url",
+			baseURL: "https://example.com/jackett",
+			url:     "https://example.com/jackett/api/v2.0/indexers/rutracker/results/torznab?apikey=KEY",
+			want:    true,
+		},
+		{
+			name:    "subpath deployment non-matching url",
+			baseURL: "https://example.com/jackett",
+			url:     "https://example.com/other-service/api/data",
+			want:    false,
+		},
+		{
+			name:    "reverse proxy at /api/jackett should not match unrelated urls",
+			baseURL: "https://example.com/api/jackett",
+			url:     "https://example.com/other-path",
+			want:    false,
+		},
+		{
+			name:    "reverse proxy at /api/jackett should match own api urls",
+			baseURL: "https://example.com/api/jackett",
+			url:     "https://example.com/api/jackett/api/v2.0/indexers/rutracker/results/torznab?apikey=KEY",
+			want:    true,
 		},
 	}
 
@@ -199,22 +235,26 @@ func TestJackettProvider_ExtractID(t *testing.T) {
 		wantID      string
 	}{
 		{
-			name:        "id from tracker url t param",
-			trackerURL:  "https://rutracker.org/forum/viewtopic.php?t=6810475",
-			originalURL: "http://nas:9117/api/v2.0/indexers/rutracker/results/torznab?id=999",
-			wantID:      "6810475",
+			name:       "id from tracker url t param",
+			trackerURL: "https://rutracker.org/forum/viewtopic.php?t=6810475",
+			wantID:     "6810475",
 		},
 		{
 			name:        "id from original url when tracker has no t param",
 			trackerURL:  "https://example.com/topic/123",
-			originalURL: "http://nas:9117/api/v2.0/indexers/test/results/torznab?id=555",
-			wantID:      "555",
+			originalURL: "http://nas:9117/api/v2.0/indexers/test/results/torznab?apikey=KEY&id=99999",
+			wantID:      "99999",
 		},
 		{
-			name:        "no id when neither has params",
+			name:        "id from original url when no tracker url",
 			trackerURL:  "",
-			originalURL: "http://nas:9117/api/v2.0/indexers/test/results/torznab",
-			wantID:      "",
+			originalURL: "http://nas:9117/api/v2.0/indexers/test/results/torznab?id=55555",
+			wantID:      "55555",
+		},
+		{
+			name:       "empty when no tracker url and no original url id",
+			trackerURL: "",
+			wantID:     "",
 		},
 	}
 
