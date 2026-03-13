@@ -182,6 +182,8 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
 		log.Printf("[ERROR] Error updating metadata: %s", err)
+		c.mu.Unlock()
+		return
 	}
 
 	c.mu.Unlock()
