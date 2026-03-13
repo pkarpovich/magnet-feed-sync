@@ -59,16 +59,7 @@ func (m *mockFileStore) GetById(id string) (*tracker.FileMetadata, error) {
 }
 
 type mockDownloadClient struct {
-	lastMagnet      string
-	lastDestination string
 	defaultLocation string
-	downloadErr     error
-}
-
-func (m *mockDownloadClient) CreateDownloadTask(url, destination string) error {
-	m.lastMagnet = url
-	m.lastDestination = destination
-	return m.downloadErr
 }
 
 func (m *mockDownloadClient) SetLocation(taskID, location string) error { return nil }

@@ -32,7 +32,6 @@ type FileStore interface {
 }
 
 type DownloadClient interface {
-	CreateDownloadTask(url, destination string) error
 	SetLocation(taskID, location string) error
 	GetLocations() []types.Location
 	GetHashByMagnet(magnet string) (string, error)
@@ -217,7 +216,7 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 	err := c.taskCreator.RemoveTask(fileId)
 	if err != nil {
 		log.Printf("[ERROR] failed to remove files: %s", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to remove file", http.StatusInternalServerError)
 		return
 	}
 

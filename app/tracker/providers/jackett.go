@@ -161,7 +161,6 @@ type torznabItem struct {
 	Comments  string           `xml:"comments"`
 	Link      string           `xml:"link"`
 	PubDate   string           `xml:"pubDate"`
-	Size      string           `xml:"size"`
 	Enclosure torznabEnclosure `xml:"enclosure"`
 }
 

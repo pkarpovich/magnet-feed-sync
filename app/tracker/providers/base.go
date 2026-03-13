@@ -50,7 +50,8 @@ func fetchPage(ctx context.Context, pageURL string) ([]byte, error) {
 		return nil, err
 	}
 
-	body, err := io.ReadAll(utf8Reader)
+	const maxResponseSize = 10 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(utf8Reader, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}

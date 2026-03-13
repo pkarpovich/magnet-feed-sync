@@ -36,9 +36,18 @@ To create a new download task, send a message to the bot with tracker page.
 
 ### HTTP API
 
-Create tracking tasks programmatically via the REST API:
+Manage tracking tasks programmatically via the REST API:
 
-**POST /api/files** - Create a new download task
+- `POST /api/files` - Create a new download task (from URL or magnet link)
+- `GET /api/files` - List all tracked tasks
+- `DELETE /api/files/{fileId}` - Remove a tracked task
+- `PATCH /api/files/{fileId}/refresh` - Force refresh a specific task
+- `PATCH /api/files/refresh` - Force refresh all tasks
+- `GET /api/file-locations` - Get available download locations
+- `POST /api/file-locations` - Update download location for a task
+- `GET /api/health` - Health check
+
+**POST /api/files** examples:
 
 With a tracker URL (enables update monitoring):
 ```json

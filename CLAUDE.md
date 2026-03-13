@@ -53,6 +53,8 @@ docker compose up --build
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
+- **types/**: Shared type definitions (Location)
+- **utils/**: Shared utility functions (magnet link parsing, date parsing)
 
 ### Frontend (`/frontend`)
 - React 18 + TypeScript 5 + Vite
@@ -69,6 +71,7 @@ docker compose up --build
 
 ### Backend
 - Repository pattern for data access (task-store)
+- Provider pattern for tracker integrations — each provider implements `CanHandle(url)` / `Parse(ctx, url)` interface, owns its own fetch + parse logic
 - Context-based graceful shutdown
 - Retry mechanism for database operations
 

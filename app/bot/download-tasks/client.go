@@ -205,6 +205,14 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 
 	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
 		log.Printf("[ERROR] Error creating download task: %s", err)
+
+		c.mu.Lock()
+		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
+		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
+			log.Printf("[ERROR] Error reverting metadata after download failure: %s", storeErr)
+		}
+		c.mu.Unlock()
+		return
 	}
 
 	log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
@@ -259,8 +267,9 @@ func (c *Client) CheckFileForUpdates(fileId string) {
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
 	comment := metadata.LastComment
-	if len(comment) > 100 {
-		comment = comment[:100] + "..."
+	runes := []rune(comment)
+	if len(runes) > 100 {
+		comment = string(runes[:100]) + "..."
 	}
 
 	display := *metadata
