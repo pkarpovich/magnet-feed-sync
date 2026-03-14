@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>Severance S02 2160p WEB-DL DDP5.1 HDR DoVi Hybrid HEVC-FLUX</title>
+      <guid>https://rutracker.org/forum/viewtopic.php?t=6810475</guid>
+      <comments>https://rutracker.org/forum/viewtopic.php?t=6810475</comments>
+      <link>magnet:?xt=urn:btih:abc123def456&amp;dn=Severance+S02&amp;tr=http%3A%2F%2Fbt.t-ru.org%2Fann%3Fmagnet</link>
+      <size>52428800000</size>
+      <pubDate>Mon, 10 Mar 2026 14:00:00 +0000</pubDate>
+      <enclosure url="magnet:?xt=urn:btih:abc123def456&amp;dn=Severance+S02" length="52428800000" type="application/x-bittorrent"/>
+      <torznab:attr name="seeders" value="150"/>
+      <torznab:attr name="peers" value="30"/>
+      <jackettindexer id="rutracker">RuTracker</jackettindexer>
+    </item>
+  </channel>
+</rss>

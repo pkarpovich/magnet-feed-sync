@@ -3,8 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"log"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
@@ -14,10 +21,7 @@ import (
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"magnet-feed-sync/app/tracker/providers"
 )
 
 func main() {
@@ -45,10 +49,20 @@ func run(cfg *config.Config) error {
 	done := make(chan struct{})
 
 	dClient, err := downloadClient.NewClient(*cfg)
-	t := tracker.NewParser(dClient)
 	if err != nil {
 		return fmt.Errorf("failed to create download client: %w", err)
 	}
+
+	providerList := []providers.Provider{
+		&providers.RutrackerProvider{},
+		&providers.NnmProvider{},
+	}
+	if cfg.Jackett.URL != "" {
+		redacted := redactURL(cfg.Jackett.URL)
+		log.Printf("[INFO] Jackett provider enabled: %s", redacted)
+		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
+	}
+	t := tracker.NewParser(dClient, providerList...)
 
 	db, err := database.NewClient("tasks.db")
 	if err != nil {
@@ -118,4 +132,19 @@ func run(cfg *config.Config) error {
 	}
 
 	return nil
+}
+
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid url>"
+	}
+	q := u.Query()
+	for key := range q {
+		if strings.Contains(strings.ToLower(key), "apikey") || strings.Contains(strings.ToLower(key), "api_key") {
+			q.Set(key, "***")
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }

@@ -1,66 +1,96 @@
 package providers
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/html/charset"
 )
 
-func TestRutrackerProvider_GetLastUpdatedDate(t *testing.T) {
+func TestRutrackerProvider_CanHandle(t *testing.T) {
 	tests := []struct {
-		name        string
-		fixtureFile string
-		wantStable  bool
-		wantNonZero bool
+		name string
+		url  string
+		want bool
 	}{
 		{
-			name:        "topic_6810475_should_return_stable_date",
-			fixtureFile: "testdata/rutracker_6810475.html",
-			wantStable:  true,
-			wantNonZero: true,
+			name: "valid rutracker url",
+			url:  "https://rutracker.org/forum/viewtopic.php?t=6810475",
+			want: true,
+		},
+		{
+			name: "non-rutracker url",
+			url:  "https://nnmclub.to/forum/viewtopic.php?t=123",
+			want: false,
+		},
+		{
+			name: "empty url",
+			url:  "",
+			want: false,
 		},
 	}
 
+	provider := &RutrackerProvider{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			file, err := os.Open(tt.fixtureFile)
-			require.NoError(t, err, "failed to open fixture file")
-			defer file.Close()
-
-			utf8Reader, err := charset.NewReaderLabel("windows-1251", file)
-			require.NoError(t, err, "failed to create charset reader")
-
-			doc, err := goquery.NewDocumentFromReader(utf8Reader)
-			require.NoError(t, err, "failed to parse HTML")
-
-			provider := &RutrackerProvider{}
-
-			result1 := provider.GetLastUpdatedDate(doc)
-			time.Sleep(10 * time.Millisecond)
-			result2 := provider.GetLastUpdatedDate(doc)
-
-			if tt.wantStable {
-				assert.Equal(t, result1, result2, "GetLastUpdatedDate should return stable value, not time.Now()")
-			}
-
-			if tt.wantNonZero {
-				assert.False(t, result1.IsZero(), "GetLastUpdatedDate should return non-zero time")
-			}
-
-			if tt.wantStable && tt.wantNonZero {
-				assert.True(t, result1.Before(time.Now().Add(-time.Minute)),
-					"GetLastUpdatedDate returned recent time (likely time.Now()), got: %v", result1)
-			}
+			assert.Equal(t, tt.want, provider.CanHandle(tt.url))
 		})
 	}
 }
 
-func TestRutrackerProvider_GetId(t *testing.T) {
+func TestRutrackerProvider_Parse(t *testing.T) {
+	fixtureData, err := os.ReadFile("testdata/rutracker_6810475.html")
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		_, _ = w.Write(fixtureData)
+	}))
+	defer server.Close()
+
+	provider := &RutrackerProvider{}
+
+	result, err := provider.Parse(context.Background(), server.URL+"/forum/viewtopic.php?t=6810475")
+	require.NoError(t, err)
+
+	assert.Equal(t, "6810475", result.ID)
+	assert.NotEmpty(t, result.Title)
+	assert.NotEmpty(t, result.Magnet)
+	assert.False(t, result.UpdatedAt.IsZero())
+	assert.True(t, result.UpdatedAt.Before(time.Now().Add(-time.Minute)))
+	assert.Empty(t, result.TrackerURL)
+}
+
+func TestRutrackerProvider_Parse_StableDate(t *testing.T) {
+	fixtureData, err := os.ReadFile("testdata/rutracker_6810475.html")
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		_, _ = w.Write(fixtureData)
+	}))
+	defer server.Close()
+
+	provider := &RutrackerProvider{}
+	url := server.URL + "/forum/viewtopic.php?t=6810475"
+
+	result1, err := provider.Parse(context.Background(), url)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+
+	result2, err := provider.Parse(context.Background(), url)
+	require.NoError(t, err)
+
+	assert.Equal(t, result1.UpdatedAt, result2.UpdatedAt)
+}
+
+func TestRutrackerProvider_GetID(t *testing.T) {
 	tests := []struct {
 		name string
 		url  string
@@ -78,10 +108,10 @@ func TestRutrackerProvider_GetId(t *testing.T) {
 		},
 	}
 
+	provider := &RutrackerProvider{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider := &RutrackerProvider{}
-			got := provider.GetId(tt.url)
+			got := provider.getID(tt.url)
 			assert.Equal(t, tt.want, got)
 		})
 	}

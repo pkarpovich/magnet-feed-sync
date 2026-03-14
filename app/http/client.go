@@ -5,41 +5,64 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/rs/cors"
 	"log"
-	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
-	"magnet-feed-sync/app/config"
-	downloadClient "magnet-feed-sync/app/download-client"
-	taskStore "magnet-feed-sync/app/task-store"
 	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/rs/cors"
+	"magnet-feed-sync/app/config"
+	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/types"
+	"magnet-feed-sync/app/utils"
 )
 
+type TaskCreator interface {
+	CreateFromURL(url, location string) (*tracker.FileMetadata, error)
+	CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error)
+	RemoveTask(id string) error
+	UpdateTaskLocation(id, location string) error
+	CheckFileForUpdates(fileId string)
+	CheckForUpdates()
+}
+
+type FileStore interface {
+	GetAll() ([]*tracker.FileMetadata, error)
+	GetById(id string) (*tracker.FileMetadata, error)
+}
+
+type DownloadClient interface {
+	SetLocation(taskID, location string) error
+	GetLocations() []types.Location
+	GetHashByMagnet(magnet string) (string, error)
+	GetDefaultLocation() string
+}
+
 type Client struct {
-	config              config.HttpConfig
-	store               *taskStore.Repository
-	downloadTasksClient *downloadTasks.Client
-	downloadClient      downloadClient.Client
+	config         config.HttpConfig
+	store          FileStore
+	taskCreator    TaskCreator
+	downloadClient DownloadClient
 }
 
 func NewClient(
 	cfg config.HttpConfig,
-	store *taskStore.Repository,
-	downloadTasksClient *downloadTasks.Client,
-	downloadClient downloadClient.Client,
+	store FileStore,
+	taskCreator TaskCreator,
+	downloadClient DownloadClient,
 ) *Client {
 	return &Client{
-		downloadTasksClient: downloadTasksClient,
-		downloadClient:      downloadClient,
-		config:              cfg,
-		store:               store,
+		taskCreator:    taskCreator,
+		downloadClient: downloadClient,
+		config:         cfg,
+		store:          store,
 	}
 }
 
 func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", c.handleFiles)
+	mux.HandleFunc("POST /api/files", c.handleCreateFile)
 	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
 	mux.HandleFunc("PATCH /api/files/refresh", c.handleRefreshAllFiles)
 	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
@@ -66,7 +89,7 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 
 	<-ctx.Done()
 
-	shutdownCtx, shutdownRelease := context.WithTimeout(ctx, 10*time.Second)
+	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownRelease()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -98,18 +121,9 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var filesResponse []FileMetadataResponse
+	filesResponse := make([]FileMetadataResponse, 0, len(files))
 	for _, f := range files {
-		filesResponse = append(filesResponse, FileMetadataResponse{
-			ID:               f.ID,
-			Name:             f.Name,
-			Magnet:           f.Magnet,
-			Location:         f.Location,
-			LastSyncAt:       f.LastSyncAt,
-			OriginalUrl:      f.OriginalUrl,
-			LastComment:      f.LastComment,
-			TorrentUpdatedAt: f.TorrentUpdatedAt,
-		})
+		filesResponse = append(filesResponse, toResponse(f))
 	}
 
 	err = json.NewEncoder(w).Encode(filesResponse)
@@ -120,15 +134,89 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func toResponse(f *tracker.FileMetadata) FileMetadataResponse {
+	return FileMetadataResponse{
+		ID:               f.ID,
+		Name:             f.Name,
+		Magnet:           f.Magnet,
+		Location:         f.Location,
+		LastSyncAt:       f.LastSyncAt,
+		OriginalUrl:      f.OriginalUrl,
+		LastComment:      f.LastComment,
+		TorrentUpdatedAt: f.TorrentUpdatedAt,
+	}
+}
+
+type CreateFileRequest struct {
+	URL      string `json:"url"`
+	Location string `json:"location"`
+	Magnet   string `json:"magnet"`
+	Name     string `json:"name"`
+}
+
+func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
+	var req CreateFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" && req.Magnet == "" {
+		http.Error(w, "url or magnet is required", http.StatusBadRequest)
+		return
+	}
+
+	var metadata *tracker.FileMetadata
+
+	if req.URL != "" {
+		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
+		if err != nil {
+			log.Printf("[ERROR] failed to create file from URL: %s", err)
+			if errors.Is(err, tracker.ErrProviderNotFound) {
+				http.Error(w, "unsupported URL", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
+			return
+		}
+		metadata = m
+	} else {
+		hash := utils.ExtractBtihHash(req.Magnet)
+		if hash == "" {
+			http.Error(w, "could not extract hash from magnet link", http.StatusBadRequest)
+			return
+		}
+
+		location := req.Location
+		if location == "" {
+			location = c.downloadClient.GetDefaultLocation()
+		}
+
+		m, err := c.taskCreator.CreateFromMagnet(hash, req.Magnet, req.Name, location)
+		if err != nil {
+			log.Printf("[ERROR] failed to create file from magnet: %s", err)
+			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)
+			return
+		}
+		metadata = m
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
+		log.Printf("[ERROR] failed to encode response: %s", err)
+	}
+}
+
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
 
-	err := c.store.Remove(fileId)
+	err := c.taskCreator.RemoveTask(fileId)
 	if err != nil {
 		log.Printf("[ERROR] failed to remove files: %s", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to remove file", http.StatusInternalServerError)
 		return
 	}
 
@@ -139,7 +227,7 @@ func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
-	c.downloadTasksClient.CheckFileForUpdates(fileId)
+	c.taskCreator.CheckFileForUpdates(fileId)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -147,7 +235,7 @@ func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
 func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	c.downloadTasksClient.CheckForUpdates()
+	c.taskCreator.CheckForUpdates()
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -205,8 +293,7 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file.Location = req.Location
-	err = c.store.CreateOrReplace(file)
+	err = c.taskCreator.UpdateTaskLocation(req.FileId, req.Location)
 	if err != nil {
 		log.Printf("[ERROR] failed to update file location: %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

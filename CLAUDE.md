@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub). It creates download tasks on Synology NAS DownloadStation or qBittorrent.
+Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub, Jackett/Torznab). It creates download tasks on Synology NAS DownloadStation or qBittorrent.
 
 ## Build and Development Commands
 
@@ -48,11 +48,13 @@ docker compose up --build
   - `download-station/`: Synology DownloadStation API
   - `qbittorrent/`: qBittorrent API client
 - **events/**: Telegram event handlers for bot interactions
-- **http/**: HTTP server serving web UI and health endpoints
+- **http/**: HTTP server serving web UI, REST API (file management endpoints), and health checks
 - **schedular/**: Cron job scheduling via gocron
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction
-  - `providers/`: RuTracker and NNMClub implementations
+  - `providers/`: RuTracker, NNMClub, and Jackett implementations
+- **types/**: Shared type definitions (Location)
+- **utils/**: Shared utility functions (magnet link parsing, date parsing)
 
 ### Frontend (`/frontend`)
 - React 18 + TypeScript 5 + Vite
@@ -69,6 +71,7 @@ docker compose up --build
 
 ### Backend
 - Repository pattern for data access (task-store)
+- Provider pattern for tracker integrations — each provider implements `CanHandle(url)` / `Parse(ctx, url)` interface, owns its own fetch + parse logic
 - Context-based graceful shutdown
 - Retry mechanism for database operations
 
@@ -89,6 +92,7 @@ Environment variables (see compose.yaml):
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
+- `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 
 ## Commit Convention
 

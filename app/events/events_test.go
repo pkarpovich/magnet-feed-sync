@@ -23,6 +23,8 @@ func (m *mockBot) OnMessage(msg bot.Message, location string) (bool, string, err
 	return m.returnSaved, m.returnReply, m.returnError
 }
 
+func (m *mockBot) RemoveTask(id string) error { return nil }
+
 type mockTbAPI struct {
 	sentMessages []tbapi.Chattable
 }

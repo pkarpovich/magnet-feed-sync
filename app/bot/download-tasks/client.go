@@ -1,17 +1,22 @@
 package download_tasks
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sync"
+	"time"
+
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
-	"time"
 )
 
 type Client struct {
+	mu              sync.Mutex
 	messagesForSend chan string
 	tracker         *tracker.Parser
 	dClient         downloadClient.Client
@@ -38,18 +43,10 @@ func NewClient(ctx *ClientCtx) *Client {
 }
 
 func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, error) {
-	url := msg.Text
-
-	metadata, err := c.tracker.Parse(url, location)
+	metadata, err := c.CreateFromURL(msg.Text, location)
 	if err != nil {
 		return false, "", err
 	}
-
-	msgJSON, errJSON := json.Marshal(metadata)
-	if errJSON != nil {
-		return false, "", fmt.Errorf("failed to marshal metadata to json: %w", errJSON)
-	}
-	log.Printf("[DEBUG] Metadata: %s", string(msgJSON))
 
 	formatedMsg, err := MetadataToMsg(metadata)
 	if err != nil {
@@ -57,52 +54,140 @@ func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, erro
 	}
 
 	replyMsg := fmt.Sprintf("✅ Download task created:\n\n%s", formatedMsg)
+	return true, replyMsg, nil
+}
 
-	err = c.store.CreateOrReplace(metadata)
+func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
+	metadata, err := c.tracker.Parse(url, location)
 	if err != nil {
-		return false, "", err
+		return nil, err
 	}
 
+	log.Printf("[DEBUG] Metadata: %+v", metadata)
+
+	return c.createWithLock(metadata)
+}
+
+func (c *Client) CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error) {
+	metadata := &tracker.FileMetadata{
+		ID:         hash,
+		Name:       name,
+		Magnet:     magnet,
+		Location:   location,
+		LastSyncAt: time.Now(),
+	}
+
+	return c.createWithLock(metadata)
+}
+
+func (c *Client) createWithLock(metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {
+	c.mu.Lock()
+
+	existing, getErr := c.store.GetById(metadata.ID)
+	if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("check existing task: %w", getErr)
+	}
+	hadActiveRow := existing != nil && !existing.DeleteAt.Valid
+
+	err := c.store.CreateOrReplace(metadata)
+	if err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+
+	c.mu.Unlock()
+
 	if c.dryMode {
-		return true, replyMsg, nil
+		return metadata, nil
 	}
 
 	err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
-		return false, "", err
+		c.rollbackCreate(metadata.ID, existing, hadActiveRow)
+		return nil, err
 	}
 
 	log.Printf("[INFO] Download task created: %s", metadata.Name)
 
-	return true, replyMsg, nil
+	return metadata, nil
+}
+
+func (c *Client) rollbackCreate(id string, existing *tracker.FileMetadata, hadActiveRow bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	current, err := c.store.GetById(id)
+	if err != nil {
+		log.Printf("[ERROR] failed to read task for rollback: %s", err)
+		return
+	}
+
+	if current.DeleteAt.Valid {
+		return
+	}
+
+	if hadActiveRow {
+		if restoreErr := c.store.CreateOrReplace(existing); restoreErr != nil {
+			log.Printf("[ERROR] failed to restore previous file after download error: %s", restoreErr)
+		}
+	} else {
+		if removeErr := c.store.Remove(id); removeErr != nil {
+			log.Printf("[ERROR] failed to remove file after download error: %s", removeErr)
+		}
+	}
 }
 
 func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
+	if fileMetadata.OriginalUrl == "" {
+		return
+	}
+
 	updatedMetadata, err := c.tracker.Parse(fileMetadata.OriginalUrl, "")
 	if err != nil {
 		log.Printf("[ERROR] Error parsing metadata: %s", err)
 		return
 	}
 
-	if fileMetadata.Location != "" {
-		updatedMetadata.Location = fileMetadata.Location
+	c.mu.Lock()
+
+	current, err := c.store.GetById(fileMetadata.ID)
+	if err != nil {
+		c.mu.Unlock()
+		log.Printf("[ERROR] Error re-reading metadata: %s", err)
+		return
+	}
+
+	if current.DeleteAt.Valid {
+		c.mu.Unlock()
+		return
+	}
+
+	if current.Location != "" {
+		updatedMetadata.Location = current.Location
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if fileMetadata.TorrentUpdatedAt == updatedMetadata.TorrentUpdatedAt {
+	if current.TorrentUpdatedAt.Equal(updatedMetadata.TorrentUpdatedAt) {
 		log.Printf("[INFO] Metadata is up to date: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
 			log.Printf("[ERROR] Error updating last sync at: %s", err)
 		}
 
+		c.mu.Unlock()
 		return
 	}
 	log.Printf("[INFO] Metadata is outdated: %s", fileMetadata.ID)
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
 		log.Printf("[ERROR] Error updating metadata: %s", err)
+		c.mu.Unlock()
+		return
 	}
+
+	c.mu.Unlock()
+
 	log.Printf("[INFO] Metadata updated: %s", fileMetadata.ID)
 
 	formatedMsg, err := MetadataToMsg(updatedMetadata)
@@ -120,6 +205,14 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 
 	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
 		log.Printf("[ERROR] Error creating download task: %s", err)
+
+		c.mu.Lock()
+		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
+		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
+			log.Printf("[ERROR] Error reverting metadata after download failure: %s", storeErr)
+		}
+		c.mu.Unlock()
+		return
 	}
 
 	log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
@@ -130,12 +223,36 @@ func (c *Client) CheckForUpdates() {
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
-		log.Fatalf("[ERROR] Error getting files metadata: %s", err)
+		log.Printf("[ERROR] Error getting files metadata: %s", err)
+		return
 	}
 
 	for _, metadata := range filesMetadata {
 		c.processFileMetadata(metadata)
 	}
+}
+
+func (c *Client) RemoveTask(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.store.Remove(id)
+}
+
+func (c *Client) UpdateTaskLocation(id, location string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	file, err := c.store.GetById(id)
+	if err != nil {
+		return fmt.Errorf("get task: %w", err)
+	}
+
+	if file.DeleteAt.Valid {
+		return fmt.Errorf("task %s has been deleted", id)
+	}
+
+	file.Location = location
+	return c.store.CreateOrReplace(file)
 }
 
 func (c *Client) CheckFileForUpdates(fileId string) {
@@ -149,11 +266,16 @@ func (c *Client) CheckFileForUpdates(fileId string) {
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
-	if len(metadata.LastComment) > 100 {
-		metadata.LastComment = metadata.LastComment[:100] + "..."
+	comment := metadata.LastComment
+	runes := []rune(comment)
+	if len(runes) > 100 {
+		comment = string(runes[:100]) + "..."
 	}
 
-	jsonData, err := json.MarshalIndent(metadata, "", "  ")
+	display := *metadata
+	display.LastComment = comment
+
+	jsonData, err := json.MarshalIndent(&display, "", "  ")
 	if err != nil {
 		return "", err
 	}
