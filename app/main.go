@@ -56,7 +56,11 @@ func run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to setup tracing: %w", err)
 	}
-	defer func() { _ = shutdownTracing(ctx) }()
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
 
 	done := make(chan struct{})
 

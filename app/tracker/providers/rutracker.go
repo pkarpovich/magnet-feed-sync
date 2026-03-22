@@ -127,6 +127,5 @@ func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time 
 }
 
 func (p *RutrackerProvider) getLastComment(doc *goquery.Document) string {
-	slog.Warn("comments not supported in rutracker page")
 	return ""
 }

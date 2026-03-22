@@ -54,6 +54,7 @@ docker compose up --build
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
 - **types/**: Shared type definitions (Location)
+- **observability/**: Structured logging (slog) with Loki backend and OpenTelemetry tracing setup
 - **utils/**: Shared utility functions (magnet link parsing, date parsing)
 
 ### Frontend (`/frontend`)
@@ -74,6 +75,8 @@ docker compose up --build
 - Provider pattern for tracker integrations — each provider implements `CanHandle(url)` / `Parse(ctx, url)` interface, owns its own fetch + parse logic
 - Context-based graceful shutdown
 - Retry mechanism for database operations
+- Structured logging via `log/slog` with global default logger (`slog.SetDefault`) — use `slog.ErrorContext(ctx, ...)` in HTTP handlers for trace_id correlation
+- OpenTelemetry tracing via global `otel.Tracer()` provider with noop fallback when endpoint not configured
 
 ### Frontend
 - Strict ESLint config enforcing:
@@ -93,6 +96,9 @@ Environment variables (see compose.yaml):
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
+- `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP HTTP endpoint for trace export (optional, tracing disabled when empty)
+- `LOKI_URL`: Grafana Loki push API URL for centralized logging (optional, logs go to stdout only when empty)
 
 ## Commit Convention
 

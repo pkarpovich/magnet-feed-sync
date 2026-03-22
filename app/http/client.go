@@ -113,14 +113,14 @@ type FileMetadataResponse struct {
 }
 
 func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/files")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "GET /api/files")
 	defer span.End()
 
 	w.Header().Set("Content-Type", "application/json")
 
 	files, err := c.store.GetAll()
 	if err != nil {
-		slog.Error("failed to get files", "error", err)
+		slog.ErrorContext(ctx, "failed to get files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -132,7 +132,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	err = json.NewEncoder(w).Encode(filesResponse)
 	if err != nil {
-		slog.Error("failed to encode files", "error", err)
+		slog.ErrorContext(ctx, "failed to encode files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -159,7 +159,7 @@ type CreateFileRequest struct {
 }
 
 func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "POST /api/files")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/files")
 	defer span.End()
 
 	var req CreateFileRequest
@@ -178,7 +178,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	if req.URL != "" {
 		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
 		if err != nil {
-			slog.Error("failed to create file from URL", "error", err)
+			slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
 			if errors.Is(err, tracker.ErrProviderNotFound) {
 				http.Error(w, "unsupported URL", http.StatusBadRequest)
 				return
@@ -201,7 +201,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 
 		m, err := c.taskCreator.CreateFromMagnet(hash, req.Magnet, req.Name, location)
 		if err != nil {
-			slog.Error("failed to create file from magnet", "error", err)
+			slog.ErrorContext(ctx, "failed to create file from magnet", "error", err)
 			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)
 			return
 		}
@@ -211,12 +211,12 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
-		slog.Error("failed to encode response", "error", err)
+		slog.ErrorContext(ctx, "failed to encode response", "error", err)
 	}
 }
 
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "DELETE /api/files/{fileId}")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "DELETE /api/files/{fileId}")
 	defer span.End()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -225,7 +225,7 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 
 	err := c.taskCreator.RemoveTask(fileId)
 	if err != nil {
-		slog.Error("failed to remove files", "error", err)
+		slog.ErrorContext(ctx, "failed to remove files", "error", err)
 		http.Error(w, "failed to remove file", http.StatusInternalServerError)
 		return
 	}
@@ -236,6 +236,7 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
 	_, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/{fileId}/refresh")
 	defer span.End()
+
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -257,7 +258,7 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleGetFileLocations(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/file-locations")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "GET /api/file-locations")
 	defer span.End()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -265,7 +266,7 @@ func (c *Client) handleGetFileLocations(w http.ResponseWriter, r *http.Request) 
 	locations := c.downloadClient.GetLocations()
 	err := json.NewEncoder(w).Encode(locations)
 	if err != nil {
-		slog.Error("failed to encode locations", "error", err)
+		slog.ErrorContext(ctx, "failed to encode locations", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -276,7 +277,7 @@ type SetFileLocationRequest struct {
 }
 
 func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "POST /api/file-locations")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/file-locations")
 	defer span.End()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -284,14 +285,14 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	var req SetFileLocationRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		slog.Error("failed to decode request", "error", err)
+		slog.ErrorContext(ctx, "failed to decode request", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	file, err := c.store.GetById(req.FileId)
 	if err != nil {
-		slog.Error("failed to get file by id", "error", err)
+		slog.ErrorContext(ctx, "failed to get file by id", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -303,21 +304,21 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := c.downloadClient.GetHashByMagnet(file.Magnet)
 	if err != nil {
-		slog.Error("failed to get hash by magnet", "error", err)
+		slog.ErrorContext(ctx, "failed to get hash by magnet", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = c.downloadClient.SetLocation(hash, req.Location)
 	if err != nil {
-		slog.Error("failed to set location", "error", err)
+		slog.ErrorContext(ctx, "failed to set location", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = c.taskCreator.UpdateTaskLocation(req.FileId, req.Location)
 	if err != nil {
-		slog.Error("failed to update file location", "error", err)
+		slog.ErrorContext(ctx, "failed to update file location", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -329,12 +330,12 @@ type HealthResponse struct {
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/health")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "GET /api/health")
 	defer span.End()
 
 	files, err := c.store.GetAll()
 	if err != nil {
-		slog.Error("failed to get files", "error", err)
+		slog.ErrorContext(ctx, "failed to get files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -344,7 +345,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		Message: "OK",
 	})
 	if err != nil {
-		slog.Error("failed to encode health response", "error", err)
+		slog.ErrorContext(ctx, "failed to encode health response", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
