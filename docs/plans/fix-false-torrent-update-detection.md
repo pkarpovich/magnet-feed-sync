@@ -36,12 +36,12 @@
 ## Implementation Steps
 
 ### Task 1: Add RuTracker parser test for page t=3304959
-- [ ] write test `TestRutrackerProvider_Parse_3304959` using existing fixture `testdata/rutracker_3304959.html`
-- [ ] verify correct ID extraction ("3304959")
-- [ ] verify title, magnet link parsed
-- [ ] verify "ред." date parsed correctly (22-Мар-26 12:59 → stable time)
-- [ ] write `TestRutrackerProvider_Parse_3304959_StableDate` — two consecutive parses return same date
-- [ ] run tests — must pass before next task
+- [x] write test `TestRutrackerProvider_Parse_3304959` using existing fixture `testdata/rutracker_3304959.html`
+- [x] verify correct ID extraction ("3304959")
+- [x] verify title, magnet link parsed
+- [x] verify "ред." date parsed correctly (22-Мар-26 12:59 → stable time)
+- [x] write `TestRutrackerProvider_Parse_3304959_StableDate` — two consecutive parses return same date
+- [x] run tests — must pass before next task
 
 ### Task 2: Extract interfaces in download-tasks package for testability
 - [ ] define `FileParser` interface: `Parse(url, location string) (*tracker.FileMetadata, error)`
