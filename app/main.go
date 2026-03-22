@@ -104,11 +104,10 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
 
+	schedulerErr := make(chan error, 1)
 	go func() {
-		err = s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) })
-		if err != nil {
-			slog.Error("error starting scheduler", "error", err)
-			os.Exit(1)
+		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) }); err != nil {
+			schedulerErr <- err
 		}
 	}()
 
@@ -137,7 +136,13 @@ func run(cfg *config.Config) error {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+
+	var runErr error
+	select {
+	case <-sigChan:
+	case err := <-schedulerErr:
+		runErr = fmt.Errorf("scheduler failed: %w", err)
+	}
 
 	cancel()
 
@@ -148,7 +153,7 @@ func run(cfg *config.Config) error {
 		slog.Info("application shutdown timed out")
 	}
 
-	return nil
+	return runErr
 }
 
 func redactURL(rawURL string) string {
