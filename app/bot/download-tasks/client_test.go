@@ -547,3 +547,77 @@ func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing
 	assert.False(t, downloadCalled, "download should not trigger when btih hash matches despite different tracker URLs")
 	assert.Empty(t, msgChan, "no notification when btih hash matches")
 }
+
+func TestProcessFileMetadata_NoBtihHash_DifferentMagnets_RedownloadTriggered(t *testing.T) {
+	storedMagnet := "magnet:?xt=urn:btmh:1220abc123"
+	parsedMagnet := "magnet:?xt=urn:btmh:1220def456"
+
+	downloadCalled := false
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:       "test-v2",
+				Magnet:   storedMagnet,
+				Location: "/downloads",
+			}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			return nil
+		},
+	}
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:     "test-v2",
+				Magnet: parsedMagnet,
+			}, nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			downloadCalled = true
+			return nil
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+		DryMode:         false,
+	})
+
+	client.processFileMetadata(&tracker.FileMetadata{
+		ID:          "test-v2",
+		OriginalUrl: "https://example.com/topic/123",
+	})
+
+	assert.True(t, downloadCalled, "download should trigger when magnets differ and have no btih hash")
+}
+
+func TestMagnetsEqual(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        string
+		b        string
+		expected bool
+	}{
+		{"same btih different tracker", "magnet:?xt=urn:btih:ABC123&tr=http://a.com", "magnet:?xt=urn:btih:abc123&tr=http://b.com", true},
+		{"different btih", "magnet:?xt=urn:btih:abc123", "magnet:?xt=urn:btih:def456", false},
+		{"no btih same magnet", "magnet:?xt=urn:btmh:1220abc", "magnet:?xt=urn:btmh:1220abc", true},
+		{"no btih different magnet", "magnet:?xt=urn:btmh:1220abc", "magnet:?xt=urn:btmh:1220def", false},
+		{"same btmh different tracker", "magnet:?xt=urn:btmh:1220abc&tr=http://a.com", "magnet:?xt=urn:btmh:1220abc&tr=http://b.com", true},
+		{"one has btih other doesnt", "magnet:?xt=urn:btih:abc123", "magnet:?xt=urn:btmh:1220abc", false},
+		{"both empty", "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, magnetsEqual(tt.a, tt.b))
+		})
+	}
+}

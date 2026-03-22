@@ -179,7 +179,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if utils.ExtractBtihHash(current.Magnet) == utils.ExtractBtihHash(updatedMetadata.Magnet) {
+	if magnetsEqual(current.Magnet, updatedMetadata.Magnet) {
 		log.Printf("[INFO] Magnet unchanged, updating metadata silently: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
@@ -226,6 +226,20 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
+}
+
+func magnetsEqual(a, b string) bool {
+	hashA := utils.ExtractBtihHash(a)
+	hashB := utils.ExtractBtihHash(b)
+	if hashA != "" && hashB != "" {
+		return hashA == hashB
+	}
+	xtA := utils.ExtractXtParam(a)
+	xtB := utils.ExtractXtParam(b)
+	if xtA != "" && xtB != "" {
+		return xtA == xtB
+	}
+	return a == b
 }
 
 func (c *Client) CheckForUpdates() {
