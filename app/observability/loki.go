@@ -163,13 +163,15 @@ func (s *lokiSender) shutdown() {
 
 type LokiHandler struct {
 	sender *lokiSender
+	level  slog.Level
 	attrs  []slog.Attr
 	groups []string
 }
 
-func NewLokiHandler(serviceName, lokiURL string) *LokiHandler {
+func NewLokiHandler(serviceName, lokiURL string, level slog.Level) *LokiHandler {
 	return &LokiHandler{
 		sender: newLokiSender(serviceName, lokiURL),
+		level:  level,
 	}
 }
 
@@ -177,8 +179,8 @@ func (h *LokiHandler) Shutdown() {
 	h.sender.shutdown()
 }
 
-func (h *LokiHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	return true
+func (h *LokiHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level
 }
 
 func (h *LokiHandler) Handle(ctx context.Context, r slog.Record) error {
@@ -229,6 +231,7 @@ func (h *LokiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	copy(newAttrs[len(h.attrs):], attrs)
 	return &LokiHandler{
 		sender: h.sender,
+		level:  h.level,
 		attrs:  newAttrs,
 		groups: h.groups,
 	}
@@ -243,6 +246,7 @@ func (h *LokiHandler) WithGroup(name string) slog.Handler {
 	newGroups[len(h.groups)] = name
 	return &LokiHandler{
 		sender: h.sender,
+		level:  h.level,
 		attrs:  h.attrs,
 		groups: newGroups,
 	}
@@ -295,7 +299,7 @@ func SetupLogging(serviceName, lokiURL string) (*slog.Logger, func()) {
 		return slog.New(slog.NewTextHandler(os.Stdout, nil)), func() {}
 	}
 
-	lokiHandler := NewLokiHandler(serviceName, lokiURL)
+	lokiHandler := NewLokiHandler(serviceName, lokiURL, slog.LevelInfo)
 	stdoutHandler := slog.NewJSONHandler(os.Stdout, nil)
 	multi := &multiHandler{handlers: []slog.Handler{stdoutHandler, lokiHandler}}
 

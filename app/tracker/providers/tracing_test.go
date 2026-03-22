@@ -16,10 +16,14 @@ import (
 
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
 	t.Helper()
+	orig := otel.GetTracerProvider()
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+	})
 	return exporter
 }
 

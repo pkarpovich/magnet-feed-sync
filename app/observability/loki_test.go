@@ -48,7 +48,7 @@ func countValues(p lokiPushPayload) int {
 func TestLokiHandler_Format(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	logger.Info("test message", "key", "value")
@@ -75,7 +75,7 @@ func TestLokiHandler_Format(t *testing.T) {
 func TestLokiHandler_TraceID(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
@@ -101,7 +101,7 @@ func TestLokiHandler_TraceID(t *testing.T) {
 func TestLokiHandler_NoTraceID(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	logger.Info("no trace")
@@ -119,7 +119,7 @@ func TestLokiHandler_NoTraceID(t *testing.T) {
 func TestLokiHandler_LevelLabels(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	logger.Info("info msg")
@@ -143,7 +143,7 @@ func TestLokiHandler_LevelLabels(t *testing.T) {
 func TestLokiHandler_BatchFlushOnFull(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	for i := range 150 {
@@ -167,7 +167,7 @@ func TestLokiHandler_BatchFlushOnFull(t *testing.T) {
 func TestLokiHandler_FlushOnShutdown(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	for i := range 5 {
@@ -184,7 +184,7 @@ func TestLokiHandler_FlushOnShutdown(t *testing.T) {
 func TestLokiHandler_WithAttrs(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	withAttrs := handler.WithAttrs([]slog.Attr{
 		slog.String("component", "auth"),
 		slog.Int("version", 2),
@@ -209,7 +209,7 @@ func TestLokiHandler_WithAttrs(t *testing.T) {
 func TestLokiHandler_WithGroup(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
 	withGroup := handler.WithGroup("request")
 	logger := slog.New(withGroup)
 
@@ -230,7 +230,7 @@ func TestLokiHandler_WithGroup(t *testing.T) {
 }
 
 func TestLokiHandler_WithGroupEmpty(t *testing.T) {
-	handler := NewLokiHandler("test-service", "http://localhost:3100")
+	handler := NewLokiHandler("test-service", "http://localhost:3100", slog.LevelInfo)
 	same := handler.WithGroup("")
 	assert.Equal(t, handler, same)
 	handler.Shutdown()
@@ -239,7 +239,7 @@ func TestLokiHandler_WithGroupEmpty(t *testing.T) {
 func TestLokiHandler_DebugLevel(t *testing.T) {
 	server, payloads, mu := newTestLokiServer(t)
 
-	handler := NewLokiHandler("test-service", server.URL)
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelDebug)
 	logger := slog.New(handler)
 
 	logger.Debug("debug msg")
@@ -249,6 +249,22 @@ func TestLokiHandler_DebugLevel(t *testing.T) {
 	defer mu.Unlock()
 	require.Len(t, *payloads, 1)
 	assert.Equal(t, "debug", (*payloads)[0].Streams[0].Stream["level"])
+}
+
+func TestLokiHandler_FiltersDebugAtInfoLevel(t *testing.T) {
+	server, payloads, mu := newTestLokiServer(t)
+
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
+	logger := slog.New(handler)
+
+	logger.Debug("should be filtered")
+	logger.Info("should pass")
+	handler.Shutdown()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *payloads, 1)
+	assert.Equal(t, 1, countValues((*payloads)[0]))
 }
 
 func TestMultiHandler_Enabled(t *testing.T) {
