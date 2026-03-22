@@ -11,24 +11,35 @@ import (
 
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
-	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/utils"
 )
+
+type FileParser interface {
+	Parse(url, location string) (*tracker.FileMetadata, error)
+}
+
+type FileStore interface {
+	GetById(id string) (*tracker.FileMetadata, error)
+	CreateOrReplace(metadata *tracker.FileMetadata) error
+	GetAll() ([]*tracker.FileMetadata, error)
+	Remove(id string) error
+}
 
 type Client struct {
 	mu              sync.Mutex
 	messagesForSend chan string
-	tracker         *tracker.Parser
+	tracker         FileParser
 	dClient         downloadClient.Client
-	store           *taskStore.Repository
+	store           FileStore
 	dryMode         bool
 }
 
 type ClientCtx struct {
 	MessagesForSend chan string
-	Tracker         *tracker.Parser
+	Tracker         FileParser
 	DClient         downloadClient.Client
-	Store           *taskStore.Repository
+	Store           FileStore
 	DryMode         bool
 }
 
@@ -168,17 +179,17 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if current.TorrentUpdatedAt.Equal(updatedMetadata.TorrentUpdatedAt) {
-		log.Printf("[INFO] Metadata is up to date: %s", fileMetadata.ID)
+	if magnetsEqual(current.Magnet, updatedMetadata.Magnet) {
+		log.Printf("[INFO] Magnet unchanged, updating metadata silently: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-			log.Printf("[ERROR] Error updating last sync at: %s", err)
+			log.Printf("[ERROR] Error updating metadata: %s", err)
 		}
 
 		c.mu.Unlock()
 		return
 	}
-	log.Printf("[INFO] Metadata is outdated: %s", fileMetadata.ID)
+	log.Printf("[INFO] Magnet changed, re-downloading: %s", fileMetadata.ID)
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
 		log.Printf("[ERROR] Error updating metadata: %s", err)
@@ -188,18 +199,9 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 
 	c.mu.Unlock()
 
-	log.Printf("[INFO] Metadata updated: %s", fileMetadata.ID)
-
-	formatedMsg, err := MetadataToMsg(updatedMetadata)
-	if err != nil {
-		log.Printf("[ERROR] Error formatting metadata: %s", err)
-		return
-	}
-
-	c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
-
 	if c.dryMode {
 		log.Printf("[INFO] Dry mode is enabled, skipping download")
+		c.sendUpdateNotification(updatedMetadata)
 		return
 	}
 
@@ -207,6 +209,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 		log.Printf("[ERROR] Error creating download task: %s", err)
 
 		c.mu.Lock()
+		updatedMetadata.Magnet = current.Magnet
 		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
 		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
 			log.Printf("[ERROR] Error reverting metadata after download failure: %s", storeErr)
@@ -216,6 +219,30 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
+	c.sendUpdateNotification(updatedMetadata)
+}
+
+func (c *Client) sendUpdateNotification(metadata *tracker.FileMetadata) {
+	formatedMsg, err := MetadataToMsg(metadata)
+	if err != nil {
+		log.Printf("[ERROR] Error formatting metadata: %s", err)
+		return
+	}
+	c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
+}
+
+func magnetsEqual(a, b string) bool {
+	hashA := utils.ExtractBtihHash(a)
+	hashB := utils.ExtractBtihHash(b)
+	if hashA != "" && hashB != "" {
+		return hashA == hashB
+	}
+	xtA := utils.ExtractXtParam(a)
+	xtB := utils.ExtractXtParam(b)
+	if xtA != "" && xtB != "" {
+		return xtA == xtB
+	}
+	return a == b
 }
 
 func (c *Client) CheckForUpdates() {

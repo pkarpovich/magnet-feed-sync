@@ -90,6 +90,53 @@ func TestRutrackerProvider_Parse_StableDate(t *testing.T) {
 	assert.Equal(t, result1.UpdatedAt, result2.UpdatedAt)
 }
 
+func TestRutrackerProvider_Parse_3304959(t *testing.T) {
+	fixtureData, err := os.ReadFile("testdata/rutracker_3304959.html")
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		_, _ = w.Write(fixtureData)
+	}))
+	defer server.Close()
+
+	provider := &RutrackerProvider{}
+
+	result, err := provider.Parse(context.Background(), server.URL+"/forum/viewtopic.php?t=3304959")
+	require.NoError(t, err)
+
+	assert.Equal(t, "3304959", result.ID)
+	assert.NotEmpty(t, result.Title)
+	assert.Contains(t, result.Magnet, "urn:btih:170C2D1D9496B69215647B52506959D7C7647B25")
+	assert.Equal(t, time.Date(2026, 3, 22, 12, 59, 0, 0, time.UTC), result.UpdatedAt)
+	assert.Empty(t, result.TrackerURL)
+}
+
+func TestRutrackerProvider_Parse_3304959_StableDate(t *testing.T) {
+	fixtureData, err := os.ReadFile("testdata/rutracker_3304959.html")
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		_, _ = w.Write(fixtureData)
+	}))
+	defer server.Close()
+
+	provider := &RutrackerProvider{}
+	url := server.URL + "/forum/viewtopic.php?t=3304959"
+
+	result1, err := provider.Parse(context.Background(), url)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+
+	result2, err := provider.Parse(context.Background(), url)
+	require.NoError(t, err)
+
+	assert.Equal(t, result1.UpdatedAt, result2.UpdatedAt)
+	assert.False(t, result1.UpdatedAt.IsZero())
+}
+
 func TestRutrackerProvider_GetID(t *testing.T) {
 	tests := []struct {
 		name string

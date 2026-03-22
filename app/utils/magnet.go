@@ -14,3 +14,19 @@ func ExtractBtihHash(magnet string) string {
 	}
 	return strings.ToLower(hash)
 }
+
+func ExtractXtParam(magnet string) string {
+	lower := strings.ToLower(magnet)
+	for _, prefix := range []string{"?xt=", "&xt="} {
+		idx := strings.Index(lower, prefix)
+		if idx == -1 {
+			continue
+		}
+		value := magnet[idx+len(prefix):]
+		if ampIdx := strings.Index(value, "&"); ampIdx != -1 {
+			value = value[:ampIdx]
+		}
+		return strings.ToLower(value)
+	}
+	return ""
+}
