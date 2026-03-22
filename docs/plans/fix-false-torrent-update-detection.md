@@ -64,12 +64,12 @@
 - [x] run tests — must pass before next task
 
 ### Task 4: Verify acceptance criteria
-- [ ] verify page t=3304959 fixture parses with stable date
-- [ ] verify same-magnet edits don't trigger re-download
-- [ ] verify actual torrent changes (different magnet) still trigger re-download + notification
-- [ ] verify existing RuTracker/NNM/Jackett flows unaffected
-- [ ] run full test suite
-- [ ] run linter
+- [x] verify page t=3304959 fixture parses with stable date
+- [x] verify same-magnet edits don't trigger re-download
+- [x] verify actual torrent changes (different magnet) still trigger re-download + notification
+- [x] verify existing RuTracker/NNM/Jackett flows unaffected
+- [x] run full test suite
+- [x] run linter
 
 ## Technical Details
 
