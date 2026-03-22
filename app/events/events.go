@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"magnet-feed-sync/app/bot"
 	downloadTask "magnet-feed-sync/app/bot/download-tasks"
 	taskStore "magnet-feed-sync/app/task-store"
@@ -64,7 +64,7 @@ func (tl *TelegramListener) Do() error {
 	for update := range updates {
 		if update.CallbackQuery != nil {
 			if err := tl.processCallbackQuery(update); err != nil {
-				log.Printf("[ERROR] %v", err)
+				slog.Error("callback query error", "error", err)
 			}
 
 			continue
@@ -75,7 +75,7 @@ func (tl *TelegramListener) Do() error {
 		}
 
 		if err := tl.processEvent(update); err != nil {
-			log.Printf("[ERROR] %v", err)
+			slog.Error("event processing error", "error", err)
 		}
 	}
 
@@ -87,10 +87,10 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 	if errJSON != nil {
 		return fmt.Errorf("failed to marshal update.Message to json: %w", errJSON)
 	}
-	log.Printf("[DEBUG] %s", string(msgJSON))
+	slog.Debug("incoming message", "message", string(msgJSON))
 
 	if !tl.isSuperUser(update.Message.From.ID) {
-		log.Printf("[DEBUG] user %d is not super user", update.Message.From.ID)
+		slog.Debug("user is not super user", "userId", update.Message.From.ID)
 
 		msg := tbapi.NewMessage(update.Message.Chat.ID, "I don't know you 🤷‍")
 		_, err := tl.TbAPI.Send(msg)
@@ -177,7 +177,7 @@ func (tl *TelegramListener) processCallbackQuery(update tbapi.Update) error {
 		if err != nil {
 			return fmt.Errorf("failed to delete message: %w", err)
 		}
-		log.Printf("[DEBUG] Task %s removed", data.TaskID)
+		slog.Debug("task removed", "taskId", data.TaskID)
 	}
 
 	return nil
@@ -223,7 +223,7 @@ func (tl *TelegramListener) handlePingCommand(update tbapi.Update) {
 	msg := tbapi.NewMessage(update.Message.Chat.ID, "🏓 Pong!")
 	_, err := tl.TbAPI.Send(msg)
 	if err != nil {
-		log.Printf("[ERROR] failed to send message: %v", err)
+		slog.Error("failed to send message", "error", err)
 	}
 }
 
@@ -233,7 +233,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
 		_, err := tl.TbAPI.Send(errMsg)
 		if err != nil {
-			log.Printf("[ERROR] failed to send error message: %v", err)
+			slog.Error("failed to send error message", "error", err)
 		}
 
 		return
@@ -243,7 +243,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 		Type:  "emoji",
 		Emoji: "👍",
 	}); err != nil {
-		log.Printf("[ERROR] failed to react to message: %v", err)
+		slog.Error("failed to react to message", "error", err)
 
 		return
 	}
@@ -252,7 +252,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 		msg := tbapi.NewMessage(update.Message.Chat.ID, "📭 No active tasks")
 		_, err := tl.TbAPI.Send(msg)
 		if err != nil {
-			log.Printf("[ERROR] failed to send message: %v", err)
+			slog.Error("failed to send message", "error", err)
 		}
 
 		return
@@ -261,7 +261,7 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 	for _, task := range tasks {
 		replyMsg, err := downloadTask.MetadataToMsg(task)
 		if err != nil {
-			log.Printf("[ERROR] failed to format metadata: %v", err)
+			slog.Error("failed to format metadata", "error", err)
 			continue
 		}
 
@@ -275,13 +275,13 @@ func (tl *TelegramListener) handleGetActiveTasksCommand(update tbapi.Update) {
 			},
 		})
 		if err != nil {
-			log.Printf("[ERROR] failed to build reply markup: %v", err)
+			slog.Error("failed to build reply markup", "error", err)
 		}
 
 		msg := NewMarkdownMessage(update.Message.Chat.ID, replyMsg, &replyMarkup)
 		_, err = tl.TbAPI.Send(msg)
 		if err != nil {
-			log.Printf("[ERROR] failed to send message: %v", err)
+			slog.Error("failed to send message", "error", err)
 		}
 	}
 }
@@ -295,11 +295,11 @@ func (tl *TelegramListener) SendMessagesForAdmins(ctx context.Context) {
 			for _, adminID := range adminIds {
 				_, err := tl.TbAPI.Send(NewMarkdownMessage(adminID, msg, nil))
 				if err != nil {
-					log.Printf("[ERROR] failed to send message: %v", err)
+					slog.Error("failed to send message", "error", err)
 				}
 			}
 		case <-ctx.Done():
-			log.Printf("[INFO] stop sending messages for admins")
+			slog.Info("stop sending messages for admins")
 			return
 		}
 	}

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"time"
@@ -80,11 +80,11 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	}
 
 	go func() {
-		log.Printf("[INFO] Starting HTTP server on %s", server.Addr)
+		slog.Info("starting HTTP server", "addr", server.Addr)
 		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("[ERROR] HTTP server error: %v", err)
+			slog.Error("HTTP server error", "error", err)
 		}
-		log.Printf("[INFO] HTTP server stopped")
+		slog.Info("HTTP server stopped")
 	}()
 
 	<-ctx.Done()
@@ -93,9 +93,9 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	defer shutdownRelease()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[ERROR] HTTP server error: %v", err)
+		slog.Error("HTTP server shutdown error", "error", err)
 	}
-	log.Printf("[INFO] HTTP server shutdown")
+	slog.Info("HTTP server shutdown")
 
 	close(done)
 }
@@ -116,7 +116,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	files, err := c.store.GetAll()
 	if err != nil {
-		log.Printf("[ERROR] failed to get files: %s", err)
+		slog.Error("failed to get files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -128,7 +128,7 @@ func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	err = json.NewEncoder(w).Encode(filesResponse)
 	if err != nil {
-		log.Printf("[ERROR] failed to encode files: %s", err)
+		slog.Error("failed to encode files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -171,7 +171,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	if req.URL != "" {
 		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
 		if err != nil {
-			log.Printf("[ERROR] failed to create file from URL: %s", err)
+			slog.Error("failed to create file from URL", "error", err)
 			if errors.Is(err, tracker.ErrProviderNotFound) {
 				http.Error(w, "unsupported URL", http.StatusBadRequest)
 				return
@@ -194,7 +194,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 
 		m, err := c.taskCreator.CreateFromMagnet(hash, req.Magnet, req.Name, location)
 		if err != nil {
-			log.Printf("[ERROR] failed to create file from magnet: %s", err)
+			slog.Error("failed to create file from magnet", "error", err)
 			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)
 			return
 		}
@@ -204,7 +204,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
-		log.Printf("[ERROR] failed to encode response: %s", err)
+		slog.Error("failed to encode response", "error", err)
 	}
 }
 
@@ -215,7 +215,7 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 
 	err := c.taskCreator.RemoveTask(fileId)
 	if err != nil {
-		log.Printf("[ERROR] failed to remove files: %s", err)
+		slog.Error("failed to remove files", "error", err)
 		http.Error(w, "failed to remove file", http.StatusInternalServerError)
 		return
 	}
@@ -246,7 +246,7 @@ func (c *Client) handleGetFileLocations(w http.ResponseWriter, r *http.Request) 
 	locations := c.downloadClient.GetLocations()
 	err := json.NewEncoder(w).Encode(locations)
 	if err != nil {
-		log.Printf("[ERROR] failed to encode locations: %s", err)
+		slog.Error("failed to encode locations", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -262,14 +262,14 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	var req SetFileLocationRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		log.Printf("[ERROR] failed to decode request: %s", err)
+		slog.Error("failed to decode request", "error", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	file, err := c.store.GetById(req.FileId)
 	if err != nil {
-		log.Printf("[ERROR] failed to get file by id: %s", err)
+		slog.Error("failed to get file by id", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -281,21 +281,21 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := c.downloadClient.GetHashByMagnet(file.Magnet)
 	if err != nil {
-		log.Printf("[ERROR] failed to get hash by magnet: %s", err)
+		slog.Error("failed to get hash by magnet", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = c.downloadClient.SetLocation(hash, req.Location)
 	if err != nil {
-		log.Printf("[ERROR] failed to set location: %s", err)
+		slog.Error("failed to set location", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	err = c.taskCreator.UpdateTaskLocation(req.FileId, req.Location)
 	if err != nil {
-		log.Printf("[ERROR] failed to update file location: %s", err)
+		slog.Error("failed to update file location", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -309,7 +309,7 @@ type HealthResponse struct {
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 	files, err := c.store.GetAll()
 	if err != nil {
-		log.Printf("[ERROR] failed to get files: %s", err)
+		slog.Error("failed to get files", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -319,7 +319,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		Message: "OK",
 	})
 	if err != nil {
-		log.Printf("[ERROR] failed to encode health response: %s", err)
+		slog.Error("failed to encode health response", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

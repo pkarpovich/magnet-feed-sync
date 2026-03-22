@@ -54,11 +54,11 @@
 - [x] run tests — must pass before next task
 
 ### Task 3: Migrate core business logic logging to slog
-- [ ] migrate `app/bot/download-tasks/client.go` (19 calls): replace `log.Printf("[LEVEL]...")` → `slog.Level("msg", attrs...)`
-- [ ] migrate `app/http/client.go` (19 calls): same pattern, use `r.Context()` where available for trace correlation
-- [ ] migrate `app/events/events.go` (14 calls): same pattern
-- [ ] verify existing tests pass after migration
-- [ ] run tests — must pass before next task
+- [x] migrate `app/bot/download-tasks/client.go` (19 calls): replace `log.Printf("[LEVEL]...")` → `slog.Level("msg", attrs...)`
+- [x] migrate `app/http/client.go` (19 calls): same pattern, use `r.Context()` where available for trace correlation
+- [x] migrate `app/events/events.go` (14 calls): same pattern
+- [x] verify existing tests pass after migration
+- [x] run tests — must pass before next task
 
 ### Task 4: Migrate tracker providers logging to slog
 - [ ] migrate `app/tracker/providers/rutracker.go` (7 calls)
