@@ -84,10 +84,10 @@
 - [x] run tests — must pass before next task
 
 ### Task 7: Update compose and verify
-- [ ] add `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOKI_URL` env vars to `compose.yaml`
-- [ ] verify all `log.Printf` calls are gone: `grep -rn "log\.Printf\|log\.Fatalf\|log\.Println" app/`
-- [ ] run full test suite
-- [ ] run linter
+- [x] add `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOKI_URL` env vars to `compose.yaml`
+- [x] verify all `log.Printf` calls are gone: `grep -rn "log\.Printf\|log\.Fatalf\|log\.Println" app/`
+- [x] run full test suite
+- [x] run linter (no Go linter configured in project)
 
 ## Technical Details
 
