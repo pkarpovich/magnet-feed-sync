@@ -240,7 +240,7 @@ func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
-	c.taskCreator.CheckFileForUpdates(ctx, fileId)
+	c.taskCreator.CheckFileForUpdates(context.WithoutCancel(ctx), fileId)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -251,7 +251,7 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	c.taskCreator.CheckForUpdates(ctx)
+	c.taskCreator.CheckForUpdates(context.WithoutCancel(ctx))
 
 	w.WriteHeader(http.StatusOK)
 }

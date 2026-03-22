@@ -44,6 +44,7 @@ func main() {
 
 	if err := run(cfg); err != nil {
 		slog.Error("error running app", "error", err)
+		cleanupLog()
 		os.Exit(1)
 	}
 }
