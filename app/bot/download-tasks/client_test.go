@@ -21,7 +21,7 @@ type mockFileParser struct {
 	parseFunc func(url, location string) (*tracker.FileMetadata, error)
 }
 
-func (m *mockFileParser) Parse(url, location string) (*tracker.FileMetadata, error) {
+func (m *mockFileParser) Parse(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
 	return m.parseFunc(url, location)
 }
 
@@ -124,7 +124,7 @@ func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) 
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -193,7 +193,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -265,7 +265,7 @@ func TestProcessFileMetadata_SameMagnetSameDate_MetadataUpdated(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -295,7 +295,7 @@ func TestProcessFileMetadata_ParseError_NoCrash(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -318,7 +318,7 @@ func TestProcessFileMetadata_EmptyOriginalUrl_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "",
 	})
@@ -361,7 +361,7 @@ func TestProcessFileMetadata_DeletedTask_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -413,7 +413,7 @@ func TestProcessFileMetadata_DifferentMagnet_DryMode_NoDownload(t *testing.T) {
 		DryMode:         true,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -488,7 +488,7 @@ func TestProcessFileMetadata_DifferentMagnet_DownloadFails_MagnetReverted(t *tes
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -543,7 +543,7 @@ func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -595,7 +595,7 @@ func TestProcessFileMetadata_NoBtihHash_DifferentMagnets_RedownloadTriggered(t *
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "test-v2",
 		OriginalUrl: "https://example.com/topic/123",
 	})
@@ -673,7 +673,7 @@ func TestProcessFileMetadata_CreatesTracingSpan(t *testing.T) {
 		Store:           store,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "123",
 		OriginalUrl: "https://example.com/topic/123",
 	})

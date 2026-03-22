@@ -18,7 +18,7 @@ import (
 )
 
 type FileParser interface {
-	Parse(url, location string) (*tracker.FileMetadata, error)
+	Parse(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
 }
 
 type FileStore interface {
@@ -71,7 +71,7 @@ func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, erro
 }
 
 func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
-	metadata, err := c.tracker.Parse(url, location)
+	metadata, err := c.tracker.Parse(context.Background(), url, location)
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +151,15 @@ func (c *Client) rollbackCreate(id string, existing *tracker.FileMetadata, hadAc
 	}
 }
 
-func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
-	_, span := otel.Tracer("download-tasks").Start(context.Background(), "processFileMetadata")
+func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.FileMetadata) {
+	ctx, span := otel.Tracer("download-tasks").Start(ctx, "processFileMetadata")
 	defer span.End()
 
 	if fileMetadata.OriginalUrl == "" {
 		return
 	}
 
-	updatedMetadata, err := c.tracker.Parse(fileMetadata.OriginalUrl, "")
+	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
 		slog.Error("error parsing metadata", "error", err)
 		return
@@ -251,7 +251,7 @@ func magnetsEqual(a, b string) bool {
 }
 
 func (c *Client) CheckForUpdates() {
-	_, span := otel.Tracer("download-tasks").Start(context.Background(), "CheckForUpdates")
+	ctx, span := otel.Tracer("download-tasks").Start(context.Background(), "CheckForUpdates")
 	defer span.End()
 
 	slog.Info("checking for updates")
@@ -263,7 +263,7 @@ func (c *Client) CheckForUpdates() {
 	}
 
 	for _, metadata := range filesMetadata {
-		c.processFileMetadata(metadata)
+		c.processFileMetadata(ctx, metadata)
 	}
 }
 
@@ -297,7 +297,7 @@ func (c *Client) CheckFileForUpdates(fileId string) {
 		return
 	}
 
-	c.processFileMetadata(metadata)
+	c.processFileMetadata(context.Background(), metadata)
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
