@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"go.opentelemetry.io/otel"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -21,6 +22,9 @@ func (p *RutrackerProvider) CanHandle(u string) bool {
 }
 
 func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result, error) {
+	ctx, span := otel.Tracer("tracker").Start(ctx, "RutrackerProvider.Parse")
+	defer span.End()
+
 	body, err := fetchPage(ctx, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch rutracker page: %w", err)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/cors"
+	"go.opentelemetry.io/otel"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
@@ -112,6 +113,9 @@ type FileMetadataResponse struct {
 }
 
 func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/files")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	files, err := c.store.GetAll()
@@ -155,6 +159,9 @@ type CreateFileRequest struct {
 }
 
 func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "POST /api/files")
+	defer span.End()
+
 	var req CreateFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -209,6 +216,9 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "DELETE /api/files/{fileId}")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
@@ -224,6 +234,9 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/{fileId}/refresh")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
@@ -233,6 +246,9 @@ func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/refresh")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	c.taskCreator.CheckForUpdates()
@@ -241,6 +257,9 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleGetFileLocations(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/file-locations")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	locations := c.downloadClient.GetLocations()
@@ -257,6 +276,9 @@ type SetFileLocationRequest struct {
 }
 
 func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "POST /api/file-locations")
+	defer span.End()
+
 	w.Header().Set("Content-Type", "application/json")
 
 	var req SetFileLocationRequest
@@ -307,6 +329,9 @@ type HealthResponse struct {
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := otel.Tracer("http").Start(r.Context(), "GET /api/health")
+	defer span.End()
+
 	files, err := c.store.GetAll()
 	if err != nil {
 		slog.Error("failed to get files", "error", err)

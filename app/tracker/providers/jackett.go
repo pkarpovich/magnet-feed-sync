@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -59,6 +60,9 @@ func (p *JackettProvider) CanHandle(u string) bool {
 }
 
 func (p *JackettProvider) Parse(ctx context.Context, pageURL string) (*Result, error) {
+	ctx, span := otel.Tracer("tracker").Start(ctx, "JackettProvider.Parse")
+	defer span.End()
+
 	body, err := fetchPage(ctx, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch jackett page: %w", err)

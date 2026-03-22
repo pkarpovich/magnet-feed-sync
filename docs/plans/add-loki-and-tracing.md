@@ -77,11 +77,11 @@
 - [x] run tests — must pass before next task
 
 ### Task 6: Add tracing spans to key operations
-- [ ] add tracing spans to HTTP handlers in `app/http/client.go` (use `r.Context()`)
-- [ ] add tracing spans to tracker `Parse()` methods (already receive `ctx`)
-- [ ] add tracing span to `processFileMetadata` and `CheckForUpdates` in download-tasks
-- [ ] write tests for span creation (verify span names, check noop when tracing disabled)
-- [ ] run tests — must pass before next task
+- [x] add tracing spans to HTTP handlers in `app/http/client.go` (use `r.Context()`)
+- [x] add tracing spans to tracker `Parse()` methods (already receive `ctx`)
+- [x] add tracing span to `processFileMetadata` and `CheckForUpdates` in download-tasks
+- [x] write tests for span creation (verify span names, check noop when tracing disabled)
+- [x] run tests — must pass before next task
 
 ### Task 7: Update compose and verify
 - [ ] add `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOKI_URL` env vars to `compose.yaml`

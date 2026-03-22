@@ -1,6 +1,7 @@
 package download_tasks
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker"
@@ -150,6 +152,9 @@ func (c *Client) rollbackCreate(id string, existing *tracker.FileMetadata, hadAc
 }
 
 func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
+	_, span := otel.Tracer("download-tasks").Start(context.Background(), "processFileMetadata")
+	defer span.End()
+
 	if fileMetadata.OriginalUrl == "" {
 		return
 	}
@@ -246,6 +251,9 @@ func magnetsEqual(a, b string) bool {
 }
 
 func (c *Client) CheckForUpdates() {
+	_, span := otel.Tracer("download-tasks").Start(context.Background(), "CheckForUpdates")
+	defer span.End()
+
 	slog.Info("checking for updates")
 
 	filesMetadata, err := c.store.GetAll()
