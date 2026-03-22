@@ -11,24 +11,34 @@ import (
 
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
-	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 )
+
+type FileParser interface {
+	Parse(url, location string) (*tracker.FileMetadata, error)
+}
+
+type FileStore interface {
+	GetById(id string) (*tracker.FileMetadata, error)
+	CreateOrReplace(metadata *tracker.FileMetadata) error
+	GetAll() ([]*tracker.FileMetadata, error)
+	Remove(id string) error
+}
 
 type Client struct {
 	mu              sync.Mutex
 	messagesForSend chan string
-	tracker         *tracker.Parser
+	tracker         FileParser
 	dClient         downloadClient.Client
-	store           *taskStore.Repository
+	store           FileStore
 	dryMode         bool
 }
 
 type ClientCtx struct {
 	MessagesForSend chan string
-	Tracker         *tracker.Parser
+	Tracker         FileParser
 	DClient         downloadClient.Client
-	Store           *taskStore.Repository
+	Store           FileStore
 	DryMode         bool
 }
 

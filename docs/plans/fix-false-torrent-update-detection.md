@@ -44,13 +44,13 @@
 - [x] run tests — must pass before next task
 
 ### Task 2: Extract interfaces in download-tasks package for testability
-- [ ] define `FileParser` interface: `Parse(url, location string) (*tracker.FileMetadata, error)`
-- [ ] define `FileStore` interface: `GetById(id string) (*tracker.FileMetadata, error)`, `CreateOrReplace(metadata *tracker.FileMetadata) error`, `GetAll() ([]*tracker.FileMetadata, error)`, `Remove(id string) error`
-- [ ] update `Client` struct to use interfaces instead of concrete `*tracker.Parser` and `*taskStore.Repository`
-- [ ] update `ClientCtx` struct accordingly
-- [ ] update `NewClient` constructor
-- [ ] update `app/main.go` and `app/http/client.go` if needed (should be compatible since concrete types implement interfaces)
-- [ ] run tests — must pass before next task
+- [x] define `FileParser` interface: `Parse(url, location string) (*tracker.FileMetadata, error)`
+- [x] define `FileStore` interface: `GetById(id string) (*tracker.FileMetadata, error)`, `CreateOrReplace(metadata *tracker.FileMetadata) error`, `GetAll() ([]*tracker.FileMetadata, error)`, `Remove(id string) error`
+- [x] update `Client` struct to use interfaces instead of concrete `*tracker.Parser` and `*taskStore.Repository`
+- [x] update `ClientCtx` struct accordingly
+- [x] update `NewClient` constructor
+- [x] update `app/main.go` and `app/http/client.go` if needed (should be compatible since concrete types implement interfaces)
+- [x] run tests — must pass before next task
 
 ### Task 3: Fix processFileMetadata — compare magnet links
 - [ ] in `processFileMetadata`: after parsing updated metadata, compare `current.Magnet == updatedMetadata.Magnet`
