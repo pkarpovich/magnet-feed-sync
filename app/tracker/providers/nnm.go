@@ -3,7 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -72,7 +72,7 @@ func (p *NnmProvider) getTitle(doc *goquery.Document) string {
 func (p *NnmProvider) getID(originalUrl string) string {
 	u, err := url.Parse(originalUrl)
 	if err != nil {
-		log.Printf("[ERROR] Failed to parse nnm url: %s, %v", originalUrl, err)
+		slog.Error("failed to parse nnm url", "url", originalUrl, "error", err)
 		return ""
 	}
 	return u.Query().Get("t")
@@ -85,7 +85,7 @@ func (p *NnmProvider) getLastUpdatedDate(doc *goquery.Document) (registrationDat
 			rawDate := strings.TrimSpace(s.Find("td.genmed").Last().Text())
 			date, err := utils.ParseRussianDate(rawDate)
 			if err != nil {
-				log.Printf("[ERROR] Failed to parse nnm torrent registration date: %s, %v", rawDate, err)
+				slog.Error("failed to parse nnm torrent registration date", "date", rawDate, "error", err)
 			}
 			registrationDate = date
 		}
@@ -97,14 +97,14 @@ func (p *NnmProvider) getLastUpdatedDate(doc *goquery.Document) (registrationDat
 func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
 	rssLink := p.getRssLink(doc)
 	if rssLink == "" {
-		log.Printf("[WARN] rss link not found in nnm page")
+		slog.Warn("rss link not found in nnm page")
 		return ""
 	}
 
 	fp := gofeed.NewParser()
 	feed, err := fp.ParseURL(rssLink)
 	if err != nil || feed == nil {
-		log.Printf("[ERROR] Failed to parse RSS feed: %v", err)
+		slog.Error("failed to parse rss feed", "error", err)
 		return ""
 	}
 
@@ -128,7 +128,7 @@ func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
 
 	commentDoc, parseErr := goquery.NewDocumentFromReader(strings.NewReader(commentBody))
 	if parseErr != nil {
-		log.Printf("[ERROR] Failed to parse comment body: %v", parseErr)
+		slog.Error("failed to parse comment body", "error", parseErr)
 		return ""
 	}
 

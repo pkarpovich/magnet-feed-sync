@@ -61,11 +61,11 @@
 - [x] run tests — must pass before next task
 
 ### Task 4: Migrate tracker providers logging to slog
-- [ ] migrate `app/tracker/providers/rutracker.go` (7 calls)
-- [ ] migrate `app/tracker/providers/nnm.go` (5 calls)
-- [ ] migrate `app/tracker/providers/base.go` (1 call)
-- [ ] verify existing provider tests pass
-- [ ] run tests — must pass before next task
+- [x] migrate `app/tracker/providers/rutracker.go` (7 calls)
+- [x] migrate `app/tracker/providers/nnm.go` (5 calls)
+- [x] migrate `app/tracker/providers/base.go` (1 call)
+- [x] verify existing provider tests pass
+- [x] run tests — must pass before next task
 
 ### Task 5: Migrate infrastructure logging to slog
 - [ ] migrate `app/database/client.go` (0 direct log calls, but verify)

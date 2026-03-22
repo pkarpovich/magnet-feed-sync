@@ -3,7 +3,7 @@ package providers
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -48,7 +48,7 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 func (p *RutrackerProvider) getMagnetLink(doc *goquery.Document) string {
 	magnetLink, exists := doc.Find("a.magnet-link").Attr("href")
 	if !exists {
-		log.Printf("[WARN] magnet link not found in rutracker page")
+		slog.Warn("magnet link not found in rutracker page")
 	}
 	return magnetLink
 }
@@ -69,14 +69,14 @@ func (p *RutrackerProvider) getTitle(doc *goquery.Document) string {
 		return strings.TrimSpace(attempt3)
 	}
 
-	log.Printf("[WARN] title not found in rutracker page")
+	slog.Warn("title not found in rutracker page")
 	return ""
 }
 
 func (p *RutrackerProvider) getID(originalUrl string) string {
 	u, err := url.Parse(originalUrl)
 	if err != nil {
-		log.Printf("[ERROR] Failed to parse rutracker url: %s, %v", originalUrl, err)
+		slog.Error("failed to parse rutracker url", "url", originalUrl, "error", err)
 		return ""
 	}
 	return u.Query().Get("t")
@@ -102,7 +102,7 @@ func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time 
 	if len(editedDate) > 0 {
 		date, err := utils.ParseRussianDate(editedDate)
 		if err != nil {
-			log.Printf("[ERROR] failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
+			slog.Error("failed to parse rutracker torrent edited date", "date", editedDate, "error", err)
 		} else {
 			return date
 		}
@@ -112,17 +112,17 @@ func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time 
 	if len(postDateText) > 0 {
 		date, err := utils.ParseRussianDate(postDateText)
 		if err != nil {
-			log.Printf("[ERROR] failed to parse rutracker torrent post date: %s, %v", postDateText, err)
+			slog.Error("failed to parse rutracker torrent post date", "date", postDateText, "error", err)
 		} else {
 			return date
 		}
 	}
 
-	log.Printf("[WARN] no date found in rutracker page")
+	slog.Warn("no date found in rutracker page")
 	return time.Time{}
 }
 
 func (p *RutrackerProvider) getLastComment(doc *goquery.Document) string {
-	log.Printf("[WARN] comments not supported in rutracker page")
+	slog.Warn("comments not supported in rutracker page")
 	return ""
 }
