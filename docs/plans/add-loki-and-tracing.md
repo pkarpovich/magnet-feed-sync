@@ -37,13 +37,13 @@
 ## Implementation Steps
 
 ### Task 1: Copy observability package and add dependencies
-- [ ] create `app/observability/` directory
-- [ ] copy `loki.go` from jackett-mcp, update package name and module path
-- [ ] copy `tracing.go` from jackett-mcp, update package name and module path
-- [ ] copy `loki_test.go` and `tracing_test.go`, update package name and module path
-- [ ] add otel dependencies to go.mod: `go.opentelemetry.io/otel`, `otel/trace`, `otel/sdk`, `otel/exporters/otlp/otlptrace/otlptracehttp`
-- [ ] run `go mod tidy`
-- [ ] run observability tests — must pass before next task
+- [x] create `app/observability/` directory
+- [x] copy `loki.go` from jackett-mcp, update package name and module path
+- [x] copy `tracing.go` from jackett-mcp, update package name and module path
+- [x] copy `loki_test.go` and `tracing_test.go`, update package name and module path
+- [x] add otel dependencies to go.mod: `go.opentelemetry.io/otel`, `otel/trace`, `otel/sdk`, `otel/exporters/otlp/otlptrace/otlptracehttp`
+- [x] run `go mod tidy`
+- [x] run observability tests — must pass before next task
 
 ### Task 2: Add config and wire observability in main.go
 - [ ] add `OtelServiceName`, `OtelEndpoint`, `LokiURL` fields to `config.Config` in `app/config/config.go`
