@@ -1,7 +1,7 @@
 package task_store
 
 import (
-	"log"
+	"log/slog"
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/tracker"
 )
@@ -80,7 +80,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 	defer func() {
 		err := rows.Close()
 		if err != nil {
-			log.Printf("[ERROR] failed to close rows: %s", err)
+			slog.Error("failed to close rows", "error", err)
 		}
 	}()
 

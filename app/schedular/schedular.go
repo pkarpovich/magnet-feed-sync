@@ -2,7 +2,7 @@ package schedular
 
 import (
 	"github.com/go-co-op/gocron/v2"
-	"log"
+	"log/slog"
 	"magnet-feed-sync/app/config"
 )
 
@@ -32,7 +32,7 @@ func (s *Service) Start(cb func()) error {
 		return err
 	}
 
-	log.Printf("[INFO] Job created: %s", j.ID())
+	slog.Info("job created", "job_id", j.ID())
 
 	s.scheduler.Start()
 

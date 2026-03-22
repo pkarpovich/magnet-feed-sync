@@ -68,13 +68,13 @@
 - [x] run tests — must pass before next task
 
 ### Task 5: Migrate infrastructure logging to slog
-- [ ] migrate `app/database/client.go` (0 direct log calls, but verify)
-- [ ] migrate `app/download-client/download-station/client.go` (3 calls)
-- [ ] migrate `app/download-client/qbittorrent/client.go` (1 call)
-- [ ] migrate `app/schedular/schedular.go` (1 call)
-- [ ] migrate `app/task-store/repository.go` (1 call)
-- [ ] remove `"log"` imports from all migrated files
-- [ ] run tests — must pass before next task
+- [x] migrate `app/database/client.go` (0 direct log calls, but verify)
+- [x] migrate `app/download-client/download-station/client.go` (3 calls)
+- [x] migrate `app/download-client/qbittorrent/client.go` (1 call)
+- [x] migrate `app/schedular/schedular.go` (1 call)
+- [x] migrate `app/task-store/repository.go` (1 call)
+- [x] remove `"log"` imports from all migrated files
+- [x] run tests — must pass before next task
 
 ### Task 6: Add tracing spans to key operations
 - [ ] add tracing spans to HTTP handlers in `app/http/client.go` (use `r.Context()`)
