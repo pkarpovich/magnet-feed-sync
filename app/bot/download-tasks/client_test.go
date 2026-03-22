@@ -68,23 +68,6 @@ func (m *mockDownloadClient) GetDefaultLocation() string {
 	return "/downloads"
 }
 
-func TestClient_InterfaceSatisfaction(t *testing.T) {
-	parser := &mockFileParser{}
-	store := &mockFileStore{}
-
-	var _ FileParser = parser
-	var _ FileStore = store
-
-	client := NewClient(&ClientCtx{
-		MessagesForSend: make(chan string, 1),
-		Tracker:         parser,
-		Store:           store,
-		DryMode:         true,
-	})
-
-	assert.NotNil(t, client)
-}
-
 func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) {
 	magnet := "magnet:?xt=urn:btih:abc123"
 	oldDate := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
@@ -157,6 +140,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 	oldDate := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
 	newDate := time.Date(2026, 3, 22, 12, 59, 0, 0, time.UTC)
 
+	var savedMetadata *tracker.FileMetadata
 	store := &mockFileStore{
 		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
 			return &tracker.FileMetadata{
@@ -169,6 +153,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 			}, nil
 		},
 		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			savedMetadata = metadata
 			return nil
 		},
 	}
@@ -212,6 +197,10 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 
 	assert.True(t, downloadCalled, "download should be triggered when magnet changes")
 	assert.Equal(t, newMagnet, downloadedMagnet, "new magnet should be used for download")
+	require.NotNil(t, savedMetadata, "metadata should be saved to store")
+	assert.Equal(t, newMagnet, savedMetadata.Magnet, "new magnet should be stored")
+	assert.Equal(t, "Test Torrent v2", savedMetadata.Name, "new name should be stored")
+	assert.Equal(t, "/downloads", savedMetadata.Location, "location should be preserved")
 
 	select {
 	case msg := <-msgChan:
@@ -434,4 +423,127 @@ func TestProcessFileMetadata_DifferentMagnet_DryMode_NoDownload(t *testing.T) {
 	default:
 		t.Fatal("notification should still be sent in dry mode when magnet changes")
 	}
+}
+
+func TestProcessFileMetadata_DifferentMagnet_DownloadFails_MagnetReverted(t *testing.T) {
+	oldMagnet := "magnet:?xt=urn:btih:abc123"
+	newMagnet := "magnet:?xt=urn:btih:def456"
+	oldDate := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
+	newDate := time.Date(2026, 3, 22, 12, 59, 0, 0, time.UTC)
+
+	var lastSavedMetadata *tracker.FileMetadata
+	saveCount := 0
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:               "3304959",
+				OriginalUrl:      "https://rutracker.org/forum/viewtopic.php?t=3304959",
+				Magnet:           oldMagnet,
+				Name:             "Test Torrent",
+				TorrentUpdatedAt: oldDate,
+				Location:         "/downloads",
+			}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			saveCount++
+			lastSavedMetadata = &tracker.FileMetadata{
+				ID:               metadata.ID,
+				Magnet:           metadata.Magnet,
+				TorrentUpdatedAt: metadata.TorrentUpdatedAt,
+				Location:         metadata.Location,
+				Name:             metadata.Name,
+			}
+			return nil
+		},
+	}
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:               "3304959",
+				OriginalUrl:      "https://rutracker.org/forum/viewtopic.php?t=3304959",
+				Magnet:           newMagnet,
+				Name:             "Test Torrent v2",
+				TorrentUpdatedAt: newDate,
+			}, nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("download station unavailable")
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+		DryMode:         false,
+	})
+
+	client.processFileMetadata(&tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		Magnet:      oldMagnet,
+	})
+
+	assert.Equal(t, 2, saveCount, "store should be written twice: update then rollback")
+	require.NotNil(t, lastSavedMetadata, "rollback metadata should be saved")
+	assert.Equal(t, oldMagnet, lastSavedMetadata.Magnet, "magnet should be reverted to original")
+	assert.Equal(t, oldDate, lastSavedMetadata.TorrentUpdatedAt, "torrent_updated_at should be reverted")
+}
+
+func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing.T) {
+	storedMagnet := "magnet:?xt=urn:btih:ABC123&tr=http://bt3.t-ru.org/ann"
+	parsedMagnet := "magnet:?xt=urn:btih:abc123&tr=http://bt4.t-ru.org/ann"
+
+	downloadCalled := false
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:       "3304959",
+				Magnet:   storedMagnet,
+				Location: "/downloads",
+			}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			return nil
+		},
+	}
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:     "3304959",
+				Magnet: parsedMagnet,
+			}, nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			downloadCalled = true
+			return nil
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+		DryMode:         false,
+	})
+
+	client.processFileMetadata(&tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	})
+
+	assert.False(t, downloadCalled, "download should not trigger when btih hash matches despite different tracker URLs")
+	assert.Empty(t, msgChan, "no notification when btih hash matches")
 }

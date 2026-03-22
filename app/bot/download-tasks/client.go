@@ -12,6 +12,7 @@ import (
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/utils"
 )
 
 type FileParser interface {
@@ -178,7 +179,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if current.Magnet == updatedMetadata.Magnet {
+	if utils.ExtractBtihHash(current.Magnet) == utils.ExtractBtihHash(updatedMetadata.Magnet) {
 		log.Printf("[INFO] Magnet unchanged, updating metadata silently: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
