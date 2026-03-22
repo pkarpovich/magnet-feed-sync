@@ -199,16 +199,9 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 
 	c.mu.Unlock()
 
-	formatedMsg, err := MetadataToMsg(updatedMetadata)
-	if err != nil {
-		log.Printf("[ERROR] Error formatting metadata: %s", err)
-		return
-	}
-
-	c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
-
 	if c.dryMode {
 		log.Printf("[INFO] Dry mode is enabled, skipping download")
+		c.sendUpdateNotification(updatedMetadata)
 		return
 	}
 
@@ -226,6 +219,16 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	log.Printf("[INFO] Download task created: %s", updatedMetadata.Name)
+	c.sendUpdateNotification(updatedMetadata)
+}
+
+func (c *Client) sendUpdateNotification(metadata *tracker.FileMetadata) {
+	formatedMsg, err := MetadataToMsg(metadata)
+	if err != nil {
+		log.Printf("[ERROR] Error formatting metadata: %s", err)
+		return
+	}
+	c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
 }
 
 func magnetsEqual(a, b string) bool {
