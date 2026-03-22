@@ -98,7 +98,7 @@ Environment variables (see compose.yaml):
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP HTTP endpoint for trace export (optional, tracing disabled when empty)
-- `LOKI_URL`: Grafana Loki push API URL for centralized logging (optional, logs go to stdout only when empty)
+- `LOKI_URL`: Grafana Loki base URL for centralized logging (optional, logs go to stdout only when empty). The code appends `/loki/api/v1/push` automatically
 
 ## Commit Convention
 

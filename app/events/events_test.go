@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"testing"
 
 	tbapi "github.com/OvyFlash/telegram-bot-api"
@@ -17,7 +18,7 @@ type mockBot struct {
 	returnError  error
 }
 
-func (m *mockBot) OnMessage(msg bot.Message, location string) (bool, string, error) {
+func (m *mockBot) OnMessage(_ context.Context, msg bot.Message, location string) (bool, string, error) {
 	m.lastMessage = msg
 	m.lastLocation = location
 	return m.returnSaved, m.returnReply, m.returnError

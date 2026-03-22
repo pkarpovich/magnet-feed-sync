@@ -33,13 +33,13 @@ type mockTaskCreator struct {
 	magnetReturnErr   error
 }
 
-func (m *mockTaskCreator) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
+func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
 	m.lastURL = url
 	m.lastLocation = location
 	return m.returnMeta, m.returnErr
 }
 
-func (m *mockTaskCreator) CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error) {
+func (m *mockTaskCreator) CreateFromMagnet(_ context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error) {
 	m.lastMagnetHash = hash
 	m.lastMagnetMagnet = magnet
 	m.lastMagnetName = name

@@ -32,7 +32,7 @@ var folderCommands = map[string]string{
 }
 
 type Bot interface {
-	OnMessage(msg bot.Message, location string) (bool, string, error)
+	OnMessage(ctx context.Context, msg bot.Message, location string) (bool, string, error)
 	RemoveTask(id string) error
 }
 
@@ -121,7 +121,7 @@ func (tl *TelegramListener) processEvent(update tbapi.Update) error {
 		}
 	}
 
-	saved, replyMsg, err := tl.Bot.OnMessage(msg, location)
+	saved, replyMsg, err := tl.Bot.OnMessage(context.Background(), msg, location)
 	if err != nil {
 		errMsg := tbapi.NewMessage(update.Message.Chat.ID, "💥 Error: "+err.Error())
 		_, err := tl.TbAPI.Send(errMsg)

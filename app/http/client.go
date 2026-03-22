@@ -19,8 +19,8 @@ import (
 )
 
 type TaskCreator interface {
-	CreateFromURL(url, location string) (*tracker.FileMetadata, error)
-	CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error)
+	CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
+	CreateFromMagnet(ctx context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error)
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(ctx context.Context, fileId string)
@@ -176,7 +176,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	var metadata *tracker.FileMetadata
 
 	if req.URL != "" {
-		m, err := c.taskCreator.CreateFromURL(req.URL, req.Location)
+		m, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location)
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
 			if errors.Is(err, tracker.ErrProviderNotFound) {
@@ -199,7 +199,7 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 			location = c.downloadClient.GetDefaultLocation()
 		}
 
-		m, err := c.taskCreator.CreateFromMagnet(hash, req.Magnet, req.Name, location)
+		m, err := c.taskCreator.CreateFromMagnet(ctx, hash, req.Magnet, req.Name, location)
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to create file from magnet", "error", err)
 			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)

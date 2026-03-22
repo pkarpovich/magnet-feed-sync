@@ -56,8 +56,8 @@ func NewClient(ctx *ClientCtx) *Client {
 	}
 }
 
-func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, error) {
-	metadata, err := c.CreateFromURL(msg.Text, location)
+func (c *Client) OnMessage(ctx context.Context, msg bot.Message, location string) (bool, string, error) {
+	metadata, err := c.CreateFromURL(ctx, msg.Text, location)
 	if err != nil {
 		return false, "", err
 	}
@@ -71,18 +71,18 @@ func (c *Client) OnMessage(msg bot.Message, location string) (bool, string, erro
 	return true, replyMsg, nil
 }
 
-func (c *Client) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
-	metadata, err := c.tracker.Parse(context.Background(), url, location)
+func (c *Client) CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error) {
+	metadata, err := c.tracker.Parse(ctx, url, location)
 	if err != nil {
 		return nil, err
 	}
 
-	slog.Debug("metadata", "metadata", metadata)
+	slog.DebugContext(ctx, "metadata", "metadata", metadata)
 
-	return c.createWithLock(metadata)
+	return c.createWithLock(ctx, metadata)
 }
 
-func (c *Client) CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error) {
+func (c *Client) CreateFromMagnet(ctx context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error) {
 	metadata := &tracker.FileMetadata{
 		ID:         hash,
 		Name:       name,
@@ -91,10 +91,10 @@ func (c *Client) CreateFromMagnet(hash, magnet, name, location string) (*tracker
 		LastSyncAt: time.Now(),
 	}
 
-	return c.createWithLock(metadata)
+	return c.createWithLock(ctx, metadata)
 }
 
-func (c *Client) createWithLock(metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {
+func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {
 	c.mu.Lock()
 
 	existing, getErr := c.store.GetById(metadata.ID)
@@ -118,22 +118,22 @@ func (c *Client) createWithLock(metadata *tracker.FileMetadata) (*tracker.FileMe
 
 	err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
-		c.rollbackCreate(metadata.ID, existing, hadActiveRow)
+		c.rollbackCreate(ctx, metadata.ID, existing, hadActiveRow)
 		return nil, err
 	}
 
-	slog.Info("download task created", "name", metadata.Name)
+	slog.InfoContext(ctx, "download task created", "name", metadata.Name)
 
 	return metadata, nil
 }
 
-func (c *Client) rollbackCreate(id string, existing *tracker.FileMetadata, hadActiveRow bool) {
+func (c *Client) rollbackCreate(ctx context.Context, id string, existing *tracker.FileMetadata, hadActiveRow bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	current, err := c.store.GetById(id)
 	if err != nil {
-		slog.Error("failed to read task for rollback", "error", err)
+		slog.ErrorContext(ctx, "failed to read task for rollback", "error", err)
 		return
 	}
 
@@ -143,11 +143,11 @@ func (c *Client) rollbackCreate(id string, existing *tracker.FileMetadata, hadAc
 
 	if hadActiveRow {
 		if restoreErr := c.store.CreateOrReplace(existing); restoreErr != nil {
-			slog.Error("failed to restore previous file after download error", "error", restoreErr)
+			slog.ErrorContext(ctx, "failed to restore previous file after download error", "error", restoreErr)
 		}
 	} else {
 		if removeErr := c.store.Remove(id); removeErr != nil {
-			slog.Error("failed to remove file after download error", "error", removeErr)
+			slog.ErrorContext(ctx, "failed to remove file after download error", "error", removeErr)
 		}
 	}
 }
@@ -164,7 +164,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.Error("error parsing metadata", "error", err)
+		slog.ErrorContext(ctx, "error parsing metadata", "error", err)
 		return
 	}
 
@@ -175,7 +175,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		c.mu.Unlock()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.Error("error re-reading metadata", "error", err)
+		slog.ErrorContext(ctx, "error re-reading metadata", "error", err)
 		return
 	}
 
@@ -190,19 +190,19 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata.LastSyncAt = time.Now()
 	if magnetsEqual(current.Magnet, updatedMetadata.Magnet) {
-		slog.Info("magnet unchanged, updating metadata silently", "id", fileMetadata.ID)
+		slog.InfoContext(ctx, "magnet unchanged, updating metadata silently", "id", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-			slog.Error("error updating metadata", "error", err)
+			slog.ErrorContext(ctx, "error updating metadata", "error", err)
 		}
 
 		c.mu.Unlock()
 		return
 	}
-	slog.Info("magnet changed, re-downloading", "id", fileMetadata.ID)
+	slog.InfoContext(ctx, "magnet changed, re-downloading", "id", fileMetadata.ID)
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-		slog.Error("error updating metadata", "error", err)
+		slog.ErrorContext(ctx, "error updating metadata", "error", err)
 		c.mu.Unlock()
 		return
 	}
@@ -210,25 +210,25 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	c.mu.Unlock()
 
 	if c.dryMode {
-		slog.Info("dry mode is enabled, skipping download")
+		slog.InfoContext(ctx, "dry mode is enabled, skipping download")
 		c.sendUpdateNotification(updatedMetadata)
 		return
 	}
 
 	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
-		slog.Error("error creating download task", "error", err)
+		slog.ErrorContext(ctx, "error creating download task", "error", err)
 
 		c.mu.Lock()
 		updatedMetadata.Magnet = current.Magnet
 		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
 		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
-			slog.Error("error reverting metadata after download failure", "error", storeErr)
+			slog.ErrorContext(ctx, "error reverting metadata after download failure", "error", storeErr)
 		}
 		c.mu.Unlock()
 		return
 	}
 
-	slog.Info("download task created", "name", updatedMetadata.Name)
+	slog.InfoContext(ctx, "download task created", "name", updatedMetadata.Name)
 	c.sendUpdateNotification(updatedMetadata)
 }
 
@@ -259,13 +259,13 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	ctx, span := otel.Tracer("download-tasks").Start(ctx, "CheckForUpdates")
 	defer span.End()
 
-	slog.Info("checking for updates")
+	slog.InfoContext(ctx, "checking for updates")
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.Error("error getting files metadata", "error", err)
+		slog.ErrorContext(ctx, "error getting files metadata", "error", err)
 		return
 	}
 
@@ -300,7 +300,7 @@ func (c *Client) UpdateTaskLocation(id, location string) error {
 func (c *Client) CheckFileForUpdates(ctx context.Context, fileId string) {
 	metadata, err := c.store.GetById(fileId)
 	if err != nil {
-		slog.Error("error getting metadata", "error", err)
+		slog.ErrorContext(ctx, "error getting metadata", "error", err)
 		return
 	}
 
