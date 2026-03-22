@@ -23,8 +23,8 @@ type TaskCreator interface {
 	CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error)
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
-	CheckFileForUpdates(fileId string)
-	CheckForUpdates()
+	CheckFileForUpdates(ctx context.Context, fileId string)
+	CheckForUpdates(ctx context.Context)
 }
 
 type FileStore interface {
@@ -234,25 +234,24 @@ func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Client) handleRefreshFile(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/{fileId}/refresh")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/{fileId}/refresh")
 	defer span.End()
-
 
 	w.Header().Set("Content-Type", "application/json")
 
 	fileId := r.PathValue("fileId")
-	c.taskCreator.CheckFileForUpdates(fileId)
+	c.taskCreator.CheckFileForUpdates(ctx, fileId)
 
 	w.WriteHeader(http.StatusOK)
 }
 
 func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
-	_, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/refresh")
+	ctx, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/refresh")
 	defer span.End()
 
 	w.Header().Set("Content-Type", "application/json")
 
-	c.taskCreator.CheckForUpdates()
+	c.taskCreator.CheckForUpdates(ctx)
 
 	w.WriteHeader(http.StatusOK)
 }

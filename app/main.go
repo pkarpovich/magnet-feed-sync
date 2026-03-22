@@ -105,7 +105,7 @@ func run(cfg *config.Config) error {
 	}
 
 	go func() {
-		err = s.Start(downloadTasksClient.CheckForUpdates)
+		err = s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) })
 		if err != nil {
 			slog.Error("error starting scheduler", "error", err)
 			os.Exit(1)

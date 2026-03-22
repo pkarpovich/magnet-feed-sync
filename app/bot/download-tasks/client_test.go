@@ -702,7 +702,7 @@ func TestCheckForUpdates_CreatesTracingSpan(t *testing.T) {
 		Store:           store,
 	})
 
-	client.CheckForUpdates()
+	client.CheckForUpdates(context.Background())
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
@@ -723,5 +723,5 @@ func TestCheckForUpdates_NoopTracingNoCrash(t *testing.T) {
 		Store:           store,
 	})
 
-	client.CheckForUpdates()
+	client.CheckForUpdates(context.Background())
 }

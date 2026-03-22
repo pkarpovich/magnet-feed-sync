@@ -10,6 +10,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -27,17 +28,26 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 
 	body, err := fetchPage(ctx, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch rutracker page: %w", err)
+		err = fmt.Errorf("failed to fetch rutracker page: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse rutracker HTML: %w", err)
+		err = fmt.Errorf("failed to parse rutracker HTML: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	magnet := p.getMagnetLink(doc)
 	if magnet == "" {
-		return nil, fmt.Errorf("no magnet link found in rutracker page")
+		err = fmt.Errorf("no magnet link found in rutracker page")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	return &Result{

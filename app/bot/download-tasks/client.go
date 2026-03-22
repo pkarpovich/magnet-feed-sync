@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
 	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker"
@@ -161,6 +162,8 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		slog.Error("error parsing metadata", "error", err)
 		return
 	}
@@ -170,6 +173,8 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	current, err := c.store.GetById(fileMetadata.ID)
 	if err != nil {
 		c.mu.Unlock()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		slog.Error("error re-reading metadata", "error", err)
 		return
 	}
@@ -250,14 +255,16 @@ func magnetsEqual(a, b string) bool {
 	return a == b
 }
 
-func (c *Client) CheckForUpdates() {
-	ctx, span := otel.Tracer("download-tasks").Start(context.Background(), "CheckForUpdates")
+func (c *Client) CheckForUpdates(ctx context.Context) {
+	ctx, span := otel.Tracer("download-tasks").Start(ctx, "CheckForUpdates")
 	defer span.End()
 
 	slog.Info("checking for updates")
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		slog.Error("error getting files metadata", "error", err)
 		return
 	}
@@ -290,14 +297,14 @@ func (c *Client) UpdateTaskLocation(id, location string) error {
 	return c.store.CreateOrReplace(file)
 }
 
-func (c *Client) CheckFileForUpdates(fileId string) {
+func (c *Client) CheckFileForUpdates(ctx context.Context, fileId string) {
 	metadata, err := c.store.GetById(fileId)
 	if err != nil {
 		slog.Error("error getting metadata", "error", err)
 		return
 	}
 
-	c.processFileMetadata(context.Background(), metadata)
+	c.processFileMetadata(ctx, metadata)
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {

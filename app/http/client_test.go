@@ -49,8 +49,8 @@ func (m *mockTaskCreator) CreateFromMagnet(hash, magnet, name, location string) 
 
 func (m *mockTaskCreator) RemoveTask(id string) error              { return nil }
 func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error { return nil }
-func (m *mockTaskCreator) CheckFileForUpdates(fileId string)       {}
-func (m *mockTaskCreator) CheckForUpdates()                        {}
+func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
+func (m *mockTaskCreator) CheckForUpdates(_ context.Context)               {}
 
 type mockFileStore struct {
 	existingFile *tracker.FileMetadata

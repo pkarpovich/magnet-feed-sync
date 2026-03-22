@@ -11,6 +11,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/mmcdole/gofeed"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -28,17 +29,26 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 
 	body, err := fetchPage(ctx, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch nnm page: %w", err)
+		err = fmt.Errorf("failed to fetch nnm page: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse nnm HTML: %w", err)
+		err = fmt.Errorf("failed to parse nnm HTML: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	magnet := p.getMagnetLink(doc)
 	if magnet == "" {
-		return nil, fmt.Errorf("no magnet link found in nnm page")
+		err = fmt.Errorf("no magnet link found in nnm page")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	return &Result{
