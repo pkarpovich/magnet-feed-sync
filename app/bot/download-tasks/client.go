@@ -178,17 +178,17 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	updatedMetadata.LastSyncAt = time.Now()
-	if current.TorrentUpdatedAt.Equal(updatedMetadata.TorrentUpdatedAt) {
-		log.Printf("[INFO] Metadata is up to date: %s", fileMetadata.ID)
+	if current.Magnet == updatedMetadata.Magnet {
+		log.Printf("[INFO] Magnet unchanged, updating metadata silently: %s", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-			log.Printf("[ERROR] Error updating last sync at: %s", err)
+			log.Printf("[ERROR] Error updating metadata: %s", err)
 		}
 
 		c.mu.Unlock()
 		return
 	}
-	log.Printf("[INFO] Metadata is outdated: %s", fileMetadata.ID)
+	log.Printf("[INFO] Magnet changed, re-downloading: %s", fileMetadata.ID)
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
 		log.Printf("[ERROR] Error updating metadata: %s", err)
@@ -197,8 +197,6 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 	}
 
 	c.mu.Unlock()
-
-	log.Printf("[INFO] Metadata updated: %s", fileMetadata.ID)
 
 	formatedMsg, err := MetadataToMsg(updatedMetadata)
 	if err != nil {
@@ -217,6 +215,7 @@ func (c *Client) processFileMetadata(fileMetadata *tracker.FileMetadata) {
 		log.Printf("[ERROR] Error creating download task: %s", err)
 
 		c.mu.Lock()
+		updatedMetadata.Magnet = current.Magnet
 		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
 		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
 			log.Printf("[ERROR] Error reverting metadata after download failure: %s", storeErr)

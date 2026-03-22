@@ -53,15 +53,15 @@
 - [x] run tests — must pass before next task
 
 ### Task 3: Fix processFileMetadata — compare magnet links
-- [ ] in `processFileMetadata`: after parsing updated metadata, compare `current.Magnet == updatedMetadata.Magnet`
-- [ ] if magnets match: update metadata in DB (date, name, comment, last_sync_at) without re-download or notification
-- [ ] if magnets differ: keep existing behavior (re-download + Telegram notification)
-- [ ] write tests for `processFileMetadata`:
+- [x] in `processFileMetadata`: after parsing updated metadata, compare `current.Magnet == updatedMetadata.Magnet`
+- [x] if magnets match: update metadata in DB (date, name, comment, last_sync_at) without re-download or notification
+- [x] if magnets differ: keep existing behavior (re-download + Telegram notification)
+- [x] write tests for `processFileMetadata`:
   - same magnet, different date → no re-download, no notification, metadata updated in DB
   - different magnet → re-download triggered, notification sent
   - same magnet, same date → metadata updated (last_sync_at), no re-download
   - parse error → no crash, logged
-- [ ] run tests — must pass before next task
+- [x] run tests — must pass before next task
 
 ### Task 4: Verify acceptance criteria
 - [ ] verify page t=3304959 fixture parses with stable date
