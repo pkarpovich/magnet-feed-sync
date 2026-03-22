@@ -46,12 +46,12 @@
 - [x] run observability tests — must pass before next task
 
 ### Task 2: Add config and wire observability in main.go
-- [ ] add `OtelServiceName`, `OtelEndpoint`, `LokiURL` fields to `config.Config` in `app/config/config.go`
-- [ ] wire `observability.SetupLogging()` and `observability.SetupTracing()` in `app/main.go`
-- [ ] replace all `log.Printf`/`log.Fatalf` in `main.go` with `slog.Info`/`slog.Error`
-- [ ] replace `log.Printf` in `config/config.go` with `slog.Warn`
-- [ ] write test for new config fields (env parsing)
-- [ ] run tests — must pass before next task
+- [x] add `OtelServiceName`, `OtelEndpoint`, `LokiURL` fields to `config.Config` in `app/config/config.go`
+- [x] wire `observability.SetupLogging()` and `observability.SetupTracing()` in `app/main.go`
+- [x] replace all `log.Printf`/`log.Fatalf` in `main.go` with `slog.Info`/`slog.Error`
+- [x] replace `log.Printf` in `config/config.go` with `slog.Warn`
+- [x] write test for new config fields (env parsing)
+- [x] run tests — must pass before next task
 
 ### Task 3: Migrate core business logic logging to slog
 - [ ] migrate `app/bot/download-tasks/client.go` (19 calls): replace `log.Printf("[LEVEL]...")` → `slog.Level("msg", attrs...)`
