@@ -1,11 +1,15 @@
 package download_tasks
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
 
@@ -17,7 +21,7 @@ type mockFileParser struct {
 	parseFunc func(url, location string) (*tracker.FileMetadata, error)
 }
 
-func (m *mockFileParser) Parse(url, location string) (*tracker.FileMetadata, error) {
+func (m *mockFileParser) Parse(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
 	return m.parseFunc(url, location)
 }
 
@@ -120,7 +124,7 @@ func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) 
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -189,7 +193,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -261,7 +265,7 @@ func TestProcessFileMetadata_SameMagnetSameDate_MetadataUpdated(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -291,7 +295,7 @@ func TestProcessFileMetadata_ParseError_NoCrash(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -314,7 +318,7 @@ func TestProcessFileMetadata_EmptyOriginalUrl_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "",
 	})
@@ -357,7 +361,7 @@ func TestProcessFileMetadata_DeletedTask_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -409,7 +413,7 @@ func TestProcessFileMetadata_DifferentMagnet_DryMode_NoDownload(t *testing.T) {
 		DryMode:         true,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -484,7 +488,7 @@ func TestProcessFileMetadata_DifferentMagnet_DownloadFails_MagnetReverted(t *tes
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -539,7 +543,7 @@ func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -591,7 +595,7 @@ func TestProcessFileMetadata_NoBtihHash_DifferentMagnets_RedownloadTriggered(t *
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
 		ID:          "test-v2",
 		OriginalUrl: "https://example.com/topic/123",
 	})
@@ -620,4 +624,108 @@ func TestMagnetsEqual(t *testing.T) {
 			assert.Equal(t, tt.expected, magnetsEqual(tt.a, tt.b))
 		})
 	}
+}
+
+func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	orig := otel.GetTracerProvider()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+	})
+	return exporter
+}
+
+func TestProcessFileMetadata_CreatesTracingSpan(t *testing.T) {
+	exporter := setupTestTracer(t)
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:     "123",
+				Magnet: "magnet:?xt=urn:btih:abc123",
+			}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:       "123",
+				Magnet:   "magnet:?xt=urn:btih:abc123",
+				Location: "/downloads",
+			}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			return nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+	})
+
+	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+		ID:          "123",
+		OriginalUrl: "https://example.com/topic/123",
+	})
+
+	spans := exporter.GetSpans()
+	require.GreaterOrEqual(t, len(spans), 1)
+
+	spanNames := make([]string, len(spans))
+	for i, s := range spans {
+		spanNames[i] = s.Name
+	}
+	assert.Contains(t, spanNames, "processFileMetadata")
+}
+
+func TestCheckForUpdates_CreatesTracingSpan(t *testing.T) {
+	exporter := setupTestTracer(t)
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return nil, nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Store:           store,
+	})
+
+	client.CheckForUpdates(context.Background())
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "CheckForUpdates", spans[0].Name)
+}
+
+func TestCheckForUpdates_NoopTracingNoCrash(t *testing.T) {
+	otel.SetTracerProvider(otel.GetTracerProvider())
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return nil, nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Store:           store,
+	})
+
+	client.CheckForUpdates(context.Background())
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -37,7 +37,7 @@ func fetchPage(ctx context.Context, pageURL string) ([]byte, error) {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			log.Printf("[ERROR] error closing response body: %v", err)
+			slog.Error("error closing response body", "error", err)
 		}
 	}()
 

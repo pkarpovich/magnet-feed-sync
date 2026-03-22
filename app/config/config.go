@@ -1,9 +1,10 @@
 package config
 
 import (
+	"log/slog"
+
 	"github.com/ilyakaznacheev/cleanenv"
 	"github.com/joho/godotenv"
-	"log"
 )
 
 type SynologyConfig struct {
@@ -35,20 +36,23 @@ type JackettConfig struct {
 }
 
 type Config struct {
-	Synology       SynologyConfig
-	QBittorrent    QBittorrentConfig
-	Telegram       TelegramConfig
-	Http           HttpConfig
-	Jackett        JackettConfig
-	DownloadClient string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
-	DryMode        bool   `env:"DRY_MODE" env-default:"false"`
-	Cron           string `env:"CRON" env-default:"0 * * * *"`
+	Synology        SynologyConfig
+	QBittorrent     QBittorrentConfig
+	Telegram        TelegramConfig
+	Http            HttpConfig
+	Jackett         JackettConfig
+	DownloadClient  string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
+	DryMode         bool   `env:"DRY_MODE" env-default:"false"`
+	Cron            string `env:"CRON" env-default:"0 * * * *"`
+	OtelServiceName string `env:"OTEL_SERVICE_NAME" env-default:"magnet-feed-sync"`
+	OtelEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	LokiURL         string `env:"LOKI_URL"`
 }
 
 func Init() (*Config, error) {
 	err := godotenv.Load()
 	if err != nil {
-		log.Printf("[WARN] error while loading .env file: %v", err)
+		slog.Warn("error while loading .env file", "error", err)
 	}
 
 	var cfg Config

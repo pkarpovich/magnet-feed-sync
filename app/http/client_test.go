@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
@@ -29,13 +33,13 @@ type mockTaskCreator struct {
 	magnetReturnErr   error
 }
 
-func (m *mockTaskCreator) CreateFromURL(url, location string) (*tracker.FileMetadata, error) {
+func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
 	m.lastURL = url
 	m.lastLocation = location
 	return m.returnMeta, m.returnErr
 }
 
-func (m *mockTaskCreator) CreateFromMagnet(hash, magnet, name, location string) (*tracker.FileMetadata, error) {
+func (m *mockTaskCreator) CreateFromMagnet(_ context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error) {
 	m.lastMagnetHash = hash
 	m.lastMagnetMagnet = magnet
 	m.lastMagnetName = name
@@ -45,8 +49,8 @@ func (m *mockTaskCreator) CreateFromMagnet(hash, magnet, name, location string) 
 
 func (m *mockTaskCreator) RemoveTask(id string) error              { return nil }
 func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error { return nil }
-func (m *mockTaskCreator) CheckFileForUpdates(fileId string)       {}
-func (m *mockTaskCreator) CheckForUpdates()                        {}
+func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
+func (m *mockTaskCreator) CheckForUpdates(_ context.Context)               {}
 
 type mockFileStore struct {
 	existingFile *tracker.FileMetadata
@@ -254,5 +258,74 @@ func TestHandleCreateFile_MagnetInvalidNoHash(t *testing.T) {
 	c.handleCreateFile(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	orig := otel.GetTracerProvider()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(orig)
+	})
+	return exporter
+}
+
+func TestHTTPHandlers_CreateTracingSpans(t *testing.T) {
+	tests := []struct {
+		name         string
+		method       string
+		path         string
+		handler      func(*Client) http.HandlerFunc
+		expectedSpan string
+	}{
+		{"handleFiles", http.MethodGet, "/api/files", func(c *Client) http.HandlerFunc { return c.handleFiles }, "GET /api/files"},
+		{"handleCreateFile", http.MethodPost, "/api/files", func(c *Client) http.HandlerFunc { return c.handleCreateFile }, "POST /api/files"},
+		{"handleGetFileLocations", http.MethodGet, "/api/file-locations", func(c *Client) http.HandlerFunc { return c.handleGetFileLocations }, "GET /api/file-locations"},
+		{"healthHandler", http.MethodGet, "/api/health", func(c *Client) http.HandlerFunc { return c.healthHandler }, "GET /api/health"},
+		{"handleRefreshAllFiles", http.MethodPatch, "/api/files/refresh", func(c *Client) http.HandlerFunc { return c.handleRefreshAllFiles }, "PATCH /api/files/refresh"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := setupTestTracer(t)
+
+			store := &mockFileStore{}
+			creator := &mockTaskCreator{}
+			dlClient := &mockDownloadClient{}
+			c := NewClient(config.HttpConfig{}, store, creator, dlClient)
+
+			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString("{}"))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			tt.handler(c)(w, req)
+
+			spans := exporter.GetSpans()
+			require.GreaterOrEqual(t, len(spans), 1)
+
+			spanNames := make([]string, len(spans))
+			for i, s := range spans {
+				spanNames[i] = s.Name
+			}
+			assert.Contains(t, spanNames, tt.expectedSpan)
+		})
+	}
+}
+
+func TestHTTPHandlers_NoopTracingNoCrash(t *testing.T) {
+	otel.SetTracerProvider(otel.GetTracerProvider())
+
+	store := &mockFileStore{}
+	creator := &mockTaskCreator{}
+	dlClient := &mockDownloadClient{}
+	c := NewClient(config.HttpConfig{}, store, creator, dlClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	w := httptest.NewRecorder()
+
+	c.handleFiles(w, req)
 }
 

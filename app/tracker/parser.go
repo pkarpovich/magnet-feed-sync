@@ -40,13 +40,13 @@ func NewParser(downloadClient downloadClient.Client, providerList ...providers.P
 	}
 }
 
-func (p *Parser) Parse(url string, location string) (*FileMetadata, error) {
+func (p *Parser) Parse(ctx context.Context, url string, location string) (*FileMetadata, error) {
 	provider := p.getProvider(url)
 	if provider == nil {
 		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, url)
 	}
 
-	result, err := provider.Parse(context.Background(), url)
+	result, err := provider.Parse(ctx, url)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/types"
 	"net/http"
@@ -66,7 +66,7 @@ func (c *Client) createSession() (*Session, error) {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("Error closing response body: %v", err)
+			slog.Error("failed to close response body", "error", err)
 		}
 	}()
 
@@ -123,7 +123,7 @@ func (c *Client) CreateDownloadTask(magnet, destination string) error {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("Error closing response body: %v", err)
+			slog.Error("failed to close response body", "error", err)
 		}
 	}()
 
@@ -131,24 +131,23 @@ func (c *Client) CreateDownloadTask(magnet, destination string) error {
 	if err != nil {
 		return err
 	}
-	respBody := string(respBodyBytes)
-	fmt.Println(respBody)
+	slog.Debug("download task response", "body", string(respBodyBytes))
 
 	return nil
 }
 
 func (c *Client) SetLocation(taskID, location string) error {
-	log.Printf("[WARN] SetLocation not implemented for DownloadStation")
+	slog.Warn("SetLocation not implemented for DownloadStation")
 	return nil
 }
 
 func (c *Client) GetLocations() []types.Location {
-	log.Printf("[WARN] GetLocations not implemented for DownloadStation")
+	slog.Warn("GetLocations not implemented for DownloadStation")
 	return nil
 }
 
 func (c *Client) GetHashByMagnet(magnet string) (string, error) {
-	log.Printf("[WARN] GetHashByMagnet not implemented for DownloadStation")
+	slog.Warn("GetHashByMagnet not implemented for DownloadStation")
 	return "", nil
 }
 

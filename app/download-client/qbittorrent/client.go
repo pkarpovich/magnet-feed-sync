@@ -3,7 +3,7 @@ package qbittorrent
 import (
 	"fmt"
 	qbt "github.com/NullpointerW/go-qbittorrent-apiv2"
-	"log"
+	"log/slog"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/types"
 	"net/url"
@@ -54,7 +54,7 @@ func (c *Client) GetHashByMagnet(magnet string) (string, error) {
 	for _, torrent := range torrents {
 		cleanMagnet, err := removeDnFromMagnet(torrent.MagnetURI)
 		if err != nil {
-			log.Printf("failed to remove dn from magnet: %s", err)
+			slog.Error("failed to remove dn from magnet", "error", err)
 			continue
 		}
 

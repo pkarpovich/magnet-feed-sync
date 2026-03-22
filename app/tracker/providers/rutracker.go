@@ -3,12 +3,14 @@ package providers
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -21,19 +23,31 @@ func (p *RutrackerProvider) CanHandle(u string) bool {
 }
 
 func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result, error) {
+	ctx, span := otel.Tracer("tracker").Start(ctx, "RutrackerProvider.Parse")
+	defer span.End()
+
 	body, err := fetchPage(ctx, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch rutracker page: %w", err)
+		err = fmt.Errorf("failed to fetch rutracker page: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse rutracker HTML: %w", err)
+		err = fmt.Errorf("failed to parse rutracker HTML: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	magnet := p.getMagnetLink(doc)
 	if magnet == "" {
-		return nil, fmt.Errorf("no magnet link found in rutracker page")
+		err = fmt.Errorf("no magnet link found in rutracker page")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	return &Result{
@@ -48,7 +62,7 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 func (p *RutrackerProvider) getMagnetLink(doc *goquery.Document) string {
 	magnetLink, exists := doc.Find("a.magnet-link").Attr("href")
 	if !exists {
-		log.Printf("[WARN] magnet link not found in rutracker page")
+		slog.Warn("magnet link not found in rutracker page")
 	}
 	return magnetLink
 }
@@ -69,14 +83,14 @@ func (p *RutrackerProvider) getTitle(doc *goquery.Document) string {
 		return strings.TrimSpace(attempt3)
 	}
 
-	log.Printf("[WARN] title not found in rutracker page")
+	slog.Warn("title not found in rutracker page")
 	return ""
 }
 
 func (p *RutrackerProvider) getID(originalUrl string) string {
 	u, err := url.Parse(originalUrl)
 	if err != nil {
-		log.Printf("[ERROR] Failed to parse rutracker url: %s, %v", originalUrl, err)
+		slog.Error("failed to parse rutracker url", "url", originalUrl, "error", err)
 		return ""
 	}
 	return u.Query().Get("t")
@@ -102,7 +116,7 @@ func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time 
 	if len(editedDate) > 0 {
 		date, err := utils.ParseRussianDate(editedDate)
 		if err != nil {
-			log.Printf("[ERROR] failed to parse rutracker torrent edited date: %s, %v", editedDate, err)
+			slog.Error("failed to parse rutracker torrent edited date", "date", editedDate, "error", err)
 		} else {
 			return date
 		}
@@ -112,17 +126,16 @@ func (p *RutrackerProvider) getLastUpdatedDate(doc *goquery.Document) time.Time 
 	if len(postDateText) > 0 {
 		date, err := utils.ParseRussianDate(postDateText)
 		if err != nil {
-			log.Printf("[ERROR] failed to parse rutracker torrent post date: %s, %v", postDateText, err)
+			slog.Error("failed to parse rutracker torrent post date", "date", postDateText, "error", err)
 		} else {
 			return date
 		}
 	}
 
-	log.Printf("[WARN] no date found in rutracker page")
+	slog.Warn("no date found in rutracker page")
 	return time.Time{}
 }
 
 func (p *RutrackerProvider) getLastComment(doc *goquery.Document) string {
-	log.Printf("[WARN] comments not supported in rutracker page")
 	return ""
 }

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/signal"
@@ -18,6 +18,7 @@ import (
 	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
+	"magnet-feed-sync/app/observability"
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
@@ -25,26 +26,42 @@ import (
 )
 
 func main() {
-	log.Printf("[INFO] Starting app")
-
 	cfg, err := config.Init()
 	if err != nil {
-		log.Fatalf("[ERROR] Error reading config: %s", err)
+		slog.Error("error reading config", "error", err)
+		os.Exit(1)
 	}
 
+	logger, cleanupLog := observability.SetupLogging(cfg.OtelServiceName, cfg.LokiURL)
+	defer cleanupLog()
+	slog.SetDefault(logger)
+
+	slog.Info("starting app")
+
 	if cfg.DryMode {
-		log.Printf("[WARN] Dry mode is enabled")
+		slog.Warn("dry mode is enabled")
 	}
 
 	if err := run(cfg); err != nil {
-		log.Fatalf("[ERROR] Error running app: %s", err)
+		slog.Error("error running app", "error", err)
+		cleanupLog()
+		os.Exit(1)
 	}
-
 }
 
 func run(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	shutdownTracing, err := observability.SetupTracing(ctx, cfg.OtelServiceName, cfg.OtelEndpoint)
+	if err != nil {
+		return fmt.Errorf("failed to setup tracing: %w", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = shutdownTracing(shutdownCtx)
+	}()
 
 	done := make(chan struct{})
 
@@ -59,7 +76,7 @@ func run(cfg *config.Config) error {
 	}
 	if cfg.Jackett.URL != "" {
 		redacted := redactURL(cfg.Jackett.URL)
-		log.Printf("[INFO] Jackett provider enabled: %s", redacted)
+		slog.Info("jackett provider enabled", "url", redacted)
 		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
 	}
 	t := tracker.NewParser(dClient, providerList...)
@@ -88,10 +105,10 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
 
+	schedulerErr := make(chan error, 1)
 	go func() {
-		err = s.Start(downloadTasksClient.CheckForUpdates)
-		if err != nil {
-			log.Fatalf("[ERROR] Error starting scheduler: %s", err)
+		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) }); err != nil {
+			schedulerErr <- err
 		}
 	}()
 
@@ -113,25 +130,31 @@ func run(cfg *config.Config) error {
 
 	go func() {
 		if err := tgListener.Do(); err != nil {
-			log.Printf("[ERROR] error in telegram listener: %s", err)
+			slog.Error("error in telegram listener", "error", err)
 			panic(err)
 		}
 	}()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
+
+	var runErr error
+	select {
+	case <-sigChan:
+	case err := <-schedulerErr:
+		runErr = fmt.Errorf("scheduler failed: %w", err)
+	}
 
 	cancel()
 
 	select {
 	case <-done:
-		log.Println("[INFO] Application shutdown completed")
+		slog.Info("application shutdown completed")
 	case <-time.After(15 * time.Second):
-		log.Println("[INFO] Application shutdown timed out")
+		slog.Info("application shutdown timed out")
 	}
 
-	return nil
+	return runErr
 }
 
 func redactURL(rawURL string) string {

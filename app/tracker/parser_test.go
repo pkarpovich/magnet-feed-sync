@@ -65,7 +65,7 @@ func TestParser_Parse(t *testing.T) {
 			&mockProvider{canHandleResult: true, result: mockResult},
 		)
 
-		metadata, err := p.Parse("https://example.com/test", "/custom")
+		metadata, err := p.Parse(context.Background(),"https://example.com/test", "/custom")
 		require.NoError(t, err)
 		assert.Equal(t, "123", metadata.ID)
 		assert.Equal(t, "Test Title", metadata.Name)
@@ -82,7 +82,7 @@ func TestParser_Parse(t *testing.T) {
 			&mockProvider{canHandleResult: true, result: mockResult},
 		)
 
-		metadata, err := p.Parse("https://example.com/test", "")
+		metadata, err := p.Parse(context.Background(),"https://example.com/test", "")
 		require.NoError(t, err)
 		assert.Equal(t, "/default", metadata.Location)
 	})
@@ -93,7 +93,7 @@ func TestParser_Parse(t *testing.T) {
 			&mockProvider{canHandleResult: false},
 		)
 
-		_, err := p.Parse("https://unknown.com/test", "")
+		_, err := p.Parse(context.Background(),"https://unknown.com/test", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "provider not found")
 	})
@@ -104,7 +104,7 @@ func TestParser_Parse(t *testing.T) {
 			&mockProvider{canHandleResult: true, err: fmt.Errorf("parse failed")},
 		)
 
-		_, err := p.Parse("https://example.com/test", "")
+		_, err := p.Parse(context.Background(),"https://example.com/test", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "parse failed")
 	})
@@ -150,7 +150,7 @@ func TestParser_LocationParameter(t *testing.T) {
 				&mockProvider{canHandleResult: true, result: mockResult},
 			)
 
-			metadata, err := p.Parse("https://example.com/test", tt.inputLocation)
+			metadata, err := p.Parse(context.Background(),"https://example.com/test", tt.inputLocation)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedLocation, metadata.Location)
 		})
@@ -175,7 +175,7 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 			},
 		)
 
-		metadata, err := p.Parse(jackettURL, "/downloads")
+		metadata, err := p.Parse(context.Background(),jackettURL, "/downloads")
 		require.NoError(t, err)
 		assert.Equal(t, trackerURL, metadata.OriginalUrl)
 		assert.Equal(t, "123", metadata.ID)
@@ -198,7 +198,7 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 			},
 		)
 
-		metadata, err := p.Parse(inputURL, "")
+		metadata, err := p.Parse(context.Background(),inputURL, "")
 		require.NoError(t, err)
 		assert.Equal(t, inputURL, metadata.OriginalUrl)
 	})
@@ -219,7 +219,7 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 			},
 		)
 
-		metadata, err := p.Parse(inputURL, "")
+		metadata, err := p.Parse(context.Background(),inputURL, "")
 		require.NoError(t, err)
 		assert.Equal(t, "", metadata.OriginalUrl)
 	})
@@ -239,7 +239,7 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 			},
 		)
 
-		metadata, err := p.Parse(rutrackerURL, "")
+		metadata, err := p.Parse(context.Background(),rutrackerURL, "")
 		require.NoError(t, err)
 		assert.Equal(t, rutrackerURL, metadata.OriginalUrl)
 	})
@@ -256,7 +256,7 @@ func TestParser_ProviderSelection(t *testing.T) {
 			&mockProvider{canHandleResult: true, result: result2},
 		)
 
-		metadata, err := p.Parse("https://example.com/test", "")
+		metadata, err := p.Parse(context.Background(),"https://example.com/test", "")
 		require.NoError(t, err)
 		assert.Equal(t, "from-provider-1", metadata.ID)
 	})
@@ -268,7 +268,7 @@ func TestParser_ProviderSelection(t *testing.T) {
 			&mockProvider{canHandleResult: true, result: result2},
 		)
 
-		metadata, err := p.Parse("https://example.com/test", "")
+		metadata, err := p.Parse(context.Background(),"https://example.com/test", "")
 		require.NoError(t, err)
 		assert.Equal(t, "from-provider-2", metadata.ID)
 	})
