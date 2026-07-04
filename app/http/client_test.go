@@ -208,6 +208,25 @@ func TestHandleCreateDownload_HTTPSource(t *testing.T) {
 	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
 }
 
+func TestHandleCreateDownload_PlainHTTPSource(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
+
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+
+	body := `{"source":"http://tracker.local/dl/x.torrent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
+	assert.Equal(t, "http://tracker.local/dl/x.torrent", creator.lastDownloadSource)
+	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
+}
+
 func TestHandleCreateDownload_EmptySource(t *testing.T) {
 	creator := &mockTaskCreator{}
 	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
@@ -291,6 +310,7 @@ func TestHTTPHandlers_CreateTracingSpans(t *testing.T) {
 	}{
 		{"handleFiles", http.MethodGet, "/api/files", func(c *Client) http.HandlerFunc { return c.handleFiles }, "GET /api/files"},
 		{"handleCreateFile", http.MethodPost, "/api/files", func(c *Client) http.HandlerFunc { return c.handleCreateFile }, "POST /api/files"},
+		{"handleCreateDownload", http.MethodPost, "/api/downloads", func(c *Client) http.HandlerFunc { return c.handleCreateDownload }, "POST /api/downloads"},
 		{"handleGetFileLocations", http.MethodGet, "/api/file-locations", func(c *Client) http.HandlerFunc { return c.handleGetFileLocations }, "GET /api/file-locations"},
 		{"healthHandler", http.MethodGet, "/api/health", func(c *Client) http.HandlerFunc { return c.healthHandler }, "GET /api/health"},
 		{"handleRefreshAllFiles", http.MethodPatch, "/api/files/refresh", func(c *Client) http.HandlerFunc { return c.handleRefreshAllFiles }, "PATCH /api/files/refresh"},
