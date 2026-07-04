@@ -181,18 +181,18 @@ they stay).
 - Modify: `app/bot/download-tasks/client.go`
 - Modify: `app/bot/download-tasks/client_test.go`
 
-- [ ] add method `DownloadNow(ctx context.Context, source, location string) error` on `*Client`:
+- [x] add method `DownloadNow(ctx context.Context, source, location string) error` on `*Client`:
       dry-mode → `slog.InfoContext(ctx, ...)` and return nil; otherwise return
       `c.dClient.CreateDownloadTask(source, location)`. No `store`, no `mu`, no hash.
-- [ ] remove the `CreateFromMagnet` method (client.go:85) — confirm via grep it has no remaining callers
+- [x] remove the `CreateFromMagnet` method (client.go:85) — confirm via grep it has no remaining callers
       in the package before deleting (the http handler caller is removed in Task 2; if Task 2 is not yet
       done the build will break — do Task 1 and Task 2 as one compile unit, running the build after Task 2).
-- [ ] write test: `DownloadNow` in dry-mode does NOT invoke the mock download client and returns nil.
-- [ ] write test: `DownloadNow` in normal mode calls `dClient.CreateDownloadTask` exactly once with the
+- [x] write test: `DownloadNow` in dry-mode does NOT invoke the mock download client and returns nil.
+- [x] write test: `DownloadNow` in normal mode calls `dClient.CreateDownloadTask` exactly once with the
       exact `source` and `location` passed in, and propagates a returned error.
-- [ ] extend the existing mock download client in `client_test.go` if needed to record
-      `CreateDownloadTask` call args; remove any test that exercised `CreateFromMagnet`.
-- [ ] run `go test ./app/bot/download-tasks/... -race` — must pass (see Task 2 note re: cross-package build).
+- [x] extend the existing mock download client in `client_test.go` if needed to record
+      `CreateDownloadTask` call args; remove any test that exercised `CreateFromMagnet` (no such test in this package).
+- [x] run `go test ./app/bot/download-tasks/... -race` — must pass (see Task 2 note re: cross-package build).
 
 ### Task 2: Add `POST /api/downloads` handler and drop the magnet branch from `POST /api/files`
 

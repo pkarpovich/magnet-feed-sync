@@ -72,6 +72,73 @@ func (m *mockDownloadClient) GetDefaultLocation() string {
 	return "/downloads"
 }
 
+func TestDownloadNow_DryMode_SkipsDownloadClient(t *testing.T) {
+	downloadCalled := false
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			downloadCalled = true
+			return nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         true,
+	})
+
+	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.NoError(t, err)
+	assert.False(t, downloadCalled, "download client should not be called in dry mode")
+}
+
+func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
+	var gotURL, gotDestination string
+	callCount := 0
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			callCount++
+			gotURL = url
+			gotDestination = destination
+			return nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         false,
+	})
+
+	source := "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret"
+	err := client.DownloadNow(context.Background(), source, "/downloads/movies")
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount, "download client should be called exactly once")
+	assert.Equal(t, source, gotURL, "source should be forwarded verbatim")
+	assert.Equal(t, "/downloads/movies", gotDestination, "location should be forwarded verbatim")
+}
+
+func TestDownloadNow_PropagatesError(t *testing.T) {
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("qbittorrent unavailable")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         false,
+	})
+
+	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "qbittorrent unavailable")
+}
+
 func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) {
 	magnet := "magnet:?xt=urn:btih:abc123"
 	oldDate := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
