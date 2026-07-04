@@ -200,27 +200,27 @@ they stay).
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 
-- [ ] `TaskCreator` interface: remove `CreateFromMagnet`; add
+- [x] `TaskCreator` interface: remove `CreateFromMagnet`; add
       `DownloadNow(ctx context.Context, source, location string) error`.
-- [ ] add `handleCreateDownload(w, r)`: open OTel span `POST /api/downloads`; decode
+- [x] add `handleCreateDownload(w, r)`: open OTel span `POST /api/downloads`; decode
       `{source, location}`; validate `source` (non-empty + `magnet:`/`http://`/`https://` prefix) → `400`
       with a clear message; default `location` via `c.downloadClient.GetDefaultLocation()` when empty;
       call `c.taskCreator.DownloadNow(ctx, source, location)`; on error `slog.ErrorContext` + `500`;
       success → `201` with JSON `{"status":"ok"}`.
-- [ ] register route in `Start`: `mux.HandleFunc("POST /api/downloads", c.handleCreateDownload)`
+- [x] register route in `Start`: `mux.HandleFunc("POST /api/downloads", c.handleCreateDownload)`
       (POST already in the CORS allowed methods).
-- [ ] edit `handleCreateFile`: delete the `else` magnet branch; require `req.URL` only
+- [x] edit `handleCreateFile`: delete the `else` magnet branch; require `req.URL` only
       (message `"url is required"`); keep the provider/persist path intact.
-- [ ] remove `Magnet` and `Name` from `CreateFileRequest`; remove the now-unused
+- [x] remove `Magnet` and `Name` from `CreateFileRequest`; remove the now-unused
       `magnet-feed-sync/app/utils` import.
-- [ ] update the http test mock `TaskCreator`: drop `CreateFromMagnet`, add a `DownloadNow` that records
+- [x] update the http test mock `TaskCreator`: drop `CreateFromMagnet`, add a `DownloadNow` that records
       args and returns a configurable error.
-- [ ] write tests for `POST /api/downloads`: `201` for a magnet source; `201` for an http(s) source;
+- [x] write tests for `POST /api/downloads`: `201` for a magnet source; `201` for an http(s) source;
       `400` for empty source; `400` for a garbage/non-magnet-non-http source; `500` when `DownloadNow`
       returns an error. Assert `DownloadNow` received the resolved location (default applied when omitted).
-- [ ] update/remove the existing `handleCreateFile` magnet-branch test; keep/adjust the `{url}` tests and
+- [x] update/remove the existing `handleCreateFile` magnet-branch test; keep/adjust the `{url}` tests and
       the "url is required" validation test.
-- [ ] run `go build ./...` then `go test ./... -race` — must pass.
+- [x] run `go build ./...` then `go test ./... -race` — must pass.
 
 ### Task 3: Verify acceptance criteria
 
