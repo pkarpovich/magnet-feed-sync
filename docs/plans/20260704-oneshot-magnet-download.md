@@ -224,16 +224,18 @@ they stay).
 
 ### Task 3: Verify acceptance criteria
 
-- [ ] `POST /api/downloads {"source":"magnet:?xt=...","location":"/downloads/movies"}` returns `201`
+- [x] `POST /api/downloads {"source":"magnet:?xt=...","location":"/downloads/movies"}` returns `201`
       and (mock) forwards the source unchanged to the download client.
-- [ ] a Jackett `/dl/...` http(s) source is accepted and forwarded verbatim (no parsing, no hash, no
+- [x] a Jackett `/dl/...` http(s) source is accepted and forwarded verbatim (no parsing, no hash, no
       DB write).
-- [ ] `POST /api/files {"url": <tracker url>}` still parses, persists, and is monitored (unchanged);
+- [x] `POST /api/files {"url": <tracker url>}` still parses, persists, and is monitored (unchanged);
       `POST /api/files {"magnet": ...}` no longer exists (returns `400 "url is required"`).
-- [ ] grep confirms no lingering `CreateFromMagnet` reference and no unused `utils` import in
+- [x] grep confirms no lingering `CreateFromMagnet` reference and no unused `utils` import in
       `app/http/client.go`.
-- [ ] run full suite: `go build ./... && go test ./... -race`.
-- [ ] apply the Code-Quality per-task gate (gofmt/goimports, `go vet ./...`, signature/visibility greps).
+- [x] run full suite: `go build ./... && go test ./... -race`.
+- [x] apply the Code-Quality per-task gate (gofmt/goimports, `go vet ./...`, signature/visibility greps).
+      Note: `gofmt -s` flags pre-existing formatting in unrelated `processFileMetadata` tests (present on
+      master); new code is clean, left the pre-existing issues untouched per surgical-change convention.
 
 ### Task 4: Documentation and plan close-out
 
