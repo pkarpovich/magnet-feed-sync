@@ -48,7 +48,10 @@ docker compose up --build
   - `download-station/`: Synology DownloadStation API
   - `qbittorrent/`: qBittorrent API client
 - **events/**: Telegram event handlers for bot interactions
-- **http/**: HTTP server serving web UI, REST API (file management endpoints), and health checks
+- **http/**: HTTP server serving web UI, REST API, and health checks. Two download entry points with a
+  deliberate split: `POST /api/files` is tracked (provider parses the tracker page, a row is persisted,
+  the cron feed re-checks it); `POST /api/downloads` is one-shot fire-and-forget (magnet or `.torrent`
+  URL forwarded verbatim to the download client, no row, no monitoring, nothing logged/persisted)
 - **schedular/**: Cron job scheduling via gocron
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction

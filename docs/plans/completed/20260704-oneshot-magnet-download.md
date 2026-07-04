@@ -243,10 +243,10 @@ they stay).
 - Modify: `README.md`
 - Modify: `CLAUDE.md` (only if a new pattern is worth recording)
 
-- [ ] add `POST /api/downloads` to the README HTTP API section with a magnet and a Jackett `/dl/` example;
+- [x] add `POST /api/downloads` to the README HTTP API section with a magnet and a Jackett `/dl/` example;
       note it is one-shot / not monitored, and that `POST /api/files` no longer accepts `magnet`.
-- [ ] update `CLAUDE.md` only if the tracked-vs-one-shot split is worth codifying for future work.
-- [ ] move this plan to `docs/plans/completed/`.
+- [x] update `CLAUDE.md` only if the tracked-vs-one-shot split is worth codifying for future work.
+- [x] move this plan to `docs/plans/completed/`.
 
 ## Post-Completion
 
