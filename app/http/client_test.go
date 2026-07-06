@@ -21,16 +21,14 @@ import (
 )
 
 type mockTaskCreator struct {
-	lastURL           string
-	lastLocation      string
-	lastMagnetHash    string
-	lastMagnetMagnet  string
-	lastMagnetName    string
-	lastMagnetLoc     string
-	returnMeta        *tracker.FileMetadata
-	returnErr         error
-	magnetReturnMeta  *tracker.FileMetadata
-	magnetReturnErr   error
+	lastURL              string
+	lastLocation         string
+	lastDownloadSource   string
+	lastDownloadLocation string
+	downloadCalls        int
+	returnMeta           *tracker.FileMetadata
+	returnErr            error
+	downloadErr          error
 }
 
 func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
@@ -39,16 +37,15 @@ func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string)
 	return m.returnMeta, m.returnErr
 }
 
-func (m *mockTaskCreator) CreateFromMagnet(_ context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error) {
-	m.lastMagnetHash = hash
-	m.lastMagnetMagnet = magnet
-	m.lastMagnetName = name
-	m.lastMagnetLoc = location
-	return m.magnetReturnMeta, m.magnetReturnErr
+func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string) error {
+	m.downloadCalls++
+	m.lastDownloadSource = source
+	m.lastDownloadLocation = location
+	return m.downloadErr
 }
 
-func (m *mockTaskCreator) RemoveTask(id string) error              { return nil }
-func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error { return nil }
+func (m *mockTaskCreator) RemoveTask(id string) error                      { return nil }
+func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error    { return nil }
 func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
 func (m *mockTaskCreator) CheckForUpdates(_ context.Context)               {}
 
@@ -112,41 +109,7 @@ func TestHandleCreateFile_WithURL(t *testing.T) {
 	assert.Equal(t, "/downloads/tv shows", resp.Location)
 }
 
-func TestHandleCreateFile_WithMagnet(t *testing.T) {
-	now := time.Now()
-	creator := &mockTaskCreator{
-		magnetReturnMeta: &tracker.FileMetadata{
-			ID:         "abc123def456",
-			Name:       "Test Torrent",
-			Magnet:     "magnet:?xt=urn:btih:abc123def456&dn=test",
-			Location:   "/downloads/movies",
-			LastSyncAt: now,
-		},
-	}
-	dlClient := &mockDownloadClient{defaultLocation: "/downloads/tv shows"}
-
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
-
-	body := `{"magnet":"magnet:?xt=urn:btih:abc123def456&dn=test","name":"Test Torrent","location":"/downloads/movies"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	c.handleCreateFile(w, req)
-
-	assert.Equal(t, http.StatusCreated, w.Code)
-	assert.Equal(t, "abc123def456", creator.lastMagnetHash)
-	assert.Equal(t, "magnet:?xt=urn:btih:abc123def456&dn=test", creator.lastMagnetMagnet)
-	assert.Equal(t, "Test Torrent", creator.lastMagnetName)
-	assert.Equal(t, "/downloads/movies", creator.lastMagnetLoc)
-
-	var resp FileMetadataResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Equal(t, "abc123def456", resp.ID)
-	assert.Equal(t, "Test Torrent", resp.Name)
-}
-
-func TestHandleCreateFile_MissingURLAndMagnet(t *testing.T) {
+func TestHandleCreateFile_MissingURL(t *testing.T) {
 	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
 
 	body := `{"location":"/downloads/movies"}`
@@ -203,61 +166,125 @@ func TestHandleCreateFile_URLServerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-func TestHandleCreateFile_MagnetLocationFallback(t *testing.T) {
-	now := time.Now()
-	creator := &mockTaskCreator{
-		magnetReturnMeta: &tracker.FileMetadata{
-			ID:         "hash999",
-			Name:       "Fallback Test",
-			Magnet:     "magnet:?xt=urn:btih:hash999&dn=test",
-			Location:   "/downloads/default",
-			LastSyncAt: now,
-		},
-	}
+func TestHandleCreateDownload_Magnet(t *testing.T) {
+	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
 	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
 
-	body := `{"magnet":"magnet:?xt=urn:btih:hash999&dn=test","name":"Fallback Test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	body := `{"source":"magnet:?xt=urn:btih:abc123","location":"/downloads/movies"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	c.handleCreateFile(w, req)
+	c.handleCreateDownload(w, req)
 
 	assert.Equal(t, http.StatusCreated, w.Code)
-	assert.Equal(t, "/downloads/default", creator.lastMagnetLoc)
+	assert.Equal(t, 1, creator.downloadCalls)
+	assert.Equal(t, "magnet:?xt=urn:btih:abc123", creator.lastDownloadSource)
+	assert.Equal(t, "/downloads/movies", creator.lastDownloadLocation)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "ok", resp["status"])
 }
 
-func TestHandleCreateFile_MagnetError(t *testing.T) {
-	creator := &mockTaskCreator{
-		magnetReturnErr: fmt.Errorf("download failed"),
-	}
+func TestHandleCreateDownload_HTTPSource(t *testing.T) {
+	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
 	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
 
-	body := `{"magnet":"magnet:?xt=urn:btih:abc123","name":"Test"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	body := `{"source":"https://jackett.example.com/dl/tpb?apikey=secret&file=x.torrent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	c.handleCreateFile(w, req)
+	c.handleCreateDownload(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
+	assert.Equal(t, "https://jackett.example.com/dl/tpb?apikey=secret&file=x.torrent", creator.lastDownloadSource)
+	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
 }
 
-func TestHandleCreateFile_MagnetInvalidNoHash(t *testing.T) {
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
+func TestHandleCreateDownload_PlainHTTPSource(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
-	body := `{"magnet":"magnet:?dn=test","name":"No Hash"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+
+	body := `{"source":"http://tracker.local/dl/x.torrent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	c.handleCreateFile(w, req)
+	c.handleCreateDownload(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
+	assert.Equal(t, "http://tracker.local/dl/x.torrent", creator.lastDownloadSource)
+	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
+}
+
+func TestHandleCreateDownload_EmptySource(t *testing.T) {
+	creator := &mockTaskCreator{}
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+
+	body := `{"location":"/downloads/movies"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, 0, creator.downloadCalls)
+}
+
+func TestHandleCreateDownload_GarbageSource(t *testing.T) {
+	creator := &mockTaskCreator{}
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+
+	body := `{"source":"ftp://not-supported/file.torrent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, 0, creator.downloadCalls)
+}
+
+func TestHandleCreateDownload_InvalidBody(t *testing.T) {
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleCreateDownload_DownloadError(t *testing.T) {
+	creator := &mockTaskCreator{downloadErr: fmt.Errorf("qbittorrent unreachable")}
+	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
+
+	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+
+	body := `{"source":"magnet:?xt=urn:btih:abc123"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
+	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
 }
 
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
@@ -283,6 +310,7 @@ func TestHTTPHandlers_CreateTracingSpans(t *testing.T) {
 	}{
 		{"handleFiles", http.MethodGet, "/api/files", func(c *Client) http.HandlerFunc { return c.handleFiles }, "GET /api/files"},
 		{"handleCreateFile", http.MethodPost, "/api/files", func(c *Client) http.HandlerFunc { return c.handleCreateFile }, "POST /api/files"},
+		{"handleCreateDownload", http.MethodPost, "/api/downloads", func(c *Client) http.HandlerFunc { return c.handleCreateDownload }, "POST /api/downloads"},
 		{"handleGetFileLocations", http.MethodGet, "/api/file-locations", func(c *Client) http.HandlerFunc { return c.handleGetFileLocations }, "GET /api/file-locations"},
 		{"healthHandler", http.MethodGet, "/api/health", func(c *Client) http.HandlerFunc { return c.healthHandler }, "GET /api/health"},
 		{"handleRefreshAllFiles", http.MethodPatch, "/api/files/refresh", func(c *Client) http.HandlerFunc { return c.handleRefreshAllFiles }, "PATCH /api/files/refresh"},
@@ -328,4 +356,3 @@ func TestHTTPHandlers_NoopTracingNoCrash(t *testing.T) {
 
 	c.handleFiles(w, req)
 }
-

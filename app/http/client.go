@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/cors"
@@ -15,12 +16,11 @@ import (
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
-	"magnet-feed-sync/app/utils"
 )
 
 type TaskCreator interface {
 	CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
-	CreateFromMagnet(ctx context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error)
+	DownloadNow(ctx context.Context, source, location string) error
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(ctx context.Context, fileId string)
@@ -64,6 +64,7 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", c.handleFiles)
 	mux.HandleFunc("POST /api/files", c.handleCreateFile)
+	mux.HandleFunc("POST /api/downloads", c.handleCreateDownload)
 	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
 	mux.HandleFunc("PATCH /api/files/refresh", c.handleRefreshAllFiles)
 	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
@@ -154,8 +155,6 @@ func toResponse(f *tracker.FileMetadata) FileMetadataResponse {
 type CreateFileRequest struct {
 	URL      string `json:"url"`
 	Location string `json:"location"`
-	Magnet   string `json:"magnet"`
-	Name     string `json:"name"`
 }
 
 func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
@@ -168,44 +167,20 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.URL == "" && req.Magnet == "" {
-		http.Error(w, "url or magnet is required", http.StatusBadRequest)
+	if req.URL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
 		return
 	}
 
-	var metadata *tracker.FileMetadata
-
-	if req.URL != "" {
-		m, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location)
-		if err != nil {
-			slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
-			if errors.Is(err, tracker.ErrProviderNotFound) {
-				http.Error(w, "unsupported URL", http.StatusBadRequest)
-				return
-			}
-			http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
+	metadata, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
+		if errors.Is(err, tracker.ErrProviderNotFound) {
+			http.Error(w, "unsupported URL", http.StatusBadRequest)
 			return
 		}
-		metadata = m
-	} else {
-		hash := utils.ExtractBtihHash(req.Magnet)
-		if hash == "" {
-			http.Error(w, "could not extract hash from magnet link", http.StatusBadRequest)
-			return
-		}
-
-		location := req.Location
-		if location == "" {
-			location = c.downloadClient.GetDefaultLocation()
-		}
-
-		m, err := c.taskCreator.CreateFromMagnet(ctx, hash, req.Magnet, req.Name, location)
-		if err != nil {
-			slog.ErrorContext(ctx, "failed to create file from magnet", "error", err)
-			http.Error(w, "failed to create file from magnet", http.StatusInternalServerError)
-			return
-		}
-		metadata = m
+		http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -213,6 +188,50 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(toResponse(metadata)); err != nil {
 		slog.ErrorContext(ctx, "failed to encode response", "error", err)
 	}
+}
+
+type CreateDownloadRequest struct {
+	Source   string `json:"source"`
+	Location string `json:"location"`
+}
+
+func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/downloads")
+	defer span.End()
+
+	var req CreateDownloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if !isValidDownloadSource(req.Source) {
+		http.Error(w, "source is required and must be a magnet or http(s) URL", http.StatusBadRequest)
+		return
+	}
+
+	location := req.Location
+	if location == "" {
+		location = c.downloadClient.GetDefaultLocation()
+	}
+
+	if err := c.taskCreator.DownloadNow(ctx, req.Source, location); err != nil {
+		slog.ErrorContext(ctx, "failed to create one-shot download", "error", err)
+		http.Error(w, "failed to create download", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		slog.ErrorContext(ctx, "failed to encode response", "error", err)
+	}
+}
+
+func isValidDownloadSource(source string) bool {
+	return strings.HasPrefix(source, "magnet:") ||
+		strings.HasPrefix(source, "http://") ||
+		strings.HasPrefix(source, "https://")
 }
 
 func (c *Client) handleRemoveFiles(w http.ResponseWriter, r *http.Request) {

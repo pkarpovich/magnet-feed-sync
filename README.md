@@ -38,7 +38,8 @@ To create a new download task, send a message to the bot with tracker page.
 
 Manage tracking tasks programmatically via the REST API:
 
-- `POST /api/files` - Create a new download task (from URL or magnet link)
+- `POST /api/files` - Create a new tracked download task from a tracker URL (enables update monitoring)
+- `POST /api/downloads` - One-shot fire-and-forget download from a magnet or `.torrent` URL (not monitored, no history)
 - `GET /api/files` - List all tracked tasks
 - `DELETE /api/files/{fileId}` - Remove a tracked task
 - `PATCH /api/files/{fileId}/refresh` - Force refresh a specific task
@@ -47,16 +48,25 @@ Manage tracking tasks programmatically via the REST API:
 - `POST /api/file-locations` - Update download location for a task
 - `GET /api/health` - Health check
 
-**POST /api/files** examples:
-
-With a tracker URL (enables update monitoring):
+**POST /api/files** - tracker URL only (parses the page, persists a row, monitors for updates):
 ```json
 {"url": "https://rutracker.org/forum/viewtopic.php?t=6810475", "location": "/downloads/tv shows"}
 ```
+A bare `magnet` is no longer accepted here (it cannot be monitored); use `POST /api/downloads` instead.
 
-With a direct magnet link (no update monitoring):
+**POST /api/downloads** - one-shot download, handed straight to the download client. The `source` is
+forwarded verbatim (qBittorrent fetches a `.torrent` URL or raises a magnet itself); nothing is parsed,
+persisted, or monitored. `location` is optional and defaults to the client's configured location.
+Responds `201 {"status":"ok"}`.
+
+With a magnet:
 ```json
-{"magnet": "magnet:?xt=urn:btih:...", "name": "Torrent Name", "location": "/downloads/movies"}
+{"source": "magnet:?xt=urn:btih:...", "location": "/downloads/movies"}
+```
+
+With a Jackett `/dl/` `.torrent` URL:
+```json
+{"source": "https://jackett.example.com/dl/indexer/?jackett_apikey=...&path=...", "location": "/downloads/movies"}
 ```
 
 ### Cron Jobs

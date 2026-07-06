@@ -28,7 +28,7 @@ func (m *mockFileParser) Parse(_ context.Context, url, location string) (*tracke
 type mockFileStore struct {
 	getByIdFunc         func(id string) (*tracker.FileMetadata, error)
 	createOrReplaceFunc func(metadata *tracker.FileMetadata) error
-	getAllFunc           func() ([]*tracker.FileMetadata, error)
+	getAllFunc          func() ([]*tracker.FileMetadata, error)
 	removeFunc          func(id string) error
 }
 
@@ -70,6 +70,73 @@ func (m *mockDownloadClient) GetHashByMagnet(magnet string) (string, error) {
 
 func (m *mockDownloadClient) GetDefaultLocation() string {
 	return "/downloads"
+}
+
+func TestDownloadNow_DryMode_SkipsDownloadClient(t *testing.T) {
+	downloadCalled := false
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			downloadCalled = true
+			return nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         true,
+	})
+
+	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.NoError(t, err)
+	assert.False(t, downloadCalled, "download client should not be called in dry mode")
+}
+
+func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
+	var gotURL, gotDestination string
+	callCount := 0
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			callCount++
+			gotURL = url
+			gotDestination = destination
+			return nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         false,
+	})
+
+	source := "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret"
+	err := client.DownloadNow(context.Background(), source, "/downloads/movies")
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount, "download client should be called exactly once")
+	assert.Equal(t, source, gotURL, "source should be forwarded verbatim")
+	assert.Equal(t, "/downloads/movies", gotDestination, "location should be forwarded verbatim")
+}
+
+func TestDownloadNow_PropagatesError(t *testing.T) {
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("qbittorrent unavailable")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+		DryMode:         false,
+	})
+
+	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "qbittorrent unavailable")
 }
 
 func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) {
@@ -124,7 +191,7 @@ func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) 
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -193,7 +260,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -265,7 +332,7 @@ func TestProcessFileMetadata_SameMagnetSameDate_MetadataUpdated(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
@@ -295,7 +362,7 @@ func TestProcessFileMetadata_ParseError_NoCrash(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -318,7 +385,7 @@ func TestProcessFileMetadata_EmptyOriginalUrl_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "",
 	})
@@ -361,7 +428,7 @@ func TestProcessFileMetadata_DeletedTask_Skipped(t *testing.T) {
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -413,7 +480,7 @@ func TestProcessFileMetadata_DifferentMagnet_DryMode_NoDownload(t *testing.T) {
 		DryMode:         true,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -488,7 +555,7 @@ func TestProcessFileMetadata_DifferentMagnet_DownloadFails_MagnetReverted(t *tes
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
@@ -543,7 +610,7 @@ func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 	})
@@ -595,7 +662,7 @@ func TestProcessFileMetadata_NoBtihHash_DifferentMagnets_RedownloadTriggered(t *
 		DryMode:         false,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "test-v2",
 		OriginalUrl: "https://example.com/topic/123",
 	})
@@ -677,7 +744,7 @@ func TestProcessFileMetadata_CreatesTracingSpan(t *testing.T) {
 		Store:           store,
 	})
 
-	client.processFileMetadata(context.Background(),&tracker.FileMetadata{
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "123",
 		OriginalUrl: "https://example.com/topic/123",
 	})

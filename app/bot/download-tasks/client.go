@@ -82,16 +82,13 @@ func (c *Client) CreateFromURL(ctx context.Context, url, location string) (*trac
 	return c.createWithLock(ctx, metadata)
 }
 
-func (c *Client) CreateFromMagnet(ctx context.Context, hash, magnet, name, location string) (*tracker.FileMetadata, error) {
-	metadata := &tracker.FileMetadata{
-		ID:         hash,
-		Name:       name,
-		Magnet:     magnet,
-		Location:   location,
-		LastSyncAt: time.Now(),
+func (c *Client) DownloadNow(ctx context.Context, source, location string) error {
+	if c.dryMode {
+		slog.InfoContext(ctx, "dry mode is enabled, skipping one-shot download", "location", location)
+		return nil
 	}
 
-	return c.createWithLock(ctx, metadata)
+	return c.dClient.CreateDownloadTask(source, location)
 }
 
 func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {
