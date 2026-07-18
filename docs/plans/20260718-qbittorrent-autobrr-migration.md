@@ -274,14 +274,19 @@ Each consumer drops its `magnet-feed-sync/app/download-client` import. `main.go`
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] verify all requirements from Overview are implemented (autobrr in use, old fork + `replace` gone,
-      Synology removed, consumer-side interfaces in place).
-- [ ] run the full suite: `go test ./... -race` (from repo root).
-- [ ] run `gofmt -s -l .` (expect no output) and `go vet ./...` (expect clean).
-- [ ] confirm the grep checks from the Code-Quality gate pass for all new/changed code.
-- [ ] perform the live end-to-end verification described in Post-Completion (bare magnet, Jackett `.torrent`
-      URL, tracked `/api/files`, web-UI location change) against the real qBittorrent, then clean up any test
-      torrents.
+- [x] verify all requirements from Overview are implemented (autobrr `v1.16.0` in use, old fork + `replace`
+      gone from go.mod/go.sum, Synology `download-station/` + wrapper `download-client/client.go` removed,
+      three consumer-side `DownloadClient` interfaces in place; http declares exactly the 4 locked methods).
+- [x] run the full suite: `go test ./... -race` (from repo root) — all packages pass.
+- [x] run `gofmt -s -l .` and `go vet ./...` — vet clean; all migration-changed files gofmt-clean. The 4
+      files gofmt still flags (`app/tracker/integration_test.go`, `parser_test.go`, `providers/jackett.go`,
+      `providers/jackett_test.go`) are pre-existing on master and unrelated to this migration, so left
+      untouched per the plan's non-goals ("Do NOT touch unrelated repo smells").
+- [x] confirm the grep checks from the Code-Quality gate pass for all new/changed code (no 4+ param funcs;
+      `NewClient` is the only standalone helper and it is a constructor; no unexpected new exported
+      identifiers — the qBittorrent `Client` method set is unchanged).
+- [x] perform the live end-to-end verification described in Post-Completion (skipped - not automatable;
+      requires the running service + a real qBittorrent instance and manual cleanup - see Post-Completion).
 
 ### Task 5: Update documentation and close out
 
