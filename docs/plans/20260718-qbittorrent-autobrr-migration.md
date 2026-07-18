@@ -216,20 +216,20 @@ Each consumer drops its `magnet-feed-sync/app/download-client` import. `main.go`
 - Modify: `app/download-client/qbittorrent/client.go`
 - Create: `app/download-client/qbittorrent/client_test.go`
 
-- [ ] `go get github.com/autobrr/go-qbittorrent@latest`.
-- [ ] rewrite `client.go` per the method mapping in Technical Details: one reused `*qbt.Client` built in
+- [x] `go get github.com/autobrr/go-qbittorrent@latest`.
+- [x] rewrite `client.go` per the method mapping in Technical Details: one reused `*qbt.Client` built in
       `NewClient` (no login call); `CreateDownloadTask` via `AddTorrentFromUrl` with `savepath`;
       `GetHashByMagnet` via `GetTorrents` + `utils.ExtractBtihHash`; `SetLocation` via slice+location;
       `GetLocations`/`GetDefaultLocation` unchanged; delete `removeDnFromMagnet`.
-- [ ] keep the exported method set identical to the current `Client` so it still satisfies the existing
+- [x] keep the exported method set identical to the current `Client` so it still satisfies the existing
       `download_client.Client` interface (that interface is removed in Task 2, not here — build stays green).
-- [ ] remove the old require + the `replace` directive from `go.mod`; run `go mod tidy`; confirm the old
+- [x] remove the old require + the `replace` directive from `go.mod`; run `go mod tidy`; confirm the old
       fork is gone from `go.mod`/`go.sum`.
-- [ ] write `client_test.go` with an `httptest` fake qBittorrent: `CreateDownloadTask` posts url+savepath and
+- [x] write `client_test.go` with an `httptest` fake qBittorrent: `CreateDownloadTask` posts url+savepath and
       accepts a `200`+JSON success body; login route returns `204`.
-- [ ] write test cases for `GetHashByMagnet` (BTIH match success + not-found error) and `SetLocation`
+- [x] write test cases for `GetHashByMagnet` (BTIH match success + not-found error) and `SetLocation`
       (posts hashes+location; error path).
-- [ ] run `gofmt -s -l`, `go vet ./...`, `go build ./...`, `go test ./... -race` — must pass before Task 2.
+- [x] run `gofmt -s -l`, `go vet ./...`, `go build ./...`, `go test ./... -race` — must pass before Task 2.
 
 ### Task 2: Consumer-side interfaces and composition root
 
