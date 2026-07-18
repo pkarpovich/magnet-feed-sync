@@ -242,16 +242,16 @@ Each consumer drops its `magnet-feed-sync/app/download-client` import. `main.go`
 - Modify: `app/tracker/parser_test.go`, `app/bot/download-tasks/client_test.go`, `app/http/client_test.go`
   (only if mock trimming is needed to compile)
 
-- [ ] delete `app/download-client/client.go` (fat `Client` interface, factory switch, client-type
+- [x] delete `app/download-client/client.go` (fat `Client` interface, factory switch, client-type
       constants).
-- [ ] add the three local `DownloadClient` interfaces per the locked signatures in Technical Details; update
+- [x] add the three local `DownloadClient` interfaces per the locked signatures in Technical Details; update
       each consumer's field/param type and drop the `app/download-client` import.
-- [ ] update `app/main.go` to construct `qbittorrent.NewClient(cfg.QBittorrent)` directly and inject the
+- [x] update `app/main.go` to construct `qbittorrent.NewClient(cfg.QBittorrent)` directly and inject the
       concrete `*qbittorrent.Client` into `NewParser`, `download_tasks.NewClient`, and `http.NewClient`;
       remove the now-obsolete `dClient, err := downloadClient.NewClient(...)` error branch.
-- [ ] confirm each mock in the three `_test.go` files still satisfies its narrowed interface (supersets are
+- [x] confirm each mock in the three `_test.go` files still satisfies its narrowed interface (supersets are
       fine); trim only if needed to keep tests compiling cleanly.
-- [ ] run the per-task gate (`gofmt -s -l`, `go vet ./...`, `go build ./...`, `go test ./... -race`) — must
+- [x] run the per-task gate (`gofmt -s -l`, `go vet ./...`, `go build ./...`, `go test ./... -race`) — must
       pass before Task 3.
 
 ### Task 3: Remove the Synology client and its config
