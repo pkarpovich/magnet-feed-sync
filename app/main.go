@@ -15,7 +15,7 @@ import (
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
-	downloadClient "magnet-feed-sync/app/download-client"
+	"magnet-feed-sync/app/download-client/qbittorrent"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
 	"magnet-feed-sync/app/observability"
@@ -65,10 +65,7 @@ func run(cfg *config.Config) error {
 
 	done := make(chan struct{})
 
-	dClient, err := downloadClient.NewClient(*cfg)
-	if err != nil {
-		return fmt.Errorf("failed to create download client: %w", err)
-	}
+	dClient := qbittorrent.NewClient(cfg.QBittorrent)
 
 	providerList := []providers.Provider{
 		&providers.RutrackerProvider{},

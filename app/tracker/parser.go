@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker/providers"
 )
 
@@ -28,12 +27,16 @@ type FileMetadata struct {
 
 var ErrProviderNotFound = errors.New("provider not found")
 
+type DownloadClient interface {
+	GetDefaultLocation() string
+}
+
 type Parser struct {
-	downloadClient downloadClient.Client
+	downloadClient DownloadClient
 	providers      []providers.Provider
 }
 
-func NewParser(downloadClient downloadClient.Client, providerList ...providers.Provider) *Parser {
+func NewParser(downloadClient DownloadClient, providerList ...providers.Provider) *Parser {
 	return &Parser{
 		downloadClient: downloadClient,
 		providers:      providerList,

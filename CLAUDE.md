@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub, Jackett/Torznab). It creates download tasks on Synology NAS DownloadStation or qBittorrent.
+Magnet Feed Sync is a Telegram bot and web interface for automating torrent download management from RSS feed trackers (RuTracker, NNMClub, Jackett/Torznab). It creates download tasks on qBittorrent.
 
 ## Build and Development Commands
 
@@ -44,9 +44,8 @@ docker compose up --build
 - **bot/**: Telegram command handlers and download task management
 - **config/**: Environment-based configuration via cleanenv
 - **database/**: SQLite client with retry mechanism for reliability
-- **download-client/**: Abstraction layer for download providers
-  - `download-station/`: Synology DownloadStation API
-  - `qbittorrent/`: qBittorrent API client
+- **download-client/**: qBittorrent client (`qbittorrent/`) built on `github.com/autobrr/go-qbittorrent`.
+  Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client
 - **events/**: Telegram event handlers for bot interactions
 - **http/**: HTTP server serving web UI, REST API, and health checks. Two download entry points with a
   deliberate split: `POST /api/files` is tracked (provider parses the tracker page, a row is persisted,
@@ -91,8 +90,6 @@ docker compose up --build
 ## Configuration
 
 Environment variables (see compose.yaml):
-- `DOWNLOAD_CLIENT`: "synology" or "qbittorrent"
-- `SYNOLOGY_URL/USERNAME/PASSWORD/DESTINATION`: NAS connection
 - `QBITTORRENT_URL/USERNAME/PASSWORD/DESTINATION`: qBittorrent connection
 - `TELEGRAM_TOKEN`: Bot token
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs

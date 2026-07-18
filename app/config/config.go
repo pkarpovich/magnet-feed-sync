@@ -7,13 +7,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type SynologyConfig struct {
-	URL         string `env:"SYNOLOGY_URL" env-default:"http://localhost:5000"`
-	Username    string `env:"SYNOLOGY_USERNAME"`
-	Password    string `env:"SYNOLOGY_PASSWORD"`
-	Destination string `env:"SYNOLOGY_DESTINATION"`
-}
-
 type QBittorrentConfig struct {
 	URL         string `env:"QBITTORRENT_URL"`
 	Username    string `env:"QBITTORRENT_USERNAME"`
@@ -36,12 +29,10 @@ type JackettConfig struct {
 }
 
 type Config struct {
-	Synology        SynologyConfig
 	QBittorrent     QBittorrentConfig
 	Telegram        TelegramConfig
 	Http            HttpConfig
 	Jackett         JackettConfig
-	DownloadClient  string `env:"DOWNLOAD_CLIENT" env-default:"download_station"`
 	DryMode         bool   `env:"DRY_MODE" env-default:"false"`
 	Cron            string `env:"CRON" env-default:"0 * * * *"`
 	OtelServiceName string `env:"OTEL_SERVICE_NAME" env-default:"magnet-feed-sync"`

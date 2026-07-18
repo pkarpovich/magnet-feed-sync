@@ -13,7 +13,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
-	downloadClient "magnet-feed-sync/app/download-client"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/utils"
 )
@@ -29,11 +28,15 @@ type FileStore interface {
 	Remove(id string) error
 }
 
+type DownloadClient interface {
+	CreateDownloadTask(url, destination string) error
+}
+
 type Client struct {
 	mu              sync.Mutex
 	messagesForSend chan string
 	tracker         FileParser
-	dClient         downloadClient.Client
+	dClient         DownloadClient
 	store           FileStore
 	dryMode         bool
 }
@@ -41,7 +44,7 @@ type Client struct {
 type ClientCtx struct {
 	MessagesForSend chan string
 	Tracker         FileParser
-	DClient         downloadClient.Client
+	DClient         DownloadClient
 	Store           FileStore
 	DryMode         bool
 }
