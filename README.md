@@ -3,12 +3,12 @@
 ## Introduction
 
 **Magnet Feed Sync** is a Telegram bot and web interface for automating torrent download management. It parses
-tracker pages to extract magnet links, creates download tasks on Synology NAS DownloadStation or qBittorrent, and logs task details in a database. The bot
+tracker pages to extract magnet links, creates download tasks on qBittorrent, and logs task details in a database. The bot
 also monitors for updates on tracked pages and schedules new download tasks as needed.
 
 ## Features
 
-- Automated creation of download tasks on Synology NAS DownloadStation or qBittorrent from provided magnet links.
+- Automated creation of download tasks on qBittorrent from provided magnet links.
 - Real-time interaction and management via Telegram.
 - Persistent storage and management of download tasks.
 - Database logging for task status and history.
@@ -77,13 +77,10 @@ Set to run every hour, checking for updates on tracked pages and initiating new 
 
 Configure the bot using the following environment variables:
 
-- `DOWNLOAD_CLIENT`: Download client type ("synology" or "qbittorrent").
-- `SYNOLOGY_URL`: URL to your Synology NAS.
-- `SYNOLOGY_USERNAME`: NAS username.
-- `SYNOLOGY_PASSWORD`: NAS password.
 - `QBITTORRENT_URL`: URL to your qBittorrent instance.
 - `QBITTORRENT_USERNAME`: qBittorrent username.
 - `QBITTORRENT_PASSWORD`: qBittorrent password.
+- `QBITTORRENT_DESTINATION`: Default download location on qBittorrent.
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).

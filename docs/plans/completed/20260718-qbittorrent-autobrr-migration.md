@@ -294,12 +294,12 @@ Each consumer drops its `magnet-feed-sync/app/download-client` import. `main.go`
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] update `README.md`: remove `DOWNLOAD_CLIENT` + `SYNOLOGY_*` from Configuration; state qBittorrent is
+- [x] update `README.md`: remove `DOWNLOAD_CLIENT` + `SYNOLOGY_*` from Configuration; state qBittorrent is
       the only download client; keep the `/api/files` vs `/api/downloads` description.
-- [ ] update `CLAUDE.md`: drop the `synology`/DownloadStation and `DOWNLOAD_CLIENT` references in
+- [x] update `CLAUDE.md`: drop the `synology`/DownloadStation and `DOWNLOAD_CLIENT` references in
       Architecture + Configuration; note the `autobrr/go-qbittorrent` dependency; keep the two-endpoint
       download split note.
-- [ ] move this plan to `docs/plans/completed/`.
+- [x] move this plan to `docs/plans/completed/`.
 
 ## Post-Completion
 
