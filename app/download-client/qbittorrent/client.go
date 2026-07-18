@@ -40,6 +40,9 @@ func (c *Client) GetHashByMagnet(magnet string) (string, error) {
 	}
 
 	wanted := utils.ExtractBtihHash(magnet)
+	if wanted == "" {
+		return "", fmt.Errorf("torrent not found")
+	}
 	for _, torrent := range torrents {
 		if utils.ExtractBtihHash(torrent.MagnetURI) == wanted {
 			return torrent.Hash, nil

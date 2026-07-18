@@ -85,6 +85,8 @@ Configure the bot using the following environment variables:
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
 
+> Breaking change: the Synology DownloadStation client has been removed. qBittorrent is now the only supported download client. Remove any `DOWNLOAD_CLIENT` and `SYNOLOGY_*` variables from your environment.
+
 ## Contributors
 
 To contribute to `magnet-feed-sync`, please fork the repository, create a feature branch, and submit a pull request.

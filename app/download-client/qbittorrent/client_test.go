@@ -23,12 +23,13 @@ type fakeQbit struct {
 
 	addStatus         int
 	setLocationStatus int
+	torrentsStatus    int
 }
 
 func newFakeQbit(t *testing.T) *fakeQbit {
 	t.Helper()
 
-	f := &fakeQbit{addStatus: http.StatusOK, setLocationStatus: http.StatusOK}
+	f := &fakeQbit{addStatus: http.StatusOK, setLocationStatus: http.StatusOK, torrentsStatus: http.StatusOK}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v2/auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,10 @@ func newFakeQbit(t *testing.T) *fakeQbit {
 		})
 	})
 	mux.HandleFunc("/api/v2/torrents/info", func(w http.ResponseWriter, r *http.Request) {
+		if f.torrentsStatus != http.StatusOK {
+			w.WriteHeader(f.torrentsStatus)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(f.torrents)
 	})
@@ -129,6 +134,14 @@ func TestGetHashByMagnet(t *testing.T) {
 			magnet:  "magnet:?xt=urn:btih:2566e2b012ea1ef9087465bc97a7ac4449f4f0de",
 			wantErr: true,
 		},
+		{
+			name: "no false match when queried magnet has no btih hash",
+			torrents: []map[string]string{
+				{"hash": "HASH1", "magnet_uri": "magnet:?xt=urn:btmh:1220caf1e1c30e81cb361b9ee167c4aa64228a"},
+			},
+			magnet:  "magnet:?xt=urn:btmh:1220ffffffffffffffffffffffffffffffffffff",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -146,6 +159,15 @@ func TestGetHashByMagnet(t *testing.T) {
 			assert.Equal(t, tt.wantHash, hash)
 		})
 	}
+}
+
+func TestGetHashByMagnet_GetTorrentsError(t *testing.T) {
+	fake := newFakeQbit(t)
+	fake.torrentsStatus = http.StatusInternalServerError
+
+	_, err := fake.client().GetHashByMagnet("magnet:?xt=urn:btih:2566e2b012ea1ef9087465bc97a7ac4449f4f0de")
+
+	require.Error(t, err)
 }
 
 func TestSetLocation(t *testing.T) {
