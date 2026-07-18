@@ -18,6 +18,22 @@ func TestInit_DefaultValues(t *testing.T) {
 	assert.Empty(t, cfg.LokiURL)
 }
 
+func TestInit_QBittorrentFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("QBITTORRENT_URL", "http://qbittorrent:8080")
+	t.Setenv("QBITTORRENT_USERNAME", "admin")
+	t.Setenv("QBITTORRENT_PASSWORD", "secret")
+	t.Setenv("QBITTORRENT_DESTINATION", "/downloads/movies")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "http://qbittorrent:8080", cfg.QBittorrent.URL)
+	assert.Equal(t, "admin", cfg.QBittorrent.Username)
+	assert.Equal(t, "secret", cfg.QBittorrent.Password)
+	assert.Equal(t, "/downloads/movies", cfg.QBittorrent.Destination)
+}
+
 func TestInit_CustomObservabilityValues(t *testing.T) {
 	t.Setenv("TELEGRAM_TOKEN", "test-token")
 	t.Setenv("OTEL_SERVICE_NAME", "custom-service")

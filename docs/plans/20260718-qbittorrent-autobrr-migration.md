@@ -262,15 +262,15 @@ Each consumer drops its `magnet-feed-sync/app/download-client` import. `main.go`
 - Modify: `app/config/config_test.go` (if it references removed fields)
 - Modify: `compose.yaml`
 
-- [ ] delete the `app/download-client/download-station/` directory.
-- [ ] remove `SynologyConfig`, the `SYNOLOGY_*` fields, and the `DownloadClient`/`DOWNLOAD_CLIENT` field
+- [x] delete the `app/download-client/download-station/` directory.
+- [x] remove `SynologyConfig`, the `SYNOLOGY_*` fields, and the `DownloadClient`/`DOWNLOAD_CLIENT` field
       (with its default) from `config.go`; keep `QBittorrentConfig`, Telegram, Http, Jackett, DryMode, Cron,
       Otel*, LokiURL.
-- [ ] remove the `SYNOLOGY_URL/USERNAME/PASSWORD/DESTINATION` and `DOWNLOAD_CLIENT` env entries from
+- [x] remove the `SYNOLOGY_URL/USERNAME/PASSWORD/DESTINATION` and `DOWNLOAD_CLIENT` env entries from
       `compose.yaml`; keep `QBITTORRENT_*`.
-- [ ] update `config_test.go` to drop assertions on removed fields; add/keep a case asserting
+- [x] update `config_test.go` to drop assertions on removed fields; add/keep a case asserting
       `QBittorrentConfig` still loads from env.
-- [ ] run the per-task gate — must pass before Task 4.
+- [x] run the per-task gate — must pass before Task 4.
 
 ### Task 4: Verify acceptance criteria
 
