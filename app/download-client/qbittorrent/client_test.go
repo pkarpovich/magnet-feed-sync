@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -196,4 +197,21 @@ func TestSetLocation(t *testing.T) {
 			assert.Equal(t, "/downloads/tv shows", fake.setLocationLocation)
 		})
 	}
+}
+
+func TestGetLocations(t *testing.T) {
+	locations := newFakeQbit(t).client().GetLocations()
+
+	names := make(map[string]string, len(locations))
+	for _, l := range locations {
+		assert.True(t, strings.HasPrefix(l.ID, "/downloads/"), "location %q must live under /downloads/", l.ID)
+		assert.NotEmpty(t, l.Name, "location %q needs a display name", l.ID)
+		_, dup := names[l.ID]
+		assert.False(t, dup, "duplicate location %q", l.ID)
+		names[l.ID] = l.Name
+	}
+
+	assert.Equal(t, "Magazines", names["/downloads/magazines"])
+	assert.Equal(t, "Cinema Prep", names["/downloads/cinema-prep"])
+	assert.Equal(t, "Movies", names["/downloads/movies"])
 }
