@@ -756,11 +756,11 @@ completion criteria. Every checkbox below is a command with a defined expected r
 **Files:**
 - Modify: `README.md`, `CLAUDE.md`
 
-- [ ] document the new `/api/health` response shape in `README.md` (`FLARESOLVERR_URL` was already added
+- [x] document the new `/api/health` response shape in `README.md` (`FLARESOLVERR_URL` was already added
       in Task 3)
-- [ ] note in `CLAUDE.md`: the `Fetcher` abstraction and which provider uses which fetcher, the error
+- [x] note in `CLAUDE.md`: the `Fetcher` abstraction and which provider uses which fetcher, the error
       taxonomy, the breaker, and that health now reports real state
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 

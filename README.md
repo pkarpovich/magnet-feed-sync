@@ -46,7 +46,7 @@ Manage tracking tasks programmatically via the REST API:
 - `PATCH /api/files/refresh` - Force refresh all tasks
 - `GET /api/file-locations` - Get available download locations
 - `POST /api/file-locations` - Update download location for a task
-- `GET /api/health` - Health check
+- `GET /api/health` - Health check (see below)
 
 **POST /api/files** - tracker URL only (parses the page, persists a row, monitors for updates):
 ```json
@@ -69,9 +69,39 @@ With a Jackett `/dl/` `.torrent` URL:
 {"source": "https://jackett.example.com/dl/indexer/?jackett_apikey=...&path=...", "location": "/downloads/movies"}
 ```
 
+**GET /api/health** - reports real service state, not a hardcoded string:
+```json
+{
+  "status": "ok",
+  "tracked": 42,
+  "failing": 0,
+  "last_run_at": "2026-08-10T12:00:00Z",
+  "providers": {"rutracker": "ok", "nnm": "ok"}
+}
+```
+
+- `status` - `ok`, `degraded`, or `unhealthy`. Evaluated in order, first match wins:
+  1. `unhealthy` (HTTP **503**) - any provider circuit breaker is tripped, or the last cron run is stale
+     (older than twice the cron interval; before the first run the service start time is used instead)
+  2. `degraded` (HTTP 200) - at least one tracked task is failing
+  3. `ok` (HTTP 200)
+- `tracked` - number of tracked tasks.
+- `failing` - tasks with 3 or more consecutive sync failures. Fewer than 3 is a silent ramp-up and is not
+  counted here.
+- `last_run_at` - when the cron sweep last finished; omitted until the first run completes.
+- `providers` - per-provider circuit breaker state, `ok` or `blocked`. Keys are the providers the service
+  actually built, so `jackett` only appears when `JACKETT_URL` is set.
+
+Consumers should assert on `status`, not on the HTTP body text.
+
 ### Cron Jobs
 
-Set to run every hour, checking for updates on tracked pages and initiating new download tasks if updates are found
+Set to run every hour, checking for updates on tracked pages and initiating new download tasks if updates are found.
+
+A tracker that returns a blocked response (HTTP 403/429 or a Cloudflare challenge) trips a per-provider
+circuit breaker: its tasks are skipped without issuing requests, and a single half-open probe is retried
+after a cooldown that doubles from 1h up to 24h. Tasks that have failed 3 times in a row are retried at
+most once per 24 hours instead of every run. Both transitions are announced once in Telegram.
 
 ## Configuration
 
