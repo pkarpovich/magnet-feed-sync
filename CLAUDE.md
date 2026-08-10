@@ -106,6 +106,11 @@ docker compose up --build
   persisted per task (`consecutive_failures` / `last_error` / `last_error_at`); a task is *failing* at
   `FailureThreshold` (3) consecutive failures, which drives the 24h retry stretch, the health `failing`
   count, and one-shot Telegram transition messages
+- Cron sweep vs manual refresh — only the cron job calls `CheckForUpdates`, which drives the breaker, the
+  Telegram transitions and `last_run_at`. Both refresh endpoints are manual (`RefreshAll` /
+  `CheckFileForUpdates`): they record store outcomes so the counters stay truthful, bypass the breaker gate
+  and the 24h stretch so the button really retries, and touch neither the alerts nor the run state — a human
+  pressing refresh must not trip a provider or hide a dead cron from `/api/health`
 - Context-based graceful shutdown — the cron sweep runs on the app context, so `CheckForUpdates` stops at
   the next task when it is cancelled and neither records the aborted parse as a task failure nor overwrites
   `last_run_at`; without those guards every restart mid-sweep would trip the breaker and notify

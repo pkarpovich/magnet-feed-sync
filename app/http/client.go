@@ -24,7 +24,7 @@ type TaskCreator interface {
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(ctx context.Context, fileId string)
-	CheckForUpdates(ctx context.Context)
+	RefreshAll(ctx context.Context)
 }
 
 type FileStore interface {
@@ -295,7 +295,7 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	c.taskCreator.CheckForUpdates(context.WithoutCancel(ctx))
+	c.taskCreator.RefreshAll(context.WithoutCancel(ctx))
 
 	w.WriteHeader(http.StatusOK)
 }

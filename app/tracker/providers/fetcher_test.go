@@ -127,6 +127,17 @@ func TestDirectFetcherSuccess(t *testing.T) {
 	assert.Contains(t, string(body), "hello")
 }
 
+// the transport error wraps *url.Error, whose message carries the whole request url; for
+// jackett that is the api key, and this error is logged and shipped to loki
+func TestDirectFetcherErrorHidesAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close()
+
+	_, err := NewDirectFetcher().Fetch(context.Background(), server.URL+"/api/v2.0/indexers/all/results?apikey=s3cret")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "s3cret")
+}
+
 func TestDirectFetcherSendsUserAgent(t *testing.T) {
 	var got string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

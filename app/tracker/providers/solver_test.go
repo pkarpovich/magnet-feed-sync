@@ -213,12 +213,6 @@ func TestSolverErrorIsBlocked(t *testing.T) {
 				_, _ = w.Write([]byte(`{"status":"ok","message":"Challenge not detected!"}`))
 			},
 		},
-		{
-			name: "invalid_body",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte("not json"))
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -304,16 +298,83 @@ func TestSolverMissingSolutionStatusIsAccepted(t *testing.T) {
 	assert.Contains(t, string(body), "page")
 }
 
-func TestSolverUnreachableIsBlocked(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	server.Close()
+// a solver we cannot reach or parse is local infrastructure, not a tracker refusal: it must
+// stay transient so a restarting flaresolverr never trips the provider for up to 24h
+func TestSolverInfraFailureIsTransient(t *testing.T) {
+	t.Run("unreachable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		server.Close()
 
-	_, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+		_, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+		require.Error(t, err)
+
+		var pe *ProviderError
+		require.True(t, errors.As(err, &pe))
+		assert.Equal(t, KindTransient, pe.Kind)
+	})
+
+	t.Run("invalid_body", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("not json"))
+		}))
+		defer server.Close()
+
+		_, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+		require.Error(t, err)
+
+		var pe *ProviderError
+		require.True(t, errors.As(err, &pe))
+		assert.Equal(t, KindTransient, pe.Kind)
+	})
+}
+
+// flaresolverr drops every session when it restarts and then rejects the stale id forever,
+// so a failed fetch has to release it instead of pinning the provider to a dead session
+func TestSolverRecreatesSessionAfterFailedFetch(t *testing.T) {
+	solver := &fakeSolver{html: "<html>page</html>"}
+	sessionAlive := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		solver.record(req)
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd == "sessions.create" {
+			sessionAlive = true
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+
+		if !sessionAlive {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"status":"error","message":"Error: This session does not exist."}`))
+			return
+		}
+
+		body, err := json.Marshal(solverResponse{
+			Status:   "ok",
+			Solution: &solverSolution{Status: http.StatusOK, Response: solver.html},
+		})
+		require.NoError(t, err)
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	fetcher := NewSolverFetcher(server.URL)
+	_, err := fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.NoError(t, err)
+
+	// the solver restarted: the session it handed out is gone
+	sessionAlive = false
+
+	_, err = fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
 	require.Error(t, err)
+	assert.Empty(t, fetcher.sessionID)
 
-	var pe *ProviderError
-	require.True(t, errors.As(err, &pe))
-	assert.Equal(t, KindBlocked, pe.Kind)
+	body, err := fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "page")
+	assert.Len(t, solver.commands("sessions.create"), 2)
 }
 
 func TestBlockedFetcherIsAlwaysBlocked(t *testing.T) {

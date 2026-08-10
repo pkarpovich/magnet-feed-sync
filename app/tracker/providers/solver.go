@@ -90,6 +90,11 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 		MaxTimeout: solverMaxTimeout,
 	})
 	if err != nil {
+		// flaresolverr forgets every session when it restarts and then rejects this id
+		// forever; drop it so the next fetch creates a fresh one instead of failing for good
+		if ctx.Err() == nil {
+			f.sessionID = ""
+		}
 		return nil, err
 	}
 
@@ -161,9 +166,11 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// reaching, reading and decoding the solver are local infrastructure concerns: they say
+	// nothing about the tracker, so they must stay transient and leave the breaker closed
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindBlocked, Err: fmt.Errorf("call solver: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("call solver: %w", err)}
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -173,12 +180,12 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return nil, &ProviderError{Kind: KindBlocked, Err: fmt.Errorf("read solver response: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("read solver response: %w", err)}
 	}
 
 	var decoded solverResponse
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, &ProviderError{Kind: KindBlocked, Err: fmt.Errorf("decode solver response: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("decode solver response: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK || decoded.Status != "ok" {

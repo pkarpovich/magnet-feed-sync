@@ -441,6 +441,33 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	c.notifyBreakerTransitions(breakerDelta{before: before, after: c.breaker.Snapshot(), skipped: skipped})
 }
 
+// RefreshAll re-checks every task on demand. It records store outcomes so the counters stay
+// truthful, but leaves the breaker, the alerts and the cron run state alone: a human pressing
+// refresh must not trip a provider, fire alerts, or hide a dead cron from the health endpoint.
+func (c *Client) RefreshAll(ctx context.Context) {
+	ctx, span := otel.Tracer("download-tasks").Start(ctx, "RefreshAll")
+	defer span.End()
+
+	slog.InfoContext(ctx, "refreshing all tasks")
+
+	filesMetadata, err := c.store.GetAll()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		slog.ErrorContext(ctx, "error getting files metadata", "error", err)
+		return
+	}
+
+	for _, metadata := range filesMetadata {
+		if ctx.Err() != nil {
+			slog.InfoContext(ctx, "manual refresh interrupted", "error", ctx.Err())
+			return
+		}
+
+		c.processFileMetadata(ctx, metadata, false)
+	}
+}
+
 type breakerDelta struct {
 	before  map[string]tracker.State
 	after   map[string]tracker.State

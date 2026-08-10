@@ -1046,6 +1046,79 @@ func TestManualRefreshDoesNotTripBreaker(t *testing.T) {
 	assert.Empty(t, msgChan, "a manual refresh must not notify")
 }
 
+// RefreshAll is the web app's refresh button; recording it as a cron run would let a human
+// hide a dead cron from the health endpoint's staleness check
+func TestRefreshAllDoesNotActAsCronRun(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1", ConsecutiveFailures: FailureThreshold - 1},
+			}, nil
+		},
+	}
+
+	breaker := &mockBreaker{}
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.RefreshAll(context.Background())
+
+	assert.Empty(t, store.runs, "a manual refresh must not overwrite the cron run state")
+	assert.Empty(t, breaker.failures, "a manual refresh must not trip the breaker")
+	assert.Empty(t, msgChan, "a manual refresh must not notify")
+	require.Len(t, store.failures, 1, "a manual refresh must still keep the counter truthful")
+}
+
+// the stretch and the breaker gate exist to spare a broken tracker on the hourly sweep; the
+// refresh button is an explicit "retry now", so it goes through like the per-file refresh
+func TestRefreshAllRetriesStretchedAndBlockedTasks(t *testing.T) {
+	parseCalls := 0
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			parseCalls++
+			return nil, fmt.Errorf("still down")
+		},
+	}
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{
+					ID:                  "1",
+					OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=1",
+					ConsecutiveFailures: FailureThreshold,
+					LastErrorAt:         sql.NullTime{Time: time.Now(), Valid: true},
+				},
+			}, nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         &mockBreaker{allowed: map[string]bool{"rutracker": false}},
+	})
+
+	client.RefreshAll(context.Background())
+
+	assert.Equal(t, 1, parseCalls)
+}
+
 func TestNotifyOnceAtThreshold(t *testing.T) {
 	parser := &mockFileParser{
 		providerName: "rutracker",

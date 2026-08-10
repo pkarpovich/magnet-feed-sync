@@ -25,6 +25,7 @@ type mockTaskCreator struct {
 	lastDownloadSource   string
 	lastDownloadLocation string
 	downloadCalls        int
+	refreshAllCalls      int
 	returnMeta           *tracker.FileMetadata
 	returnErr            error
 	downloadErr          error
@@ -46,7 +47,7 @@ func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string
 func (m *mockTaskCreator) RemoveTask(id string) error                      { return nil }
 func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error    { return nil }
 func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
-func (m *mockTaskCreator) CheckForUpdates(_ context.Context)               {}
+func (m *mockTaskCreator) RefreshAll(_ context.Context)                    { m.refreshAllCalls++ }
 
 type mockFileStore struct {
 	existingFile *tracker.FileMetadata

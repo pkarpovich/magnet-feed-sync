@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"golang.org/x/net/html/charset"
@@ -44,7 +45,7 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("do request: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("do request: %w", withoutURL(err))}
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -67,6 +68,17 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	}
 
 	return body, nil
+}
+
+// withoutURL drops the *url.Error wrapper, whose message embeds the whole request url —
+// for jackett that carries the api key, and this error reaches the logs and loki.
+func withoutURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err
+	}
+
+	return err
 }
 
 // classifyStatus maps a tracker HTTP status onto an ErrorKind; shared by the direct
