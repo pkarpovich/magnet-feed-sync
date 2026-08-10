@@ -1,7 +1,10 @@
 package task_store
 
 import (
+	"fmt"
 	"log/slog"
+	"time"
+
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/tracker"
 )
@@ -21,7 +24,10 @@ func NewRepository(db *database.Client) (*Repository, error) {
     		location TEXT NOT NULL DEFAULT '/downloads/tv shows',
     		torrent_updated_at TIMESTAMP,
     		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            delete_at TIMESTAMP DEFAULT NULL
+            delete_at TIMESTAMP DEFAULT NULL,
+    		consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    		last_error TEXT NOT NULL DEFAULT '',
+    		last_error_at TIMESTAMP
 	)`)
 	if err != nil {
 		return nil, err
@@ -40,8 +46,11 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				last_comment,
 				torrent_updated_at,
 				location,
-				delete_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+				delete_at,
+				consecutive_failures,
+				last_error,
+				last_error_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.Magnet,
@@ -50,6 +59,9 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 		metadata.LastComment,
 		metadata.TorrentUpdatedAt,
 		metadata.Location,
+		metadata.ConsecutiveFailures,
+		metadata.LastError,
+		metadata.LastErrorAt,
 	)
 
 	return err
@@ -67,7 +79,10 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			torrent_updated_at,
 			location,
 			created_at,
-			delete_at
+			delete_at,
+			consecutive_failures,
+			last_error,
+			last_error_at
 		FROM
 			files
 		WHERE
@@ -98,6 +113,9 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.Location,
 			&m.CreatedAt,
 			&m.DeleteAt,
+			&m.ConsecutiveFailures,
+			&m.LastError,
+			&m.LastErrorAt,
 		); err != nil {
 			return nil, err
 		}
@@ -121,7 +139,10 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 			torrent_updated_at,
 			location,
 			created_at,
-			delete_at
+			delete_at,
+			consecutive_failures,
+			last_error,
+			last_error_at
 		FROM
 			files
 		WHERE
@@ -137,12 +158,55 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 		&m.Location,
 		&m.CreatedAt,
 		&m.DeleteAt,
+		&m.ConsecutiveFailures,
+		&m.LastError,
+		&m.LastErrorAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	return &m, nil
+}
+
+type SyncFailure struct {
+	Text string
+	At   time.Time
+}
+
+func (r *Repository) RecordSyncSuccess(id string, syncedAt time.Time) error {
+	_, err := r.db.Exec(`
+		UPDATE files
+		SET
+			consecutive_failures = 0,
+			last_error = '',
+			last_error_at = NULL,
+			last_sync_at = ?
+		WHERE
+			id = ?
+	`, syncedAt, id)
+	if err != nil {
+		return fmt.Errorf("record sync success: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) RecordSyncFailure(id string, failure SyncFailure) error {
+	_, err := r.db.Exec(`
+		UPDATE files
+		SET
+			consecutive_failures = consecutive_failures + 1,
+			last_error = ?,
+			last_error_at = ?
+		WHERE
+			id = ?
+	`, failure.Text, failure.At, id)
+	if err != nil {
+		return fmt.Errorf("record sync failure: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Repository) Remove(id string) error {

@@ -644,19 +644,19 @@ of any task's completion criteria.**
 - Create: `app/task-store/repository_test.go`
 - Modify: `app/task-store/repository.go`, `app/tracker/parser.go`
 
-- [ ] write the migration file by hand with the DDL from Technical Details, using the repo's
+- [x] write the migration file by hand with the DDL from Technical Details, using the repo's
       `-- +migrate Up` / `-- +migrate Down` marker format
-- [ ] mirror the three columns in the runtime `CREATE TABLE IF NOT EXISTS` in `NewRepository`
-- [ ] add the three `json:"-"` fields to `FileMetadata` and extend every `SELECT`/scan site in `GetAll`
+- [x] mirror the three columns in the runtime `CREATE TABLE IF NOT EXISTS` in `NewRepository`
+- [x] add the three `json:"-"` fields to `FileMetadata` and extend every `SELECT`/scan site in `GetAll`
       and `GetById`
-- [ ] **add the three columns to `CreateOrReplace`'s INSERT list** and carry them from the passed
+- [x] **add the three columns to `CreateOrReplace`'s INSERT list** and carry them from the passed
       `FileMetadata` — see the trap in Technical Details
-- [ ] add `SyncFailure`, `RecordSyncSuccess` and `RecordSyncFailure` as targeted `UPDATE`s
-- [ ] add the `newTestRepo(t)` helper (`t.Chdir(t.TempDir())` + `database.NewClient("test.db")`) — no
+- [x] add `SyncFailure`, `RecordSyncSuccess` and `RecordSyncFailure` as targeted `UPDATE`s
+- [x] add the `newTestRepo(t)` helper (`t.Chdir(t.TempDir())` + `database.NewClient("test.db")`) — no
       DB-backed test exists in this repo yet
-- [ ] write tests for both outcome methods and for round-tripping the new fields through `GetAll`/`GetById`
-- [ ] write `TestCreateOrReplacePreservesConsecutiveFailures` (set 2, round-trip, assert still 2)
-- [ ] run the per-task gate — must pass before Task 6
+- [x] write tests for both outcome methods and for round-tripping the new fields through `GetAll`/`GetById`
+- [x] write `TestCreateOrReplacePreservesConsecutiveFailures` (set 2, round-trip, assert still 2)
+- [x] run the per-task gate — must pass before Task 6
 
 ### Task 6: Record outcomes and stretch the interval for dead tasks
 

@@ -23,6 +23,10 @@ type FileMetadata struct {
 	Location         string       `json:"location"`
 	CreatedAt        time.Time    `json:"-"`
 	DeleteAt         sql.NullTime `json:"-"`
+
+	ConsecutiveFailures int          `json:"-"`
+	LastError           string       `json:"-"`
+	LastErrorAt         sql.NullTime `json:"-"`
 }
 
 var ErrProviderNotFound = errors.New("provider not found")
