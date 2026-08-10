@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -15,12 +16,13 @@ import (
 
 type JackettProvider struct {
 	baseURL string
+	fetcher Fetcher
 }
 
-func NewJackettProvider(baseURL string) *JackettProvider {
+func NewJackettProvider(baseURL string, f Fetcher) *JackettProvider {
 	u, err := url.Parse(baseURL)
 	if err != nil || u.Host == "" {
-		return &JackettProvider{baseURL: strings.TrimRight(baseURL, "/")}
+		return &JackettProvider{baseURL: strings.TrimRight(baseURL, "/"), fetcher: f}
 	}
 	u.User = nil
 	u.RawQuery = ""
@@ -29,7 +31,11 @@ func NewJackettProvider(baseURL string) *JackettProvider {
 		u.Path = u.Path[:idx]
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	return &JackettProvider{baseURL: u.String()}
+	return &JackettProvider{baseURL: u.String(), fetcher: f}
+}
+
+func (p *JackettProvider) Name() string {
+	return "jackett"
 }
 
 func (p *JackettProvider) CanHandle(u string) bool {
@@ -64,7 +70,7 @@ func (p *JackettProvider) Parse(ctx context.Context, pageURL string) (*Result, e
 	ctx, span := otel.Tracer("tracker").Start(ctx, "JackettProvider.Parse")
 	defer span.End()
 
-	body, err := fetchPage(ctx, pageURL)
+	body, err := p.fetcher.Fetch(ctx, pageURL)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch jackett page: %w", err)
 		span.RecordError(err)
@@ -84,18 +90,18 @@ func (p *JackettProvider) Parse(ctx context.Context, pageURL string) (*Result, e
 func (p *JackettProvider) parseXML(data []byte, originalURL string) (*Result, error) {
 	var rss torznabRSS
 	if err := xml.Unmarshal(data, &rss); err != nil {
-		return nil, fmt.Errorf("failed to parse jackett XML: %w", err)
+		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("failed to parse jackett XML: %w", err)}
 	}
 
 	if len(rss.Channel.Items) == 0 {
-		return nil, fmt.Errorf("no items found in jackett response")
+		return nil, &ProviderError{Kind: KindPermanent, Err: errors.New("no items found in jackett response")}
 	}
 
 	item := rss.Channel.Items[0]
 
 	magnet := p.extractMagnet(item)
 	if magnet == "" {
-		return nil, fmt.Errorf("no magnet link found in jackett response")
+		return nil, &ProviderError{Kind: KindPermanent, Err: errors.New("no magnet link found in jackett response")}
 	}
 
 	trackerURL := p.extractTrackerURL(item)
@@ -161,8 +167,8 @@ func (p *JackettProvider) extractID(trackerURL, originalURL string) string {
 }
 
 type torznabRSS struct {
-	XMLName xml.Name        `xml:"rss"`
-	Channel torznabChannel  `xml:"channel"`
+	XMLName xml.Name       `xml:"rss"`
+	Channel torznabChannel `xml:"channel"`
 }
 
 type torznabChannel struct {

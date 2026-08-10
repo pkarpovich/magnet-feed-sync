@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -323,6 +325,48 @@ func TestResolveValue_Group(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "nested_val", m["nested_key"])
 	assert.Equal(t, int64(42), m["nested_int"])
+}
+
+func TestResolveValueErrorText(t *testing.T) {
+	t.Run("plain error", func(t *testing.T) {
+		result := resolveValue(slog.AnyValue(errors.New("connection refused")))
+		assert.Equal(t, "connection refused", result)
+	})
+
+	t.Run("wrapped error", func(t *testing.T) {
+		wrapped := fmt.Errorf("parse metadata: %w", errors.New("connection refused"))
+		result := resolveValue(slog.AnyValue(wrapped))
+		assert.Equal(t, "parse metadata: connection refused", result)
+	})
+
+	t.Run("error inside group", func(t *testing.T) {
+		val := slog.GroupValue(slog.Any("error", errors.New("boom")))
+		m, ok := resolveValue(val).(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "boom", m["error"])
+	})
+
+	t.Run("non-error value untouched", func(t *testing.T) {
+		assert.Equal(t, "plain", resolveValue(slog.StringValue("plain")))
+	})
+}
+
+func TestLokiHandler_ErrorAttrSerializesToMessage(t *testing.T) {
+	server, payloads, mu := newTestLokiServer(t)
+
+	handler := NewLokiHandler("test-service", server.URL, slog.LevelInfo)
+	logger := slog.New(handler)
+
+	logger.Error("error parsing metadata", "error", errors.New("403 forbidden"))
+	handler.Shutdown()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, *payloads, 1)
+
+	var logLine map[string]any
+	require.NoError(t, json.Unmarshal([]byte((*payloads)[0].Streams[0].Values[0][1]), &logLine))
+	assert.Equal(t, "403 forbidden", logLine["error"])
 }
 
 func TestNestedMap_MultipleGroups(t *testing.T) {

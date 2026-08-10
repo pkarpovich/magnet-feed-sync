@@ -2,8 +2,10 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -15,9 +17,20 @@ import (
 	"magnet-feed-sync/app/utils"
 )
 
-type NnmProvider struct{}
+type NnmProvider struct {
+	fetcher Fetcher
+}
 
 const NnmUrl = "https://nnmclub.to/forum"
+
+// NewNnmProvider builds an nnmclub provider fetching pages through f.
+func NewNnmProvider(f Fetcher) *NnmProvider {
+	return &NnmProvider{fetcher: f}
+}
+
+func (p *NnmProvider) Name() string {
+	return "nnm"
+}
 
 func (p *NnmProvider) CanHandle(u string) bool {
 	return strings.HasPrefix(u, NnmUrl)
@@ -27,7 +40,7 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 	ctx, span := otel.Tracer("tracker").Start(ctx, "NnmProvider.Parse")
 	defer span.End()
 
-	body, err := fetchPage(ctx, pageURL)
+	body, err := p.fetcher.Fetch(ctx, pageURL)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch nnm page: %w", err)
 		span.RecordError(err)
@@ -37,7 +50,7 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		err = fmt.Errorf("failed to parse nnm HTML: %w", err)
+		err = &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("failed to parse nnm HTML: %w", err)}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -45,7 +58,7 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 
 	magnet := p.getMagnetLink(doc)
 	if magnet == "" {
-		err = fmt.Errorf("no magnet link found in nnm page")
+		err = &ProviderError{Kind: KindPermanent, Err: errors.New("no magnet link found in nnm page")}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -56,7 +69,7 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 		Title:     p.getTitle(doc),
 		Magnet:    magnet,
 		UpdatedAt: p.getLastUpdatedDate(doc),
-		Comment:   p.getLastComment(doc),
+		Comment:   p.getLastComment(ctx, doc),
 	}, nil
 }
 
@@ -108,15 +121,20 @@ func (p *NnmProvider) getLastUpdatedDate(doc *goquery.Document) (registrationDat
 	return registrationDate
 }
 
-func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
+func (p *NnmProvider) getLastComment(ctx context.Context, doc *goquery.Document) string {
 	rssLink := p.getRssLink(doc)
 	if rssLink == "" {
 		slog.Warn("rss link not found in nnm page")
 		return ""
 	}
 
+	// gofeed's default client has no timeout and ParseURL ignores the sweep context, so a
+	// tracker that accepts the connection and never answers parks this goroutine forever —
+	// and the cron job runs in singleton mode, which would stall every later sweep with it
 	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL(rssLink)
+	fp.Client = &http.Client{Timeout: directHTTPTimeout}
+
+	feed, err := fp.ParseURLWithContext(rssLink, ctx)
 	if err != nil || feed == nil {
 		slog.Error("failed to parse rss feed", "error", err)
 		return ""

@@ -25,7 +25,8 @@ To create a new download task, send a message to the bot with tracker page.
 
 **Supported Trackers:**
 
-- [rutracker.org](https://rutracker.org)
+- [rutracker.org](https://rutracker.org) - requires a running [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)
+  instance (see `FLARESOLVERR_URL`); the site sits behind a Cloudflare managed challenge and cannot be fetched directly
 - [nnmclub.to](https://nnmclub.to)
 - [Jackett](https://github.com/Jackett/Jackett) (Torznab API) - any indexer supported by your Jackett instance
 
@@ -46,7 +47,7 @@ Manage tracking tasks programmatically via the REST API:
 - `PATCH /api/files/refresh` - Force refresh all tasks
 - `GET /api/file-locations` - Get available download locations
 - `POST /api/file-locations` - Update download location for a task
-- `GET /api/health` - Health check
+- `GET /api/health` - Health check (see below)
 
 **POST /api/files** - tracker URL only (parses the page, persists a row, monitors for updates):
 ```json
@@ -69,9 +70,57 @@ With a Jackett `/dl/` `.torrent` URL:
 {"source": "https://jackett.example.com/dl/indexer/?jackett_apikey=...&path=...", "location": "/downloads/movies"}
 ```
 
+**GET /api/health** - reports real service state, not a hardcoded string:
+```json
+{
+  "status": "ok",
+  "tracked": 42,
+  "failing": 0,
+  "last_run_at": "2026-08-10T12:00:00Z",
+  "providers": {"rutracker": "ok", "nnm": "ok"}
+}
+```
+
+- `status` - `ok`, `degraded`, or `unhealthy`. Evaluated in order, first match wins:
+  1. `unhealthy` (HTTP **503**) - any provider circuit breaker is tripped, or the last cron run is stale
+     (older than twice the cron interval; before the first run the service start time is used instead)
+  2. `degraded` (HTTP 200) - at least one tracked task is failing
+  3. `ok` (HTTP 200)
+- `tracked` - number of tracked tasks.
+- `failing` - tasks with 3 or more consecutive sync failures. Fewer than 3 is a silent ramp-up and is not
+  counted here.
+- `last_run_at` - when the cron sweep last finished; omitted until the first run completes.
+- `providers` - per-provider circuit breaker state, `ok` or `blocked`. Keys are the providers the service
+  actually built, so `jackett` only appears when `JACKETT_URL` is set.
+
+Consumers should assert on `status`, not on the HTTP body text.
+
+> Breaking change: `GET /api/health` no longer returns `{"count": N, "message": "OK"}`, and it no longer always
+> answers HTTP 200 - an `unhealthy` status comes with a 503. Uptime monitors and container healthchecks that
+> asserted on `message == "OK"` or on a 200-only contract must be updated to assert `status == "ok"`, and that
+> change has to land together with the service deploy or the monitor will flap.
+
 ### Cron Jobs
 
-Set to run every hour, checking for updates on tracked pages and initiating new download tasks if updates are found
+Runs on the `CRON` schedule (hourly by default), checking for updates on tracked pages and initiating new download tasks if updates are found.
+
+A tracker that returns a blocked response (HTTP 403/429 or a Cloudflare challenge) trips a per-provider
+circuit breaker: its tasks are skipped without issuing requests, and a single half-open probe is retried
+after a cooldown that doubles from 1h up to 24h. Tasks that have failed 3 times in a row are retried at
+most once per 24 hours instead of every run. Both transitions are announced once in Telegram.
+
+## Database migrations
+
+The container runs the server directly and does not apply migrations. Run them **before** starting a new
+version, or every read fails with `no such column` and the API, the health endpoint and the cron sweep all
+break:
+
+```bash
+sql-migrate up   # or: make apply-migrations
+```
+
+This release adds two migrations: `add-failure-tracking` (per-task failure state) and `add-app-state`
+(cron run state).
 
 ## Configuration
 
@@ -83,7 +132,9 @@ Configure the bot using the following environment variables:
 - `QBITTORRENT_DESTINATION`: Default download location on qBittorrent.
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
+- `CRON`: cron expression for the update sweep, standard 5 fields (default `0 * * * *`). It also sets the health staleness window: a last run older than twice the schedule's longest gap between firings makes `/api/health` report `unhealthy`. An expression that cannot be parsed falls back to a 2h window and logs a warning.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
+- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
 
 > Breaking change: the Synology DownloadStation client has been removed. qBittorrent is now the only supported download client. Remove any `DOWNLOAD_CLIENT` and `SYNOLOGY_*` variables from your environment.
 

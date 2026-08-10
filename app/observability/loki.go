@@ -315,7 +315,13 @@ func resolveValue(v slog.Value) any {
 		}
 		return m
 	}
-	return v.Any()
+
+	val := v.Any()
+	// most error types marshal to {} — keep the message instead
+	if err, ok := val.(error); ok {
+		return err.Error()
+	}
+	return val
 }
 
 func nestedMap(m map[string]any, groups []string) map[string]any {

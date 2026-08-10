@@ -27,6 +27,9 @@ func (s *Service) Start(cb func()) error {
 	j, err := s.scheduler.NewJob(
 		gocron.CronJob(s.cfg.Cron, false),
 		gocron.NewTask(cb),
+		// a sweep can outlive its interval (a cold flaresolverr solve is ~74s per task);
+		// overlapping runs would double-probe the breaker and race on the run state
+		gocron.WithSingletonMode(gocron.LimitModeReschedule),
 	)
 	if err != nil {
 		return err

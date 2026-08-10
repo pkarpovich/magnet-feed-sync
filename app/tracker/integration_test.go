@@ -11,10 +11,15 @@ import (
 )
 
 type recordingProvider struct {
+	name          string
 	canHandleURLs []string
 	parseCalls    []string
 	result        *providers.Result
 	err           error
+}
+
+func (p *recordingProvider) Name() string {
+	return p.name
 }
 
 func (p *recordingProvider) CanHandle(url string) bool {
@@ -62,7 +67,7 @@ func TestIntegration_JackettURLParsedThenUpdateUsesHTMLProvider(t *testing.T) {
 		htmlProvider,
 	)
 
-	metadata, err := parser.Parse(context.Background(),jackettURL, "/downloads/tv")
+	metadata, err := parser.Parse(context.Background(), jackettURL, "/downloads/tv")
 	require.NoError(t, err)
 
 	assert.Equal(t, "6810475", metadata.ID)
@@ -72,7 +77,7 @@ func TestIntegration_JackettURLParsedThenUpdateUsesHTMLProvider(t *testing.T) {
 	assert.Equal(t, trackerURL, metadata.OriginalUrl)
 	assert.Len(t, jackettProvider.parseCalls, 1)
 
-	updateMetadata, err := parser.Parse(context.Background(),metadata.OriginalUrl, "")
+	updateMetadata, err := parser.Parse(context.Background(), metadata.OriginalUrl, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, "6810475", updateMetadata.ID)
@@ -101,7 +106,7 @@ func TestIntegration_JackettWithoutTrackerURLFallsBackToJackettURL(t *testing.T)
 		jackettProvider,
 	)
 
-	metadata, err := parser.Parse(context.Background(),jackettURL, "")
+	metadata, err := parser.Parse(context.Background(), jackettURL, "")
 	require.NoError(t, err)
 
 	assert.Empty(t, metadata.OriginalUrl)
@@ -125,7 +130,7 @@ func TestIntegration_RuTrackerURLStillWorksDirectly(t *testing.T) {
 		htmlProvider,
 	)
 
-	metadata, err := parser.Parse(context.Background(),rutrackerURL, "/downloads/movies")
+	metadata, err := parser.Parse(context.Background(), rutrackerURL, "/downloads/movies")
 	require.NoError(t, err)
 
 	assert.Equal(t, "123456", metadata.ID)

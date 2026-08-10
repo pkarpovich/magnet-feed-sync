@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
 )
@@ -26,6 +25,7 @@ type mockTaskCreator struct {
 	lastDownloadSource   string
 	lastDownloadLocation string
 	downloadCalls        int
+	refreshAllCalls      int
 	returnMeta           *tracker.FileMetadata
 	returnErr            error
 	downloadErr          error
@@ -47,17 +47,32 @@ func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string
 func (m *mockTaskCreator) RemoveTask(id string) error                      { return nil }
 func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error    { return nil }
 func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
-func (m *mockTaskCreator) CheckForUpdates(_ context.Context)               {}
+func (m *mockTaskCreator) RefreshAll(_ context.Context)                    { m.refreshAllCalls++ }
 
 type mockFileStore struct {
 	existingFile *tracker.FileMetadata
+	files        []*tracker.FileMetadata
 	getByIdErr   error
 }
 
-func (m *mockFileStore) GetAll() ([]*tracker.FileMetadata, error) { return nil, nil }
+func (m *mockFileStore) GetAll() ([]*tracker.FileMetadata, error) { return m.files, nil }
 func (m *mockFileStore) GetById(id string) (*tracker.FileMetadata, error) {
 	return m.existingFile, m.getByIdErr
 }
+
+type mockBreaker struct {
+	states map[string]tracker.State
+}
+
+func (m *mockBreaker) Snapshot() map[string]tracker.State { return m.states }
+
+type mockRunState struct {
+	at  time.Time
+	ok  bool
+	err error
+}
+
+func (m *mockRunState) GetLastRun() (time.Time, bool, error) { return m.at, m.ok, m.err }
 
 type mockDownloadClient struct {
 	defaultLocation string
@@ -88,7 +103,7 @@ func TestHandleCreateFile_WithURL(t *testing.T) {
 	store := &mockFileStore{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/tv shows"}
 
-	c := NewClient(config.HttpConfig{}, store, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: store, TaskCreator: creator, DownloadClient: dlClient})
 
 	body := `{"url":"https://rutracker.org/forum/viewtopic.php?t=6810475","location":"/downloads/tv shows"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
@@ -110,7 +125,7 @@ func TestHandleCreateFile_WithURL(t *testing.T) {
 }
 
 func TestHandleCreateFile_MissingURL(t *testing.T) {
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: &mockTaskCreator{}, DownloadClient: &mockDownloadClient{}})
 
 	body := `{"location":"/downloads/movies"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
@@ -123,7 +138,7 @@ func TestHandleCreateFile_MissingURL(t *testing.T) {
 }
 
 func TestHandleCreateFile_InvalidBody(t *testing.T) {
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: &mockTaskCreator{}, DownloadClient: &mockDownloadClient{}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -138,7 +153,7 @@ func TestHandleCreateFile_URLProviderNotFound(t *testing.T) {
 	creator := &mockTaskCreator{
 		returnErr: fmt.Errorf("%w for url: https://unknown.com", tracker.ErrProviderNotFound),
 	}
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
 
 	body := `{"url":"https://unknown.com"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
@@ -154,7 +169,7 @@ func TestHandleCreateFile_URLServerError(t *testing.T) {
 	creator := &mockTaskCreator{
 		returnErr: fmt.Errorf("network timeout"),
 	}
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
 
 	body := `{"url":"https://rutracker.org/forum/viewtopic.php?t=123"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
@@ -170,7 +185,7 @@ func TestHandleCreateDownload_Magnet(t *testing.T) {
 	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
 
 	body := `{"source":"magnet:?xt=urn:btih:abc123","location":"/downloads/movies"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -193,7 +208,7 @@ func TestHandleCreateDownload_HTTPSource(t *testing.T) {
 	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
 
 	body := `{"source":"https://jackett.example.com/dl/tpb?apikey=secret&file=x.torrent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -212,7 +227,7 @@ func TestHandleCreateDownload_PlainHTTPSource(t *testing.T) {
 	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
 
 	body := `{"source":"http://tracker.local/dl/x.torrent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -229,7 +244,7 @@ func TestHandleCreateDownload_PlainHTTPSource(t *testing.T) {
 
 func TestHandleCreateDownload_EmptySource(t *testing.T) {
 	creator := &mockTaskCreator{}
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
 
 	body := `{"location":"/downloads/movies"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -244,7 +259,7 @@ func TestHandleCreateDownload_EmptySource(t *testing.T) {
 
 func TestHandleCreateDownload_GarbageSource(t *testing.T) {
 	creator := &mockTaskCreator{}
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
 
 	body := `{"source":"ftp://not-supported/file.torrent"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -258,7 +273,7 @@ func TestHandleCreateDownload_GarbageSource(t *testing.T) {
 }
 
 func TestHandleCreateDownload_InvalidBody(t *testing.T) {
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, &mockTaskCreator{}, &mockDownloadClient{})
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: &mockTaskCreator{}, DownloadClient: &mockDownloadClient{}})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -273,7 +288,7 @@ func TestHandleCreateDownload_DownloadError(t *testing.T) {
 	creator := &mockTaskCreator{downloadErr: fmt.Errorf("qbittorrent unreachable")}
 	dlClient := &mockDownloadClient{defaultLocation: "/downloads/default"}
 
-	c := NewClient(config.HttpConfig{}, &mockFileStore{}, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
 
 	body := `{"source":"magnet:?xt=urn:btih:abc123"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
@@ -323,7 +338,7 @@ func TestHTTPHandlers_CreateTracingSpans(t *testing.T) {
 			store := &mockFileStore{}
 			creator := &mockTaskCreator{}
 			dlClient := &mockDownloadClient{}
-			c := NewClient(config.HttpConfig{}, store, creator, dlClient)
+			c := NewClient(&ClientCtx{Store: store, TaskCreator: creator, DownloadClient: dlClient})
 
 			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString("{}"))
 			req.Header.Set("Content-Type", "application/json")
@@ -349,10 +364,180 @@ func TestHTTPHandlers_NoopTracingNoCrash(t *testing.T) {
 	store := &mockFileStore{}
 	creator := &mockTaskCreator{}
 	dlClient := &mockDownloadClient{}
-	c := NewClient(config.HttpConfig{}, store, creator, dlClient)
+	c := NewClient(&ClientCtx{Store: store, TaskCreator: creator, DownloadClient: dlClient})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
 	w := httptest.NewRecorder()
 
 	c.handleFiles(w, req)
+}
+
+func failingFiles(counts ...int) []*tracker.FileMetadata {
+	files := make([]*tracker.FileMetadata, 0, len(counts))
+	for i, count := range counts {
+		files = append(files, &tracker.FileMetadata{
+			ID:                  fmt.Sprintf("task-%d", i),
+			ConsecutiveFailures: count,
+		})
+	}
+
+	return files
+}
+
+func decodeHealth(t *testing.T, w *httptest.ResponseRecorder) healthResponse {
+	t.Helper()
+
+	var resp healthResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+
+	return resp
+}
+
+func callHealth(t *testing.T, ctx *ClientCtx) (*httptest.ResponseRecorder, healthResponse) {
+	t.Helper()
+
+	c := NewClient(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	c.healthHandler(w, req)
+
+	return w, decodeHealth(t, w)
+}
+
+func TestHealthOK(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:            &mockFileStore{files: failingFiles(0, 1, 2)},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}, "nnm": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-30 * time.Minute), ok: true},
+		StaleRunAfter:    2 * time.Hour,
+		StartedAt:        time.Now().Add(-5 * time.Hour),
+		FailureThreshold: 3,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	assert.Equal(t, 3, resp.Tracked)
+	assert.Equal(t, 0, resp.Failing)
+	assert.Equal(t, map[string]string{"rutracker": "ok", "nnm": "ok"}, resp.Providers)
+	require.NotNil(t, resp.LastRunAt)
+}
+
+func TestHealthDegraded(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:            &mockFileStore{files: failingFiles(0, 3, 7)},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter:    2 * time.Hour,
+		FailureThreshold: 3,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	assert.Equal(t, 3, resp.Tracked)
+	assert.Equal(t, 2, resp.Failing)
+}
+
+// a sweep that could not read the task list still refreshes last_run_at, so staleness alone
+// would report a cron that checks nothing as healthy
+func TestHealthDegradedWhenLastRunFailed(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:            &mockFileStore{files: failingFiles(0, 1)},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: false},
+		StaleRunAfter:    2 * time.Hour,
+		FailureThreshold: 3,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	assert.Equal(t, 0, resp.Failing)
+}
+
+// an unset threshold would make `>= 0` true for every row and pin health to degraded forever
+func TestHealthThresholdDefaultsWhenUnset(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:         &mockFileStore{files: failingFiles(0, 0)},
+		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter: 2 * time.Hour,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	assert.Equal(t, 0, resp.Failing)
+}
+
+func TestHealthUnhealthyBreaker(t *testing.T) {
+	nextProbe := time.Now().Add(time.Hour)
+	w, resp := callHealth(t, &ClientCtx{
+		Store: &mockFileStore{files: failingFiles(0)},
+		Breaker: &mockBreaker{states: map[string]tracker.State{
+			"rutracker": {Tripped: true, NextProbeAt: nextProbe, Cooldown: time.Hour},
+			"nnm":       {},
+		}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter:    2 * time.Hour,
+		FailureThreshold: 3,
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, "unhealthy", resp.Status)
+	assert.Equal(t, map[string]string{"rutracker": "blocked", "nnm": "ok"}, resp.Providers)
+}
+
+func TestHealthUnhealthyStale(t *testing.T) {
+	tests := []struct {
+		name       string
+		lastRunAt  time.Time
+		wantStatus string
+		wantCode   int
+	}{
+		{name: "stale", lastRunAt: time.Now().Add(-3 * time.Hour), wantStatus: "unhealthy", wantCode: http.StatusServiceUnavailable},
+		{name: "fresh", lastRunAt: time.Now().Add(-90 * time.Minute), wantStatus: "ok", wantCode: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, resp := callHealth(t, &ClientCtx{
+				Store:            &mockFileStore{},
+				Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+				RunState:         &mockRunState{at: tt.lastRunAt, ok: true},
+				StaleRunAfter:    2 * time.Hour,
+				StartedAt:        time.Now().Add(-10 * time.Hour),
+				FailureThreshold: 3,
+			})
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, tt.wantStatus, resp.Status)
+		})
+	}
+}
+
+func TestHealthNeverRanWithinGrace(t *testing.T) {
+	tests := []struct {
+		name       string
+		startedAt  time.Time
+		wantStatus string
+		wantCode   int
+	}{
+		{name: "within grace", startedAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok", wantCode: http.StatusOK},
+		{name: "past grace", startedAt: time.Now().Add(-3 * time.Hour), wantStatus: "unhealthy", wantCode: http.StatusServiceUnavailable},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, resp := callHealth(t, &ClientCtx{
+				Store:            &mockFileStore{},
+				Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+				RunState:         &mockRunState{},
+				StaleRunAfter:    2 * time.Hour,
+				StartedAt:        tt.startedAt,
+				FailureThreshold: 3,
+			})
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, tt.wantStatus, resp.Status)
+			assert.Nil(t, resp.LastRunAt)
+		})
+	}
 }

@@ -38,6 +38,7 @@ type Config struct {
 	OtelServiceName string `env:"OTEL_SERVICE_NAME" env-default:"magnet-feed-sync"`
 	OtelEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	LokiURL         string `env:"LOKI_URL"`
+	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
 }
 
 func Init() (*Config, error) {

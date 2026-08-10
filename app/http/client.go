@@ -24,7 +24,7 @@ type TaskCreator interface {
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(ctx context.Context, fileId string)
-	CheckForUpdates(ctx context.Context)
+	RefreshAll(ctx context.Context)
 }
 
 type FileStore interface {
@@ -39,24 +39,61 @@ type DownloadClient interface {
 	GetDefaultLocation() string
 }
 
-type Client struct {
-	config         config.HttpConfig
-	store          FileStore
-	taskCreator    TaskCreator
-	downloadClient DownloadClient
+type BreakerSnapshotter interface {
+	Snapshot() map[string]tracker.State
 }
 
-func NewClient(
-	cfg config.HttpConfig,
-	store FileStore,
-	taskCreator TaskCreator,
-	downloadClient DownloadClient,
-) *Client {
+type RunStateReader interface {
+	GetLastRun() (time.Time, bool, error)
+}
+
+type Client struct {
+	config           config.HttpConfig
+	store            FileStore
+	taskCreator      TaskCreator
+	downloadClient   DownloadClient
+	breaker          BreakerSnapshotter
+	runState         RunStateReader
+	staleRunAfter    time.Duration
+	startedAt        time.Time
+	failureThreshold int
+}
+
+type ClientCtx struct {
+	Config           config.HttpConfig
+	Store            FileStore
+	TaskCreator      TaskCreator
+	DownloadClient   DownloadClient
+	Breaker          BreakerSnapshotter
+	RunState         RunStateReader
+	StaleRunAfter    time.Duration
+	StartedAt        time.Time
+	FailureThreshold int
+}
+
+func NewClient(ctx *ClientCtx) *Client {
+	// an unset threshold would make `>= 0` true for every row and pin health to degraded
+	threshold := ctx.FailureThreshold
+	if threshold < 1 {
+		threshold = 1
+	}
+
+	// an unset window would make every run older than zero, pinning health to unhealthy
+	staleRunAfter := ctx.StaleRunAfter
+	if staleRunAfter <= 0 {
+		staleRunAfter = defaultStaleRunAfter
+	}
+
 	return &Client{
-		taskCreator:    taskCreator,
-		downloadClient: downloadClient,
-		config:         cfg,
-		store:          store,
+		config:           ctx.Config,
+		store:            ctx.Store,
+		taskCreator:      ctx.TaskCreator,
+		downloadClient:   ctx.DownloadClient,
+		breaker:          ctx.Breaker,
+		runState:         ctx.RunState,
+		staleRunAfter:    staleRunAfter,
+		startedAt:        ctx.StartedAt,
+		failureThreshold: threshold,
 	}
 }
 
@@ -270,7 +307,7 @@ func (c *Client) handleRefreshAllFiles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	c.taskCreator.CheckForUpdates(context.WithoutCancel(ctx))
+	c.taskCreator.RefreshAll(context.WithoutCancel(ctx))
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -342,9 +379,23 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type HealthResponse struct {
-	Count   int    `json:"count"`
-	Message string `json:"message"`
+const (
+	statusOk        = "ok"
+	statusDegraded  = "degraded"
+	statusUnhealthy = "unhealthy"
+	statusBlocked   = "blocked"
+)
+
+// defaultStaleRunAfter mirrors the fallback main.go uses when it cannot derive the window
+// from the cron expression.
+const defaultStaleRunAfter = 2 * time.Hour
+
+type healthResponse struct {
+	Status    string            `json:"status"`
+	Tracked   int               `json:"tracked"`
+	Failing   int               `json:"failing"`
+	LastRunAt *time.Time        `json:"last_run_at,omitempty"`
+	Providers map[string]string `json:"providers"`
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -358,15 +409,95 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(HealthResponse{
-		Count:   len(files),
-		Message: "OK",
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to encode health response", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	failing := 0
+	for _, f := range files {
+		if f.ConsecutiveFailures >= c.failureThreshold {
+			failing++
+		}
 	}
+
+	providerStates, anyBlocked := c.providerStates()
+	run := c.lastRun(ctx)
+
+	resp := healthResponse{
+		Status:    statusOk,
+		Tracked:   len(files),
+		Failing:   failing,
+		Providers: providerStates,
+	}
+	if run.present {
+		resp.LastRunAt = &run.at
+	}
+
+	code := http.StatusOK
+	switch {
+	case anyBlocked || c.runIsStale(run):
+		resp.Status = statusUnhealthy
+		code = http.StatusServiceUnavailable
+	// a sweep that could not read the task list refreshed last_run_at without checking
+	// anything, so staleness alone would report it as healthy
+	case failing > 0 || (run.present && !run.ok):
+		resp.Status = statusDegraded
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(ctx, "failed to encode health response", "error", err)
+	}
+}
+
+func (c *Client) providerStates() (map[string]string, bool) {
+	states := make(map[string]string)
+	if c.breaker == nil {
+		return states, false
+	}
+
+	anyBlocked := false
+	for name, state := range c.breaker.Snapshot() {
+		if state.Tripped {
+			states[name] = statusBlocked
+			anyBlocked = true
+			continue
+		}
+		states[name] = statusOk
+	}
+
+	return states, anyBlocked
+}
+
+type runInfo struct {
+	at      time.Time
+	ok      bool
+	present bool
+}
+
+func (c *Client) lastRun(ctx context.Context) runInfo {
+	if c.runState == nil {
+		return runInfo{}
+	}
+
+	at, ok, err := c.runState.GetLastRun()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to read last run state", "error", err)
+		return runInfo{}
+	}
+
+	return runInfo{at: at, ok: ok, present: !at.IsZero()}
+}
+
+func (c *Client) runIsStale(run runInfo) bool {
+	if run.present {
+		return time.Since(run.at) > c.staleRunAfter
+	}
+
+	// a freshly booted service has not run yet; the grace period starts at boot
+	if c.startedAt.IsZero() {
+		return false
+	}
+
+	return time.Since(c.startedAt) > c.staleRunAfter
 }
 
 func (c *Client) fileHandler(w http.ResponseWriter, r *http.Request) {

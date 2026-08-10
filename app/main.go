@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tbapi "github.com/OvyFlash/telegram-bot-api"
+	"github.com/robfig/cron/v3"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
@@ -67,16 +68,39 @@ func run(cfg *config.Config) error {
 
 	dClient := qbittorrent.NewClient(cfg.QBittorrent)
 
+	directFetcher := providers.NewDirectFetcher()
+
+	rutrackerFetcher := providers.NewBlockedFetcher()
+	if cfg.FlaresolverrURL != "" {
+		solver := providers.NewSolverFetcher(cfg.FlaresolverrURL)
+		rutrackerFetcher = solver
+		slog.Info("rutracker provider uses flaresolverr", "url", redactURL(cfg.FlaresolverrURL))
+
+		// run() cancels ctx before deferred functions run, so the session teardown
+		// needs a context that survives it
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer closeCancel()
+			if err := solver.Close(closeCtx); err != nil {
+				slog.Error("error closing flaresolverr session", "error", err)
+			}
+		}()
+	} else {
+		slog.Warn("flaresolverr url is not configured, rutracker pages will be reported as blocked")
+	}
+
 	providerList := []providers.Provider{
-		&providers.RutrackerProvider{},
-		&providers.NnmProvider{},
+		providers.NewRutrackerProvider(rutrackerFetcher),
+		providers.NewNnmProvider(directFetcher),
 	}
 	if cfg.Jackett.URL != "" {
 		redacted := redactURL(cfg.Jackett.URL)
 		slog.Info("jackett provider enabled", "url", redacted)
-		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
+		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL, directFetcher))
 	}
 	t := tracker.NewParser(dClient, providerList...)
+
+	breaker := newProviderBreaker(providerList)
 
 	db, err := database.NewClient("tasks.db")
 	if err != nil {
@@ -93,6 +117,7 @@ func run(cfg *config.Config) error {
 		Tracker:         t,
 		DClient:         dClient,
 		Store:           store,
+		Breaker:         breaker,
 		DryMode:         cfg.DryMode,
 		MessagesForSend: messagesForSend,
 	})
@@ -104,7 +129,7 @@ func run(cfg *config.Config) error {
 
 	schedulerErr := make(chan error, 1)
 	go func() {
-		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) }); err != nil {
+		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(ctx) }); err != nil {
 			schedulerErr <- err
 		}
 	}()
@@ -122,8 +147,20 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	}
 
+	httpClient := http.NewClient(&http.ClientCtx{
+		Config:           cfg.Http,
+		Store:            store,
+		TaskCreator:      downloadTasksClient,
+		DownloadClient:   dClient,
+		Breaker:          breaker,
+		RunState:         store,
+		StaleRunAfter:    staleRunAfter(cfg.Cron),
+		StartedAt:        time.Now(),
+		FailureThreshold: downloadTasks.FailureThreshold,
+	})
+
 	go tgListener.SendMessagesForAdmins(ctx)
-	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx, done)
+	go httpClient.Start(ctx, done)
 
 	go func() {
 		if err := tgListener.Do(); err != nil {
@@ -154,15 +191,62 @@ func run(cfg *config.Config) error {
 	return runErr
 }
 
+const (
+	staleRunFallback = 2 * time.Hour
+	// enough firings to see the longest gap of a clustered schedule such as `0 9,10 * * *`,
+	// where the first gap is 1h but the real one is 23h
+	staleRunSamples = 24
+)
+
+func staleRunAfter(cronExpr string) time.Duration {
+	sched, err := cron.ParseStandard(cronExpr)
+	if err != nil {
+		slog.Warn("invalid cron expression, using fallback stale run interval", "cron", cronExpr, "error", err)
+		return staleRunFallback
+	}
+
+	longest := time.Duration(0)
+	at := sched.Next(time.Now())
+	for range staleRunSamples {
+		next := sched.Next(at)
+		if gap := next.Sub(at); gap > longest {
+			longest = gap
+		}
+		at = next
+	}
+
+	if longest <= 0 {
+		return staleRunFallback
+	}
+
+	return 2 * longest
+}
+
+func newProviderBreaker(providerList []providers.Provider) *tracker.Breaker {
+	names := make([]string, 0, len(providerList))
+	for _, provider := range providerList {
+		names = append(names, provider.Name())
+	}
+
+	return tracker.NewBreaker(nil, names...)
+}
+
+// redactedPlaceholder is url-safe on purpose: '*' would be percent-escaped into the log line
+const redactedPlaceholder = "redacted"
+
 func redactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "<invalid url>"
 	}
+	// basic-auth credentials in the url would otherwise reach stdout and loki verbatim
+	if u.User != nil {
+		u.User = url.User(redactedPlaceholder)
+	}
 	q := u.Query()
 	for key := range q {
 		if strings.Contains(strings.ToLower(key), "apikey") || strings.Contains(strings.ToLower(key), "api_key") {
-			q.Set(key, "***")
+			q.Set(key, redactedPlaceholder)
 		}
 	}
 	u.RawQuery = q.Encode()

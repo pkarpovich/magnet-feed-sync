@@ -16,6 +16,17 @@ func TestInit_DefaultValues(t *testing.T) {
 	assert.Equal(t, "magnet-feed-sync", cfg.OtelServiceName)
 	assert.Empty(t, cfg.OtelEndpoint)
 	assert.Empty(t, cfg.LokiURL)
+	assert.Empty(t, cfg.FlaresolverrURL)
+}
+
+func TestInit_FlaresolverrFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("FLARESOLVERR_URL", "https://flaresolverr.example.com/v1")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://flaresolverr.example.com/v1", cfg.FlaresolverrURL)
 }
 
 func TestInit_QBittorrentFromEnv(t *testing.T) {

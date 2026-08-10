@@ -44,11 +44,11 @@ func TestJackettProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		fmt.Fprint(w, xmlResponse)
+		_, _ = fmt.Fprint(w, xmlResponse)
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/test/results?q=test")
 	require.NoError(t, err)
 	assert.Equal(t, "Test Torrent", result.Title)
@@ -73,11 +73,11 @@ func TestRutrackerProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, htmlResponse)
+		_, _ = fmt.Fprint(w, htmlResponse)
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"?t=123")
 	require.NoError(t, err)
 	assert.Equal(t, "Test Rutracker Torrent", result.Title)
@@ -102,11 +102,11 @@ func TestNnmProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, htmlResponse)
+		_, _ = fmt.Fprint(w, htmlResponse)
 	}))
 	defer server.Close()
 
-	provider := &NnmProvider{}
+	provider := NewNnmProvider(NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"?t=456")
 	require.NoError(t, err)
 	assert.Equal(t, "Test NNM Torrent", result.Title)
@@ -126,11 +126,11 @@ func TestProviderParse_NoopTracingNoCrash(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<html><body><a class="magnet-link" href="magnet:?xt=urn:btih:abc">m</a></body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><a class="magnet-link" href="magnet:?xt=urn:btih:abc">m</a></body></html>`)
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	_, err := provider.Parse(context.Background(), server.URL+"?t=1")
 	require.NoError(t, err)
 }

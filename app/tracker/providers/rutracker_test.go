@@ -35,7 +35,7 @@ func TestRutrackerProvider_CanHandle(t *testing.T) {
 		},
 	}
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, provider.CanHandle(tt.url))
@@ -53,7 +53,7 @@ func TestRutrackerProvider_Parse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 
 	result, err := provider.Parse(context.Background(), server.URL+"/forum/viewtopic.php?t=6810475")
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestRutrackerProvider_Parse_StableDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	url := server.URL + "/forum/viewtopic.php?t=6810475"
 
 	result1, err := provider.Parse(context.Background(), url)
@@ -100,7 +100,7 @@ func TestRutrackerProvider_Parse_3304959(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 
 	result, err := provider.Parse(context.Background(), server.URL+"/forum/viewtopic.php?t=3304959")
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestRutrackerProvider_Parse_3304959_StableDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	url := server.URL + "/forum/viewtopic.php?t=3304959"
 
 	result1, err := provider.Parse(context.Background(), url)
@@ -155,7 +155,7 @@ func TestRutrackerProvider_GetID(t *testing.T) {
 		},
 	}
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := provider.getID(tt.url)

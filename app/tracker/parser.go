@@ -23,6 +23,10 @@ type FileMetadata struct {
 	Location         string       `json:"location"`
 	CreatedAt        time.Time    `json:"-"`
 	DeleteAt         sql.NullTime `json:"-"`
+
+	ConsecutiveFailures int          `json:"-"`
+	LastError           string       `json:"-"`
+	LastErrorAt         sql.NullTime `json:"-"`
 }
 
 var ErrProviderNotFound = errors.New("provider not found")
@@ -46,7 +50,8 @@ func NewParser(downloadClient DownloadClient, providerList ...providers.Provider
 func (p *Parser) Parse(ctx context.Context, url string, location string) (*FileMetadata, error) {
 	provider := p.getProvider(url)
 	if provider == nil {
-		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, url)
+		// the error text reaches the logs and Loki, so it must not carry a jackett api key
+		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, stripAPIKey(url))
 	}
 
 	result, err := provider.Parse(ctx, url)
@@ -95,6 +100,15 @@ func stripAPIKey(rawURL string) string {
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func (p *Parser) ProviderName(url string) string {
+	provider := p.getProvider(url)
+	if provider == nil {
+		return ""
+	}
+
+	return provider.Name()
 }
 
 func (p *Parser) getProvider(url string) providers.Provider {
