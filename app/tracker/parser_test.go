@@ -271,6 +271,21 @@ func TestParser_ProviderName(t *testing.T) {
 	})
 }
 
+// the provider-not-found error is logged verbatim and shipped to loki, so a torznab url
+// submitted while jackett is unconfigured must not carry its api key into the log line
+func TestParser_ProviderNotFoundErrorHidesAPIKey(t *testing.T) {
+	p := NewParser(
+		&mockDownloadClient{},
+		&mockProvider{name: "rutracker", canHandleResult: false},
+	)
+
+	_, err := p.Parse(context.Background(), "http://jackett:9117/api/v2.0/indexers/x/results/torznab?apikey=SECRET123&t=details", "")
+
+	require.ErrorIs(t, err, ErrProviderNotFound)
+	assert.NotContains(t, err.Error(), "SECRET123")
+	assert.Contains(t, err.Error(), "jackett:9117")
+}
+
 func TestParser_ProviderSelection(t *testing.T) {
 	result1 := &providers.Result{ID: "from-provider-1", Title: "Provider 1", Magnet: "magnet:1"}
 	result2 := &providers.Result{ID: "from-provider-2", Title: "Provider 2", Magnet: "magnet:2"}

@@ -228,12 +228,19 @@ const (
 	lastRunOkKey = "last_run_ok"
 )
 
+// SetLastRun writes both keys in one statement: a half-applied pair would pair a fresh
+// timestamp with the previous run's ok flag and mislead the health endpoint until the next sweep.
 func (r *Repository) SetLastRun(at time.Time, ok bool) error {
-	if err := r.setState(lastRunAtKey, at.UTC().Format(time.RFC3339)); err != nil {
-		return err
+	_, err := r.db.Exec(
+		`INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?), (?, ?)`,
+		lastRunAtKey, at.UTC().Format(time.RFC3339),
+		lastRunOkKey, strconv.FormatBool(ok),
+	)
+	if err != nil {
+		return fmt.Errorf("set last run: %w", err)
 	}
 
-	return r.setState(lastRunOkKey, strconv.FormatBool(ok))
+	return nil
 }
 
 func (r *Repository) GetLastRun() (time.Time, bool, error) {
@@ -256,15 +263,6 @@ func (r *Repository) GetLastRun() (time.Time, bool, error) {
 	}
 
 	return at, rawOk == "true", nil
-}
-
-func (r *Repository) setState(key, value string) error {
-	_, err := r.db.Exec(`INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)`, key, value)
-	if err != nil {
-		return fmt.Errorf("set app state %s: %w", key, err)
-	}
-
-	return nil
 }
 
 func (r *Repository) state(key string) (string, error) {

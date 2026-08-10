@@ -78,6 +78,12 @@ func NewClient(ctx *ClientCtx) *Client {
 		threshold = 1
 	}
 
+	// an unset window would make every run older than zero, pinning health to unhealthy
+	staleRunAfter := ctx.StaleRunAfter
+	if staleRunAfter <= 0 {
+		staleRunAfter = defaultStaleRunAfter
+	}
+
 	return &Client{
 		config:           ctx.Config,
 		store:            ctx.Store,
@@ -85,7 +91,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		downloadClient:   ctx.DownloadClient,
 		breaker:          ctx.Breaker,
 		runState:         ctx.RunState,
-		staleRunAfter:    ctx.StaleRunAfter,
+		staleRunAfter:    staleRunAfter,
 		startedAt:        ctx.StartedAt,
 		failureThreshold: threshold,
 	}
@@ -379,6 +385,10 @@ const (
 	statusUnhealthy = "unhealthy"
 	statusBlocked   = "blocked"
 )
+
+// defaultStaleRunAfter mirrors the fallback main.go uses when it cannot derive the window
+// from the cron expression.
+const defaultStaleRunAfter = 2 * time.Hour
 
 type healthResponse struct {
 	Status    string            `json:"status"`

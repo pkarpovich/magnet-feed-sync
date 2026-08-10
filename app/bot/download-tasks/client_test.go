@@ -1283,6 +1283,57 @@ func TestNotifyAgainAfterRecovery(t *testing.T) {
 	assert.Len(t, msgChan, 1, "a new streak alerts again")
 }
 
+// re-adding a tracked task rewrites the row with a freshly parsed metadata, zeroing the
+// failure counters; the in-memory notice has to be dropped with them or the next streak
+// on that task would stay silent forever
+func TestNotifyAgainAfterTaskRecreated(t *testing.T) {
+	parseErr := error(nil)
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			return &tracker.FileMetadata{ID: "3304959", Magnet: "magnet:?xt=urn:btih:aaa"}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc:         func(id string) (*tracker.FileMetadata, error) { return nil, sql.ErrNoRows },
+		createOrReplaceFunc: func(*tracker.FileMetadata) error { return nil },
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{createDownloadTaskFunc: func(string, string) error { return nil }},
+		Store:           store,
+		Breaker:         &mockBreaker{},
+	})
+
+	failing := &tracker.FileMetadata{
+		ID:                  "3304959",
+		Name:                "Some Movie",
+		OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		ConsecutiveFailures: FailureThreshold - 1,
+	}
+
+	parseErr = &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+	client.processFileMetadata(context.Background(), failing, true)
+	require.Len(t, msgChan, 1)
+	<-msgChan
+
+	// the user re-adds the url; the parse succeeds and the counters go back to zero
+	parseErr = nil
+	_, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=3304959", "/movies")
+	require.NoError(t, err)
+
+	parseErr = &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+	client.processFileMetadata(context.Background(), failing, true)
+	assert.Len(t, msgChan, 1, "a streak after a re-create alerts again")
+}
+
 func TestNotificationsEscapeMarkdown(t *testing.T) {
 	parser := &mockFileParser{
 		providerName: "rutracker",

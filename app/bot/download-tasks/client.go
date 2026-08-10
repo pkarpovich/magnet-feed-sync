@@ -155,6 +155,10 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 
 	c.mu.Unlock()
 
+	// CreateOrReplace wrote the freshly parsed metadata, so the failure counters are back to
+	// zero; leaving the id in the set would swallow the alert for the next failing streak
+	c.clearFailingNotified(metadata.ID)
+
 	if c.dryMode {
 		return metadata, nil
 	}
@@ -215,7 +219,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		text := c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
-			c.notifyFailing(fileMetadata, text)
+			c.notifyFailing(ctx, fileMetadata, text)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -229,7 +233,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		if name := c.tracker.ProviderName(fileMetadata.OriginalUrl); name != "" {
 			c.breaker.RecordSuccess(name)
 		}
-		c.notifyRecovered(fileMetadata)
+		c.notifyRecovered(ctx, fileMetadata)
 	}
 
 	c.mu.Lock()
@@ -275,7 +279,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	if c.dryMode {
 		slog.InfoContext(ctx, "dry mode is enabled, skipping download")
-		c.sendUpdateNotification(updatedMetadata)
+		c.sendUpdateNotification(ctx, updatedMetadata)
 		return
 	}
 
@@ -293,7 +297,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	}
 
 	slog.InfoContext(ctx, "download task created", "name", updatedMetadata.Name)
-	c.sendUpdateNotification(updatedMetadata)
+	c.sendUpdateNotification(ctx, updatedMetadata)
 }
 
 func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
@@ -327,7 +331,7 @@ func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) 
 // at or above the threshold. It cannot key off the exact 2→3 transition: a manual refresh
 // increments the counter without notifying, so the crossing run may not be a cron run at all,
 // and the alert would then be lost for good.
-func (c *Client) notifyFailing(metadata *tracker.FileMetadata, lastError string) {
+func (c *Client) notifyFailing(ctx context.Context, metadata *tracker.FileMetadata, lastError string) {
 	// ConsecutiveFailures is the count read before this run's own increment
 	failures := metadata.ConsecutiveFailures + 1
 	if failures < FailureThreshold {
@@ -338,10 +342,21 @@ func (c *Client) notifyFailing(metadata *tracker.FileMetadata, lastError string)
 		return
 	}
 
-	c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
+	c.send(ctx, escapeMarkdown(fmt.Sprintf(
 		"⚠️ Task is failing after %d attempts:\n\n%s (%s)\n\n%s",
 		failures, metadata.Name, metadata.ID, lastError,
-	))
+	)))
+}
+
+// send hands a message to the admin sender, giving up when the app context is cancelled:
+// the consumer stops on shutdown, and a bare send on the unbuffered channel would then
+// block this goroutine forever and skip the deferred run-state write.
+func (c *Client) send(ctx context.Context, msg string) {
+	select {
+	case c.messagesForSend <- msg:
+	case <-ctx.Done():
+		slog.InfoContext(ctx, "dropped admin notification, shutting down")
+	}
 }
 
 // markFailingNotified claims the alert for id, reporting whether this caller won it.
@@ -363,15 +378,15 @@ func (c *Client) clearFailingNotified(id string) {
 	delete(c.failingNotified, id)
 }
 
-func (c *Client) notifyRecovered(metadata *tracker.FileMetadata) {
+func (c *Client) notifyRecovered(ctx context.Context, metadata *tracker.FileMetadata) {
 	if metadata.ConsecutiveFailures < FailureThreshold {
 		return
 	}
 
-	c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
+	c.send(ctx, escapeMarkdown(fmt.Sprintf(
 		"✅ Task recovered after %d failures:\n\n%s (%s)\n\nlast error: %s",
 		metadata.ConsecutiveFailures, metadata.Name, metadata.ID, metadata.LastError,
-	))
+	)))
 }
 
 // escapeMarkdown makes plain text safe for the MarkdownV2 parse mode every admin
@@ -399,13 +414,13 @@ func (c *Client) recordParseFailure(url string, err error) {
 	c.breaker.RecordFailure(name, providerErr.Kind)
 }
 
-func (c *Client) sendUpdateNotification(metadata *tracker.FileMetadata) {
+func (c *Client) sendUpdateNotification(ctx context.Context, metadata *tracker.FileMetadata) {
 	formatedMsg, err := MetadataToMsg(metadata)
 	if err != nil {
-		slog.Error("error formatting metadata", "error", err)
+		slog.ErrorContext(ctx, "error formatting metadata", "error", err)
 		return
 	}
-	c.messagesForSend <- fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg)
+	c.send(ctx, fmt.Sprintf("✅ Metadata updated:\n\n%s", formatedMsg))
 }
 
 func magnetsEqual(a, b string) bool {
@@ -477,7 +492,7 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
 	}
 
-	c.notifyBreakerTransitions(breakerDelta{before: before, after: c.breaker.Snapshot(), skipped: skipped})
+	c.notifyBreakerTransitions(ctx, breakerDelta{before: before, after: c.breaker.Snapshot(), skipped: skipped})
 }
 
 // RefreshAll re-checks every task on demand. It records store outcomes so the counters stay
@@ -513,17 +528,17 @@ type breakerDelta struct {
 	skipped map[string]int
 }
 
-func (c *Client) notifyBreakerTransitions(delta breakerDelta) {
+func (c *Client) notifyBreakerTransitions(ctx context.Context, delta breakerDelta) {
 	for name, state := range delta.after {
 		was := delta.before[name]
 		switch {
 		case state.Tripped && !was.Tripped:
-			c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
+			c.send(ctx, escapeMarkdown(fmt.Sprintf(
 				"🚫 Provider %s is blocked, %d task(s) skipped this run, next probe at %s",
 				name, delta.skipped[name], state.NextProbeAt.Format(time.RFC3339),
-			))
+			)))
 		case was.Tripped && !state.Tripped:
-			c.messagesForSend <- escapeMarkdown(fmt.Sprintf("✅ Provider %s is reachable again", name))
+			c.send(ctx, escapeMarkdown(fmt.Sprintf("✅ Provider %s is reachable again", name)))
 		}
 	}
 }

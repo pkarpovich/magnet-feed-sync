@@ -50,7 +50,8 @@ func NewParser(downloadClient DownloadClient, providerList ...providers.Provider
 func (p *Parser) Parse(ctx context.Context, url string, location string) (*FileMetadata, error) {
 	provider := p.getProvider(url)
 	if provider == nil {
-		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, url)
+		// the error text reaches the logs and Loki, so it must not carry a jackett api key
+		return nil, fmt.Errorf("%w for url: %s", ErrProviderNotFound, stripAPIKey(url))
 	}
 
 	result, err := provider.Parse(ctx, url)
