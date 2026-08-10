@@ -250,6 +250,27 @@ func TestParser_TrackerURLSwap(t *testing.T) {
 	})
 }
 
+func TestParser_ProviderName(t *testing.T) {
+	t.Run("returns the name of the handling provider", func(t *testing.T) {
+		p := NewParser(
+			&mockDownloadClient{},
+			&mockProvider{name: "nnm", canHandleResult: false},
+			&mockProvider{name: "rutracker", canHandleResult: true},
+		)
+
+		assert.Equal(t, "rutracker", p.ProviderName("https://rutracker.org/forum/viewtopic.php?t=1"))
+	})
+
+	t.Run("returns empty string when nothing handles the url", func(t *testing.T) {
+		p := NewParser(
+			&mockDownloadClient{},
+			&mockProvider{name: "rutracker", canHandleResult: false},
+		)
+
+		assert.Equal(t, "", p.ProviderName("https://unknown.com/test"))
+	})
+}
+
 func TestParser_ProviderSelection(t *testing.T) {
 	result1 := &providers.Result{ID: "from-provider-1", Title: "Provider 1", Magnet: "magnet:1"}
 	result2 := &providers.Result{ID: "from-provider-2", Title: "Provider 2", Magnet: "magnet:2"}

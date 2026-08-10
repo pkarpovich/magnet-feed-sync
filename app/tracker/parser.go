@@ -97,6 +97,15 @@ func stripAPIKey(rawURL string) string {
 	return u.String()
 }
 
+func (p *Parser) ProviderName(url string) string {
+	provider := p.getProvider(url)
+	if provider == nil {
+		return ""
+	}
+
+	return provider.Name()
+}
+
 func (p *Parser) getProvider(url string) providers.Provider {
 	for _, provider := range p.providers {
 		if provider.CanHandle(url) {

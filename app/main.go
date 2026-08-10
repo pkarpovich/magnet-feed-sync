@@ -99,6 +99,8 @@ func run(cfg *config.Config) error {
 	}
 	t := tracker.NewParser(dClient, providerList...)
 
+	breaker := newProviderBreaker(providerList)
+
 	db, err := database.NewClient("tasks.db")
 	if err != nil {
 		return fmt.Errorf("failed to create database client: %w", err)
@@ -114,6 +116,7 @@ func run(cfg *config.Config) error {
 		Tracker:         t,
 		DClient:         dClient,
 		Store:           store,
+		Breaker:         breaker,
 		DryMode:         cfg.DryMode,
 		MessagesForSend: messagesForSend,
 	})
@@ -173,6 +176,15 @@ func run(cfg *config.Config) error {
 	}
 
 	return runErr
+}
+
+func newProviderBreaker(providerList []providers.Provider) *tracker.Breaker {
+	names := make([]string, 0, len(providerList))
+	for _, provider := range providerList {
+		names = append(names, provider.Name())
+	}
+
+	return tracker.NewBreaker(nil, names...)
 }
 
 func redactURL(rawURL string) string {

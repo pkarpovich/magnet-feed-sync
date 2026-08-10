@@ -14,6 +14,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/types"
 
 	"github.com/stretchr/testify/assert"
@@ -21,11 +22,42 @@ import (
 )
 
 type mockFileParser struct {
-	parseFunc func(url, location string) (*tracker.FileMetadata, error)
+	parseFunc    func(url, location string) (*tracker.FileMetadata, error)
+	providerName string
 }
 
 func (m *mockFileParser) Parse(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
 	return m.parseFunc(url, location)
+}
+
+func (m *mockFileParser) ProviderName(url string) string {
+	return m.providerName
+}
+
+type mockBreaker struct {
+	allowed   map[string]bool
+	begun     int
+	failures  []string
+	kinds     []providers.ErrorKind
+	successes []string
+}
+
+func (m *mockBreaker) Allow(name string) bool {
+	allowed, ok := m.allowed[name]
+	return !ok || allowed
+}
+
+func (m *mockBreaker) BeginRun() {
+	m.begun++
+}
+
+func (m *mockBreaker) RecordFailure(name string, kind providers.ErrorKind) {
+	m.failures = append(m.failures, name)
+	m.kinds = append(m.kinds, kind)
+}
+
+func (m *mockBreaker) RecordSuccess(name string) {
+	m.successes = append(m.successes, name)
 }
 
 type mockFileStore struct {
@@ -198,7 +230,7 @@ func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) 
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
-	})
+	}, true)
 
 	assert.False(t, downloadCalled, "download should not be triggered when magnet is unchanged")
 	assert.Empty(t, msgChan, "no notification should be sent when magnet is unchanged")
@@ -267,7 +299,7 @@ func TestProcessFileMetadata_DifferentMagnet_RedownloadTriggered(t *testing.T) {
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
-	})
+	}, true)
 
 	assert.True(t, downloadCalled, "download should be triggered when magnet changes")
 	assert.Equal(t, newMagnet, downloadedMagnet, "new magnet should be used for download")
@@ -339,7 +371,7 @@ func TestProcessFileMetadata_SameMagnetSameDate_MetadataUpdated(t *testing.T) {
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      magnet,
-	})
+	}, true)
 
 	assert.False(t, downloadCalled, "download should not be triggered")
 	assert.Empty(t, msgChan, "no notification should be sent")
@@ -368,7 +400,7 @@ func TestProcessFileMetadata_ParseError_NoCrash(t *testing.T) {
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
-	})
+	}, true)
 
 	assert.Empty(t, msgChan, "no notification should be sent on parse error")
 }
@@ -401,7 +433,7 @@ func TestProcessFileMetadata_ParseError_LogsTaskIdAndUrl(t *testing.T) {
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
-	})
+	}, true)
 
 	var line map[string]any
 	require.NoError(t, json.Unmarshal(logs.Bytes(), &line))
@@ -454,7 +486,7 @@ func TestProcessFileMetadata_EmptyOriginalUrl_Skipped(t *testing.T) {
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "",
-	})
+	}, true)
 }
 
 func TestProcessFileMetadata_DeletedTask_Skipped(t *testing.T) {
@@ -497,7 +529,7 @@ func TestProcessFileMetadata_DeletedTask_Skipped(t *testing.T) {
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
-	})
+	}, true)
 
 	assert.False(t, downloadCalled, "download should not be triggered for deleted task")
 	assert.Empty(t, msgChan, "no notification for deleted task")
@@ -550,7 +582,7 @@ func TestProcessFileMetadata_DifferentMagnet_DryMode_NoDownload(t *testing.T) {
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
-	})
+	}, true)
 
 	assert.False(t, downloadCalled, "download should not be triggered in dry mode")
 
@@ -625,7 +657,7 @@ func TestProcessFileMetadata_DifferentMagnet_DownloadFails_MagnetReverted(t *tes
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
 		Magnet:      oldMagnet,
-	})
+	}, true)
 
 	assert.Equal(t, 2, saveCount, "store should be written twice: update then rollback")
 	require.NotNil(t, lastSavedMetadata, "rollback metadata should be saved")
@@ -679,7 +711,7 @@ func TestProcessFileMetadata_SameBtihDifferentTrackerUrl_NoRedownload(t *testing
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "3304959",
 		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
-	})
+	}, true)
 
 	assert.False(t, downloadCalled, "download should not trigger when btih hash matches despite different tracker URLs")
 	assert.Empty(t, msgChan, "no notification when btih hash matches")
@@ -731,9 +763,127 @@ func TestProcessFileMetadata_NoBtihHash_DifferentMagnets_RedownloadTriggered(t *
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "test-v2",
 		OriginalUrl: "https://example.com/topic/123",
-	})
+	}, true)
 
 	assert.True(t, downloadCalled, "download should trigger when magnets differ and have no btih hash")
+}
+
+func TestProcessFileMetadata_BlockedError_RecordsBreakerFailure(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+		Breaker:         breaker,
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	}, true)
+
+	assert.Equal(t, []string{"rutracker"}, breaker.failures)
+	assert.Equal(t, []providers.ErrorKind{providers.KindBlocked}, breaker.kinds)
+	assert.Empty(t, breaker.successes)
+}
+
+func TestProcessFileMetadata_UnclassifiedError_RecordsNothing(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+		Breaker:         breaker,
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	}, true)
+
+	assert.Empty(t, breaker.failures, "an unclassified error must not feed the breaker")
+}
+
+func TestProcessFileMetadata_ParseSuccess_RecordsBreakerSuccess(t *testing.T) {
+	magnet := "magnet:?xt=urn:btih:abc123"
+	parser := &mockFileParser{
+		providerName: "nnm",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: magnet}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: magnet, Location: "/downloads"}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error { return nil },
+	}
+
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "1",
+		OriginalUrl: "https://nnmclub.to/forum/viewtopic.php?t=1",
+	}, true)
+
+	assert.Equal(t, []string{"nnm"}, breaker.successes)
+}
+
+func TestCheckForUpdates_BlockedProvider_SkipsWithoutParse(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			t.Fatal("parser must not be called for a blocked provider")
+			return nil, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1"},
+				{ID: "2", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=2"},
+			}, nil
+		},
+	}
+
+	breaker := &mockBreaker{allowed: map[string]bool{"rutracker": false}}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.CheckForUpdates(context.Background())
+
+	assert.Equal(t, 1, breaker.begun, "the run must be announced to the breaker exactly once")
+	assert.Empty(t, breaker.failures, "skipped tasks must not record anything")
 }
 
 func TestMagnetsEqual(t *testing.T) {
@@ -813,7 +963,7 @@ func TestProcessFileMetadata_CreatesTracingSpan(t *testing.T) {
 	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
 		ID:          "123",
 		OriginalUrl: "https://example.com/topic/123",
-	})
+	}, true)
 
 	spans := exporter.GetSpans()
 	require.GreaterOrEqual(t, len(spans), 1)

@@ -14,11 +14,20 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/utils"
 )
 
 type FileParser interface {
 	Parse(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
+	ProviderName(url string) string
+}
+
+type ProviderBreaker interface {
+	Allow(name string) bool
+	BeginRun()
+	RecordFailure(name string, kind providers.ErrorKind)
+	RecordSuccess(name string)
 }
 
 type FileStore interface {
@@ -38,6 +47,7 @@ type Client struct {
 	tracker         FileParser
 	dClient         DownloadClient
 	store           FileStore
+	breaker         ProviderBreaker
 	dryMode         bool
 }
 
@@ -46,18 +56,32 @@ type ClientCtx struct {
 	Tracker         FileParser
 	DClient         DownloadClient
 	Store           FileStore
+	Breaker         ProviderBreaker
 	DryMode         bool
 }
 
 func NewClient(ctx *ClientCtx) *Client {
+	breaker := ctx.Breaker
+	if breaker == nil {
+		breaker = noopBreaker{}
+	}
+
 	return &Client{
 		messagesForSend: ctx.MessagesForSend,
 		tracker:         ctx.Tracker,
 		dClient:         ctx.DClient,
 		dryMode:         ctx.DryMode,
 		store:           ctx.Store,
+		breaker:         breaker,
 	}
 }
+
+type noopBreaker struct{}
+
+func (noopBreaker) Allow(string) bool                         { return true }
+func (noopBreaker) BeginRun()                                 {}
+func (noopBreaker) RecordFailure(string, providers.ErrorKind) {}
+func (noopBreaker) RecordSuccess(string)                      {}
 
 func (c *Client) OnMessage(ctx context.Context, msg bot.Message, location string) (bool, string, error) {
 	metadata, err := c.CreateFromURL(ctx, msg.Text, location)
@@ -152,7 +176,7 @@ func (c *Client) rollbackCreate(ctx context.Context, id string, existing *tracke
 	}
 }
 
-func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.FileMetadata) {
+func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.FileMetadata, fromCron bool) {
 	ctx, span := otel.Tracer("download-tasks").Start(ctx, "processFileMetadata")
 	defer span.End()
 
@@ -162,10 +186,19 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
+		if fromCron {
+			c.recordParseFailure(fileMetadata.OriginalUrl, err)
+		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "error parsing metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
 		return
+	}
+
+	if fromCron {
+		if name := c.tracker.ProviderName(fileMetadata.OriginalUrl); name != "" {
+			c.breaker.RecordSuccess(name)
+		}
 	}
 
 	c.mu.Lock()
@@ -232,6 +265,20 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	c.sendUpdateNotification(updatedMetadata)
 }
 
+func (c *Client) recordParseFailure(url string, err error) {
+	name := c.tracker.ProviderName(url)
+	if name == "" {
+		return
+	}
+
+	var providerErr *providers.ProviderError
+	if !errors.As(err, &providerErr) {
+		return
+	}
+
+	c.breaker.RecordFailure(name, providerErr.Kind)
+}
+
 func (c *Client) sendUpdateNotification(metadata *tracker.FileMetadata) {
 	formatedMsg, err := MetadataToMsg(metadata)
 	if err != nil {
@@ -261,6 +308,8 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	slog.InfoContext(ctx, "checking for updates")
 
+	c.breaker.BeginRun()
+
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
 		span.RecordError(err)
@@ -269,8 +318,19 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 		return
 	}
 
+	skipped := make(map[string]int)
 	for _, metadata := range filesMetadata {
-		c.processFileMetadata(ctx, metadata)
+		name := c.tracker.ProviderName(metadata.OriginalUrl)
+		if name != "" && !c.breaker.Allow(name) {
+			skipped[name]++
+			continue
+		}
+
+		c.processFileMetadata(ctx, metadata, true)
+	}
+
+	for name, count := range skipped {
+		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
 	}
 }
 
@@ -304,7 +364,7 @@ func (c *Client) CheckFileForUpdates(ctx context.Context, fileId string) {
 		return
 	}
 
-	c.processFileMetadata(ctx, metadata)
+	c.processFileMetadata(ctx, metadata, false)
 }
 
 func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {

@@ -617,25 +617,25 @@ of any task's completion criteria.**
 - Modify: `app/bot/download-tasks/client.go`, `client_test.go`
 - Modify: `app/main.go`
 
-- [ ] add `func (p *Parser) ProviderName(url string) string` returning `""` when nothing handles it
-- [ ] implement `Breaker` exactly as specified in Technical Details: `NewBreaker(now, names...)` seeding
+- [x] add `func (p *Parser) ProviderName(url string) string` returning `""` when nothing handles it
+- [x] implement `Breaker` exactly as specified in Technical Details: `NewBreaker(now, names...)` seeding
       one untripped entry per provider, `BeginRun`, mutating `Allow` with `probedThisRun`, `RecordFailure`
       / `RecordSuccess`, `Snapshot`, mutex-guarded, doubling cooldown `1h→24h`
-- [ ] extend the local `FileParser` consumer interface with `ProviderName(url string) string` and update
+- [x] extend the local `FileParser` consumer interface with `ProviderName(url string) string` and update
       `mockFileParser`
-- [ ] add the consumer interface
+- [x] add the consumer interface
       `type ProviderBreaker interface { Allow(string) bool; BeginRun(); RecordFailure(string, providers.ErrorKind); RecordSuccess(string) }`
       plus a `Breaker` field on `ClientCtx`; construct one `*tracker.Breaker` in `main.go` and inject it
       into both the download-tasks client and (as `BreakerSnapshotter`) the HTTP client in Task 7
-- [ ] **wire the recording calls** in `processFileMetadata` per the Wiring block in Technical Details
+- [x] **wire the recording calls** in `processFileMetadata` per the Wiring block in Technical Details
       (`errors.As` to recover the kind; skip when `name == ""`; only when `fromCron`) — without this the
       breaker never trips and the feature is dead code
-- [ ] call `BeginRun()` at the top of `CheckForUpdates` and skip a task **without issuing any request**
+- [x] call `BeginRun()` at the top of `CheckForUpdates` and skip a task **without issuing any request**
       when `Allow` returns false, logging the skip once per run
-- [ ] write `TestBreakerTripSkipsWithoutFetch`, `TestBreakerProbeAfterCooldown`,
+- [x] write `TestBreakerTripSkipsWithoutFetch`, `TestBreakerProbeAfterCooldown`,
       `TestBreakerCooldownSequence` (exactly `[1h,2h,4h,8h,16h,24h,24h]`, injected clock),
       `TestBreakerSeededProvidersAreOK`
-- [ ] run the per-task gate — must pass before Task 5
+- [x] run the per-task gate — must pass before Task 5
 
 ### Task 5: Persist per-task failure state
 
