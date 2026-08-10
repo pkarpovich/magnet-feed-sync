@@ -1152,6 +1152,137 @@ func TestNotifyOnceAtThreshold(t *testing.T) {
 	assert.Contains(t, msg, "Blocked: challenge")
 }
 
+// a deleted row is off every list the health endpoint reads, so letting a refresh keep
+// scoring it would leave counters nobody can clear
+func TestRefreshSkipsDeletedTask(t *testing.T) {
+	parseCalls := 0
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			parseCalls++
+			return nil, fmt.Errorf("boom")
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:          id,
+				OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1",
+				DeleteAt:    sql.NullTime{Time: time.Now(), Valid: true},
+			}, nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         &mockBreaker{},
+	})
+
+	client.CheckFileForUpdates(context.Background(), "1")
+
+	assert.Zero(t, parseCalls)
+	assert.Empty(t, store.failures)
+}
+
+// a manual refresh increments the counter without notifying, so the run that crosses the
+// threshold may not be a cron run at all — keying the alert off that exact transition lost it
+func TestNotifyAfterManualRefreshCrossedThreshold(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+		Breaker:         &mockBreaker{},
+	})
+
+	task := func(failures int) *tracker.FileMetadata {
+		return &tracker.FileMetadata{
+			ID:                  "3304959",
+			Name:                "Some Movie",
+			OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+			ConsecutiveFailures: failures,
+		}
+	}
+
+	// the manual refresh performs the 2 -> 3 increment silently
+	client.processFileMetadata(context.Background(), task(FailureThreshold-1), false)
+	require.Empty(t, msgChan, "a manual refresh must not notify")
+
+	client.processFileMetadata(context.Background(), task(FailureThreshold), true)
+	require.Len(t, msgChan, 1, "the first cron run to see the task failing still alerts")
+	assert.Contains(t, <-msgChan, "Some Movie")
+
+	client.processFileMetadata(context.Background(), task(FailureThreshold+1), true)
+	assert.Empty(t, msgChan, "the alert stays a one-shot for the streak")
+}
+
+// the notice is cleared on any recorded success, including a manual refresh's, or a later
+// streak on the same task would never alert again
+func TestNotifyAgainAfterRecovery(t *testing.T) {
+	parseErr := error(nil)
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			return &tracker.FileMetadata{ID: "3304959", Magnet: "magnet:?xt=urn:btih:aaa"}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: id, Magnet: "magnet:?xt=urn:btih:aaa"}, nil
+		},
+		createOrReplaceFunc: func(*tracker.FileMetadata) error { return nil },
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         &mockBreaker{},
+	})
+
+	failing := &tracker.FileMetadata{
+		ID:                  "3304959",
+		Name:                "Some Movie",
+		OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		ConsecutiveFailures: FailureThreshold - 1,
+	}
+
+	parseErr = &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+	client.processFileMetadata(context.Background(), failing, true)
+	require.Len(t, msgChan, 1)
+	<-msgChan
+
+	// a manual refresh succeeds, which resets the counter in the store
+	parseErr = nil
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	}, false)
+	require.Equal(t, []string{"3304959"}, store.successes)
+
+	parseErr = &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+	client.processFileMetadata(context.Background(), failing, true)
+	assert.Len(t, msgChan, 1, "a new streak alerts again")
+}
+
 func TestNotificationsEscapeMarkdown(t *testing.T) {
 	parser := &mockFileParser{
 		providerName: "rutracker",

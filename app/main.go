@@ -74,7 +74,7 @@ func run(cfg *config.Config) error {
 	if cfg.FlaresolverrURL != "" {
 		solver := providers.NewSolverFetcher(cfg.FlaresolverrURL)
 		rutrackerFetcher = solver
-		slog.Info("rutracker provider uses flaresolverr", "url", cfg.FlaresolverrURL)
+		slog.Info("rutracker provider uses flaresolverr", "url", redactURL(cfg.FlaresolverrURL))
 
 		// run() cancels ctx before deferred functions run, so the session teardown
 		// needs a context that survives it
@@ -191,7 +191,12 @@ func run(cfg *config.Config) error {
 	return runErr
 }
 
-const staleRunFallback = 2 * time.Hour
+const (
+	staleRunFallback = 2 * time.Hour
+	// enough firings to see the longest gap of a clustered schedule such as `0 9,10 * * *`,
+	// where the first gap is 1h but the real one is 23h
+	staleRunSamples = 24
+)
 
 func staleRunAfter(cronExpr string) time.Duration {
 	sched, err := cron.ParseStandard(cronExpr)
@@ -200,10 +205,21 @@ func staleRunAfter(cronExpr string) time.Duration {
 		return staleRunFallback
 	}
 
-	first := sched.Next(time.Now())
-	second := sched.Next(first)
+	longest := time.Duration(0)
+	at := sched.Next(time.Now())
+	for range staleRunSamples {
+		next := sched.Next(at)
+		if gap := next.Sub(at); gap > longest {
+			longest = gap
+		}
+		at = next
+	}
 
-	return 2 * second.Sub(first)
+	if longest <= 0 {
+		return staleRunFallback
+	}
+
+	return 2 * longest
 }
 
 func newProviderBreaker(providerList []providers.Provider) *tracker.Breaker {
@@ -215,15 +231,22 @@ func newProviderBreaker(providerList []providers.Provider) *tracker.Breaker {
 	return tracker.NewBreaker(nil, names...)
 }
 
+// redactedPlaceholder is url-safe on purpose: '*' would be percent-escaped into the log line
+const redactedPlaceholder = "redacted"
+
 func redactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "<invalid url>"
 	}
+	// basic-auth credentials in the url would otherwise reach stdout and loki verbatim
+	if u.User != nil {
+		u.User = url.User(redactedPlaceholder)
+	}
 	q := u.Query()
 	for key := range q {
 		if strings.Contains(strings.ToLower(key), "apikey") || strings.Contains(strings.ToLower(key), "api_key") {
-			q.Set(key, "***")
+			q.Set(key, redactedPlaceholder)
 		}
 	}
 	u.RawQuery = q.Encode()

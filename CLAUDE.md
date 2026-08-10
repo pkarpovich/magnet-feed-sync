@@ -52,8 +52,11 @@ docker compose up --build
   the cron feed re-checks it); `POST /api/downloads` is one-shot fire-and-forget (magnet or `.torrent`
   URL forwarded verbatim to the download client, no row, no monitoring, nothing logged/persisted).
   `GET /api/health` reports real state (`ok` / `degraded` / `unhealthy` + 503), derived from per-task
-  failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string
-- **schedular/**: Cron job scheduling via gocron
+  failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string. Both
+  halves of the run state matter: a stale `last_run_at` is `unhealthy`, `last_run_ok = false` is
+  `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything)
+- **schedular/**: Cron job scheduling via gocron, in singleton mode — a sweep can outrun its interval,
+  and overlapping runs would double-probe the breaker and race on the run state
 - **task-store/**: SQLite repository pattern for task persistence
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
@@ -104,13 +107,20 @@ docker compose up --build
   challenge markers → `Blocked`, 5xx/timeouts/net errors → `Transient`, 404 → `Permanent`); providers
   classify extraction failures such as a missing magnet link as `Permanent`. Only a refused *page fetch*
   can be `Blocked`: a failed `sessions.create`/`sessions.destroy` or a lost session is solver-side
-  infrastructure and stays `Transient`, so a FlareSolverr restart never trips the breaker for 24h
+  infrastructure and stays `Transient`, so a FlareSolverr restart never trips the breaker for 24h.
+  A failed `request.get` is not automatically a refusal either — most of them are the solver's own
+  browser/DNS/timeout trouble, so it counts as `Blocked` only when FlareSolverr's message names a
+  challenge (`challengeMarkers`), and a response missing `solution` is a version mismatch, so `Transient`
 - Circuit breaker (`tracker.Breaker`) — trips a provider on the first `Blocked` error, then skips its tasks
   without issuing requests until a half-open probe is allowed; cooldown doubles `1h → 24h` and resets on
   success. It gates only the cron sweep — manual refresh and task creation bypass it. Failure state is
   persisted per task (`consecutive_failures` / `last_error` / `last_error_at`); a task is *failing* at
   `FailureThreshold` (3) consecutive failures, which drives the 24h retry stretch, the health `failing`
-  count, and one-shot Telegram transition messages
+  count, and one-shot Telegram transition messages. "Once" is held by an in-memory set
+  (`Client.failingNotified`), not by the exact `2 → 3` transition: a manual refresh increments the
+  counter without notifying, so the crossing run is often not a cron run and an edge trigger loses the
+  alert for good. The set is cleared on any recorded success or removal, and it does not survive a
+  restart — a still-failing task alerts once more after one
 - Cron sweep vs manual refresh — only the cron job calls `CheckForUpdates`, which drives the breaker, the
   Telegram transitions and `last_run_at`. Both refresh endpoints are manual (`RefreshAll` /
   `CheckFileForUpdates`): they record store outcomes so the counters stay truthful, bypass the breaker gate
@@ -141,7 +151,7 @@ Environment variables (see compose.yaml):
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
-- `CRON`: update-sweep schedule, standard 5-field expression (default `0 * * * *`). `main.go` also derives the health staleness window from it (twice the interval between the next two firings; `staleRunFallback` 2h + a WARN log when it cannot be parsed)
+- `CRON`: update-sweep schedule, standard 5-field expression (default `0 * * * *`). `main.go` also derives the health staleness window from it (twice the longest gap among the next `staleRunSamples` firings, so a clustered schedule such as `0 9,10 * * *` is not judged by its 1h gap; `staleRunFallback` 2h + a WARN log when it cannot be parsed)
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` and the service still starts
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")

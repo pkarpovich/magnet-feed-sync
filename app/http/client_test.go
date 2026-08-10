@@ -437,6 +437,36 @@ func TestHealthDegraded(t *testing.T) {
 	assert.Equal(t, 2, resp.Failing)
 }
 
+// a sweep that could not read the task list still refreshes last_run_at, so staleness alone
+// would report a cron that checks nothing as healthy
+func TestHealthDegradedWhenLastRunFailed(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:            &mockFileStore{files: failingFiles(0, 1)},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: false},
+		StaleRunAfter:    2 * time.Hour,
+		FailureThreshold: 3,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	assert.Equal(t, 0, resp.Failing)
+}
+
+// an unset threshold would make `>= 0` true for every row and pin health to degraded forever
+func TestHealthThresholdDefaultsWhenUnset(t *testing.T) {
+	w, resp := callHealth(t, &ClientCtx{
+		Store:         &mockFileStore{files: failingFiles(0, 0)},
+		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter: 2 * time.Hour,
+	})
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	assert.Equal(t, 0, resp.Failing)
+}
+
 func TestHealthUnhealthyBreaker(t *testing.T) {
 	nextProbe := time.Now().Add(time.Hour)
 	w, resp := callHealth(t, &ClientCtx{

@@ -195,33 +195,48 @@ func TestSolverCloseDestroysSession(t *testing.T) {
 	assert.Equal(t, solver.commands("sessions.create")[0].Session, destroys[0].Session)
 }
 
-func TestSolverErrorIsBlocked(t *testing.T) {
+// only a page fetch the tracker's protection refused may trip the breaker; the solver's own
+// failures must stay transient or a container hiccup costs 24h of rutracker syncing
+func TestSolverClassifiesFailedCommands(t *testing.T) {
+	failingRequestGet := func(payload string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var req solverRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+			w.Header().Set("Content-Type", "application/json")
+			if req.Cmd != cmdRequestGet {
+				_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+				return
+			}
+
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(payload))
+		}
+	}
+
 	tests := []struct {
 		name    string
 		handler http.HandlerFunc
+		want    ErrorKind
 	}{
 		{
 			// the session is created fine: it is the page fetch the solver could not complete
-			name: "http_500_status_error",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				var req solverRequest
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-
-				w.Header().Set("Content-Type", "application/json")
-				if req.Cmd != cmdRequestGet {
-					_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
-					return
-				}
-
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(`{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds.","version":"3.5.0"}`))
-			},
+			name:    "challenge_not_solved",
+			handler: failingRequestGet(`{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds.","version":"3.5.0"}`),
+			want:    KindBlocked,
 		},
 		{
+			name:    "solver_browser_failure",
+			handler: failingRequestGet(`{"status":"error","message":"Error: Unable to process browser request. net::ERR_NAME_NOT_RESOLVED","version":"3.5.0"}`),
+			want:    KindTransient,
+		},
+		{
+			// a response shaped unlike what we expect is a solver-version problem, not a refusal
 			name: "ok_status_without_solution",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"status":"ok","message":"Challenge not detected!"}`))
 			},
+			want: KindTransient,
 		},
 	}
 
@@ -236,7 +251,7 @@ func TestSolverErrorIsBlocked(t *testing.T) {
 
 			var pe *ProviderError
 			require.True(t, errors.As(err, &pe))
-			assert.Equal(t, KindBlocked, pe.Kind)
+			assert.Equal(t, tt.want, pe.Kind)
 		})
 	}
 }

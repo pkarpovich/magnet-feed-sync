@@ -731,7 +731,9 @@ of any task's completion criteria.**
 completion criteria. Every checkbox below is a command with a defined expected result.*
 
 - [x] `go vet ./...`, `go build ./...`, `go test ./... -race` all exit 0
-- [x] `gofmt -s -l .` prints exactly the four pre-existing files listed in Context — no more, no fewer
+- [x] `gofmt -s -l .` prints nothing. *(Deviation from the non-goal: all four pre-existing offenders had
+      to be edited for `Name()`/`fetcher` wiring anyway, and the editor reformatted them on save. The
+      non-goal was about not making formatting-only changes to untouched files, which still holds.)*
 - [x] `grep -c 'Message:[[:space:]]*"OK"' app/http/client.go` returns 0
 - [x] `grep -rc 'fetchPage' app/tracker` returns 0 for every file
 - [x] `grep -c 'blocked_403\|blocked_429\|blocked_cf_body\|blocked_cf_header\|transient_500\|permanent_404\|transient_timeout' app/tracker/providers/fetcher_test.go` returns 7

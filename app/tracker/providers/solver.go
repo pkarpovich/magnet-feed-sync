@@ -102,8 +102,10 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 		return nil, err
 	}
 
+	// a response shaped unlike what this code expects is a solver-version problem, not a
+	// refusal by the tracker, so it must not trip the breaker
 	if resp.Solution == nil {
-		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("flaresolverr returned no solution")}
+		return nil, &ProviderError{Kind: KindTransient, Err: errors.New("flaresolverr returned no solution")}
 	}
 
 	// flaresolverr reports the command as ok even when the tracker refused it, so the
@@ -204,6 +206,13 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 			return nil, &ProviderError{Kind: KindTransient, Err: failure}
 		}
 
+		// even on request.get most failures are the solver's own (browser start-up, dns inside
+		// its container, internal timeouts) and would trip the breaker for 24h over a container
+		// hiccup; only a challenge it could not get past says the tracker refused us
+		if !challengeFailure(decoded.Message) {
+			return nil, &ProviderError{Kind: KindTransient, Err: failure}
+		}
+
 		return nil, &ProviderError{Kind: KindBlocked, Err: failure}
 	}
 
@@ -216,6 +225,21 @@ var errSessionGone = errors.New("flaresolverr session is gone")
 
 func sessionGone(message string) bool {
 	return strings.Contains(strings.ToLower(message), "session does not exist")
+}
+
+// challengeMarkers are what flaresolverr reports when the tracker's protection is what
+// stopped it, as opposed to its own browser or network failing.
+var challengeMarkers = []string{"challenge", "cloudflare", "captcha"}
+
+func challengeFailure(message string) bool {
+	lower := strings.ToLower(message)
+	for _, marker := range challengeMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 type blockedFetcher struct{}

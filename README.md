@@ -109,6 +109,19 @@ circuit breaker: its tasks are skipped without issuing requests, and a single ha
 after a cooldown that doubles from 1h up to 24h. Tasks that have failed 3 times in a row are retried at
 most once per 24 hours instead of every run. Both transitions are announced once in Telegram.
 
+## Database migrations
+
+The container runs the server directly and does not apply migrations. Run them **before** starting a new
+version, or every read fails with `no such column` and the API, the health endpoint and the cron sweep all
+break:
+
+```bash
+sql-migrate up   # or: make apply-migrations
+```
+
+This release adds two migrations: `add-failure-tracking` (per-task failure state) and `add-app-state`
+(cron run state).
+
 ## Configuration
 
 Configure the bot using the following environment variables:
@@ -119,7 +132,7 @@ Configure the bot using the following environment variables:
 - `QBITTORRENT_DESTINATION`: Default download location on qBittorrent.
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
-- `CRON`: cron expression for the update sweep, standard 5 fields (default `0 * * * *`). It also sets the health staleness window: a last run older than twice this interval makes `/api/health` report `unhealthy`. An expression that cannot be parsed falls back to a 2h window and logs a warning.
+- `CRON`: cron expression for the update sweep, standard 5 fields (default `0 * * * *`). It also sets the health staleness window: a last run older than twice the schedule's longest gap between firings makes `/api/health` report `unhealthy`. An expression that cannot be parsed falls back to a 2h window and logs a warning.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
 

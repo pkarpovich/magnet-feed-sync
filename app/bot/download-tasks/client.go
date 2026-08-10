@@ -61,6 +61,11 @@ type Client struct {
 	store           FileStore
 	breaker         ProviderBreaker
 	dryMode         bool
+
+	// notifyMu guards failingNotified, the set of tasks the failing alert already went out
+	// for; it is separate from mu because the alert is decided outside the store critical section
+	notifyMu        sync.Mutex
+	failingNotified map[string]struct{}
 }
 
 type ClientCtx struct {
@@ -85,6 +90,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		dryMode:         ctx.DryMode,
 		store:           ctx.Store,
 		breaker:         breaker,
+		failingNotified: make(map[string]struct{}),
 	}
 }
 
@@ -293,7 +299,12 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
 	if err := c.store.RecordSyncSuccess(id, time.Now()); err != nil {
 		slog.ErrorContext(ctx, "error recording sync success", "error", err, "id", id)
+		return
 	}
+
+	// the streak is over, so the next one has to be able to alert again — including when
+	// this success came from a manual refresh, which never alerts itself
+	c.clearFailingNotified(id)
 }
 
 func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) string {
@@ -312,16 +323,44 @@ func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) 
 	return text
 }
 
-// notifyFailing fires once, on the run that pushes the task from the silent ramp-up to failing.
+// notifyFailing fires once per failing streak, on the first cron run that observes the task
+// at or above the threshold. It cannot key off the exact 2→3 transition: a manual refresh
+// increments the counter without notifying, so the crossing run may not be a cron run at all,
+// and the alert would then be lost for good.
 func (c *Client) notifyFailing(metadata *tracker.FileMetadata, lastError string) {
-	if metadata.ConsecutiveFailures != FailureThreshold-1 {
+	// ConsecutiveFailures is the count read before this run's own increment
+	failures := metadata.ConsecutiveFailures + 1
+	if failures < FailureThreshold {
+		return
+	}
+
+	if !c.markFailingNotified(metadata.ID) {
 		return
 	}
 
 	c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
 		"⚠️ Task is failing after %d attempts:\n\n%s (%s)\n\n%s",
-		FailureThreshold, metadata.Name, metadata.ID, lastError,
+		failures, metadata.Name, metadata.ID, lastError,
 	))
+}
+
+// markFailingNotified claims the alert for id, reporting whether this caller won it.
+func (c *Client) markFailingNotified(id string) bool {
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+
+	if _, done := c.failingNotified[id]; done {
+		return false
+	}
+	c.failingNotified[id] = struct{}{}
+
+	return true
+}
+
+func (c *Client) clearFailingNotified(id string) {
+	c.notifyMu.Lock()
+	defer c.notifyMu.Unlock()
+	delete(c.failingNotified, id)
 }
 
 func (c *Client) notifyRecovered(metadata *tracker.FileMetadata) {
@@ -503,7 +542,13 @@ func (c *Client) isStretched(metadata *tracker.FileMetadata) bool {
 func (c *Client) RemoveTask(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.store.Remove(id)
+
+	if err := c.store.Remove(id); err != nil {
+		return err
+	}
+	c.clearFailingNotified(id)
+
+	return nil
 }
 
 func (c *Client) UpdateTaskLocation(id, location string) error {
@@ -527,6 +572,13 @@ func (c *Client) CheckFileForUpdates(ctx context.Context, fileId string) {
 	metadata, err := c.store.GetById(fileId)
 	if err != nil {
 		slog.ErrorContext(ctx, "error getting metadata", "error", err, "id", fileId)
+		return
+	}
+
+	// a deleted row must not accrue sync counters, which would make the health endpoint
+	// count a task nobody tracks any more
+	if metadata.DeleteAt.Valid {
+		slog.InfoContext(ctx, "task is deleted, refresh skipped", "id", fileId)
 		return
 	}
 

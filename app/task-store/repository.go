@@ -131,6 +131,12 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 		metadata = append(metadata, &m)
 	}
 
+	// without this a driver error mid-iteration yields a silently truncated list, which the
+	// sweep would treat as the full set and the health endpoint would count as the truth
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read files: %w", err)
+	}
+
 	return metadata, nil
 }
 

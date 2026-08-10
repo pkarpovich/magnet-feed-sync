@@ -72,6 +72,12 @@ type ClientCtx struct {
 }
 
 func NewClient(ctx *ClientCtx) *Client {
+	// an unset threshold would make `>= 0` true for every row and pin health to degraded
+	threshold := ctx.FailureThreshold
+	if threshold < 1 {
+		threshold = 1
+	}
+
 	return &Client{
 		config:           ctx.Config,
 		store:            ctx.Store,
@@ -81,7 +87,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		runState:         ctx.RunState,
 		staleRunAfter:    ctx.StaleRunAfter,
 		startedAt:        ctx.StartedAt,
-		failureThreshold: ctx.FailureThreshold,
+		failureThreshold: threshold,
 	}
 }
 
@@ -401,7 +407,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providerStates, anyBlocked := c.providerStates()
-	lastRunAt, hasRun := c.lastRun(ctx)
+	run := c.lastRun(ctx)
 
 	resp := healthResponse{
 		Status:    statusOk,
@@ -409,16 +415,18 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		Failing:   failing,
 		Providers: providerStates,
 	}
-	if hasRun {
-		resp.LastRunAt = &lastRunAt
+	if run.present {
+		resp.LastRunAt = &run.at
 	}
 
 	code := http.StatusOK
 	switch {
-	case anyBlocked || c.runIsStale(lastRunAt, hasRun):
+	case anyBlocked || c.runIsStale(run):
 		resp.Status = statusUnhealthy
 		code = http.StatusServiceUnavailable
-	case failing > 0:
+	// a sweep that could not read the task list refreshed last_run_at without checking
+	// anything, so staleness alone would report it as healthy
+	case failing > 0 || (run.present && !run.ok):
 		resp.Status = statusDegraded
 	}
 
@@ -449,23 +457,29 @@ func (c *Client) providerStates() (map[string]string, bool) {
 	return states, anyBlocked
 }
 
-func (c *Client) lastRun(ctx context.Context) (time.Time, bool) {
-	if c.runState == nil {
-		return time.Time{}, false
-	}
-
-	at, _, err := c.runState.GetLastRun()
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to read last run state", "error", err)
-		return time.Time{}, false
-	}
-
-	return at, !at.IsZero()
+type runInfo struct {
+	at      time.Time
+	ok      bool
+	present bool
 }
 
-func (c *Client) runIsStale(lastRunAt time.Time, hasRun bool) bool {
-	if hasRun {
-		return time.Since(lastRunAt) > c.staleRunAfter
+func (c *Client) lastRun(ctx context.Context) runInfo {
+	if c.runState == nil {
+		return runInfo{}
+	}
+
+	at, ok, err := c.runState.GetLastRun()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to read last run state", "error", err)
+		return runInfo{}
+	}
+
+	return runInfo{at: at, ok: ok, present: !at.IsZero()}
+}
+
+func (c *Client) runIsStale(run runInfo) bool {
+	if run.present {
+		return time.Since(run.at) > c.staleRunAfter
 	}
 
 	// a freshly booted service has not run yet; the grace period starts at boot
