@@ -59,7 +59,8 @@ func (b *Breaker) Allow(name string) bool {
 	defer b.mu.Unlock()
 
 	entry := b.entry(name)
-	// set only by a half-open probe, so an untripped provider is never held back by it
+	// set only by a half-open probe, and deliberately not cleared by RecordSuccess: at most one
+	// task per provider per run runs against a tracker that was blocked when the run started
 	if entry.probedThisRun {
 		return false
 	}

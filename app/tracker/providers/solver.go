@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
 	solverHTTPTimeout = 180 * time.Second
 	solverMaxTimeout  = 120000
+	cmdRequestGet     = "request.get"
 )
 
 type solverRequest struct {
@@ -84,15 +86,17 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	}
 
 	resp, err := f.command(ctx, solverRequest{
-		Cmd:        "request.get",
+		Cmd:        cmdRequestGet,
 		URL:        pageURL,
 		Session:    f.sessionID,
 		MaxTimeout: solverMaxTimeout,
 	})
 	if err != nil {
 		// flaresolverr forgets every session when it restarts and then rejects this id
-		// forever; drop it so the next fetch creates a fresh one instead of failing for good
-		if ctx.Err() == nil {
+		// forever; drop it so the next fetch creates a fresh one instead of failing for good.
+		// Every other failure leaves the session alive on the solver, so the id is kept:
+		// clearing it would orphan a browser there and cost a ~74s cold solve on the next fetch
+		if errors.Is(err, errSessionGone) {
 			f.sessionID = ""
 		}
 		return nil, err
@@ -189,10 +193,29 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 	}
 
 	if resp.StatusCode != http.StatusOK || decoded.Status != "ok" {
-		return nil, &ProviderError{Kind: KindBlocked, Err: fmt.Errorf("solver %s failed: %s", cmd.Cmd, decoded.Message)}
+		failure := fmt.Errorf("solver %s failed: %s", cmd.Cmd, decoded.Message)
+
+		// a lost session and a refused session command are both solver-side infrastructure and
+		// say nothing about the tracker; only a refused page fetch may trip the breaker
+		if sessionGone(decoded.Message) {
+			return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("%w: %w", errSessionGone, failure)}
+		}
+		if cmd.Cmd != cmdRequestGet {
+			return nil, &ProviderError{Kind: KindTransient, Err: failure}
+		}
+
+		return nil, &ProviderError{Kind: KindBlocked, Err: failure}
 	}
 
 	return &decoded, nil
+}
+
+// errSessionGone marks the one failure that invalidates the held session id: flaresolverr
+// answering a command with a session it no longer knows, which happens after it restarts.
+var errSessionGone = errors.New("flaresolverr session is gone")
+
+func sessionGone(message string) bool {
+	return strings.Contains(strings.ToLower(message), "session does not exist")
 }
 
 type blockedFetcher struct{}

@@ -95,11 +95,16 @@ docker compose up --build
   versus ~2.4s warm — and `main.go` destroys it on shutdown with a detached context. A nil fetcher is not
   supported; construct providers via `NewRutrackerProvider` / `NewNnmProvider` / `NewJackettProvider`.
   The solver serialises calls with a context-aware semaphore, not a mutex: a solve can take up to 180s,
-  so `Close` must be able to give up on its context instead of waiting the in-flight fetch out
+  so `Close` must be able to give up on its context instead of waiting the in-flight fetch out.
+  The held session id is dropped **only** when FlareSolverr reports it as gone (`errSessionGone`,
+  matched on "session does not exist" — what it answers after a restart). Dropping it on any other
+  failure would orphan a browser session there and force a cold solve on the next fetch
 - Error taxonomy — `providers.ProviderError{Kind, Err}` wrapping a `Transient` / `Blocked` / `Permanent`
   kind, recoverable with `errors.As`. The fetcher classifies transport outcomes (403/429 and Cloudflare
   challenge markers → `Blocked`, 5xx/timeouts/net errors → `Transient`, 404 → `Permanent`); providers
-  classify extraction failures such as a missing magnet link as `Permanent`
+  classify extraction failures such as a missing magnet link as `Permanent`. Only a refused *page fetch*
+  can be `Blocked`: a failed `sessions.create`/`sessions.destroy` or a lost session is solver-side
+  infrastructure and stays `Transient`, so a FlareSolverr restart never trips the breaker for 24h
 - Circuit breaker (`tracker.Breaker`) — trips a provider on the first `Blocked` error, then skips its tasks
   without issuing requests until a half-open probe is allowed; cooldown doubles `1h → 24h` and resets on
   success. It gates only the cron sweep — manual refresh and task creation bypass it. Failure state is

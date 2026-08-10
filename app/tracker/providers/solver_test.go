@@ -201,8 +201,18 @@ func TestSolverErrorIsBlocked(t *testing.T) {
 		handler http.HandlerFunc
 	}{
 		{
+			// the session is created fine: it is the page fetch the solver could not complete
 			name: "http_500_status_error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
+				var req solverRequest
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+				w.Header().Set("Content-Type", "application/json")
+				if req.Cmd != cmdRequestGet {
+					_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+					return
+				}
+
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds.","version":"3.5.0"}`))
 			},
@@ -375,6 +385,81 @@ func TestSolverRecreatesSessionAfterFailedFetch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "page")
 	assert.Len(t, solver.commands("sessions.create"), 2)
+}
+
+// only a lost session invalidates the id: dropping it after any other failure would leave a
+// live browser behind on the solver and make the next fetch pay a ~74s cold solve
+func TestSolverKeepsSessionAfterUnrelatedFailure(t *testing.T) {
+	solver := &fakeSolver{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		solver.record(req)
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != cmdRequestGet {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}`))
+	}))
+	defer server.Close()
+
+	fetcher := NewSolverFetcher(server.URL)
+	_, err := fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.Error(t, err)
+	assert.NotEmpty(t, fetcher.sessionID)
+
+	_, err = fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=2")
+	require.Error(t, err)
+	assert.Len(t, solver.commands("sessions.create"), 1, "the live session must be reused, not replaced")
+}
+
+// a solver that cannot even hand out a session is local infrastructure: classifying it as
+// blocked would trip the provider for up to 24h over a flaresolverr restart
+func TestSolverSessionCommandFailureIsTransient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"error","message":"Error: Unable to start the browser."}`))
+	}))
+	defer server.Close()
+
+	_, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.Error(t, err)
+
+	var pe *ProviderError
+	require.True(t, errors.As(err, &pe))
+	assert.Equal(t, KindTransient, pe.Kind)
+}
+
+// a stale session id must not be reported as a tracker refusal either
+func TestSolverLostSessionIsTransient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != cmdRequestGet {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"error","message":"Error: This session does not exist."}`))
+	}))
+	defer server.Close()
+
+	fetcher := NewSolverFetcher(server.URL)
+	_, err := fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.Error(t, err)
+	assert.Empty(t, fetcher.sessionID)
+
+	var pe *ProviderError
+	require.True(t, errors.As(err, &pe))
+	assert.Equal(t, KindTransient, pe.Kind)
 }
 
 func TestBlockedFetcherIsAlwaysBlocked(t *testing.T) {
