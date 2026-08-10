@@ -1079,6 +1079,56 @@ func TestNotifyOnceAtThreshold(t *testing.T) {
 	assert.Contains(t, msg, "Blocked: challenge")
 }
 
+func TestNotificationsEscapeMarkdown(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("bad status: 403 (Forbidden)")}
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+		Breaker:         &mockBreaker{},
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:                  "3304959",
+		Name:                "Some.Movie (2024) [1080p]",
+		OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		ConsecutiveFailures: FailureThreshold - 1,
+	}, true)
+
+	require.Len(t, msgChan, 1)
+	msg := <-msgChan
+	assert.Contains(t, msg, `Some\.Movie \(2024\) \[1080p\]`)
+	assert.Contains(t, msg, `403 \(Forbidden\)`)
+	assert.NotRegexp(t, `[^\\][()\[\].!-]`, msg, "every reserved MarkdownV2 char must be escaped")
+}
+
+func TestEscapeMarkdownEscapesBackslash(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "lone backslash", in: `AC\DC`, want: `AC\\DC`},
+		{name: "trailing backslash", in: `C:\dir\`, want: `C:\\dir\\`},
+		{name: "backslash before reserved char", in: `a\*b`, want: `a\\\*b`},
+		{name: "escaped quote from an error string", in: `unexpected \"eof\"`, want: `unexpected \\"eof\\"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, escapeMarkdown(tt.in))
+		})
+	}
+}
+
 func TestNotifyOnceOnRecovery(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1170,10 +1220,82 @@ func TestBreakerNotifiesOncePerProvider(t *testing.T) {
 	require.Len(t, msgChan, 1, "a tripped provider notifies once, not once per skipped task")
 	msg := <-msgChan
 	assert.Contains(t, msg, "rutracker")
-	assert.Contains(t, msg, "2 task(s) skipped")
+	assert.Contains(t, msg, `2 task\(s\) skipped`, "reserved MarkdownV2 chars must be escaped")
 
 	client.CheckForUpdates(context.Background())
 	assert.Empty(t, msgChan, "an already blocked provider does not re-notify")
+}
+
+func TestCheckForUpdatesStopsOnCanceledContext(t *testing.T) {
+	parsed := 0
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			parsed++
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("context canceled")}
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1"},
+				{ID: "2", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=2"},
+			}, nil
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client.CheckForUpdates(ctx)
+
+	assert.Zero(t, parsed, "a canceled sweep parses nothing")
+	assert.Empty(t, store.failureIds, "shutdown must not count as a task failure")
+	assert.Empty(t, breaker.failures, "shutdown must not trip the breaker")
+	assert.Empty(t, store.runs, "an interrupted sweep must not overwrite the run state")
+	assert.Empty(t, msgChan)
+}
+
+func TestProcessFileMetadataIgnoresCanceledContext(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: context.Canceled}
+		},
+	}
+
+	store := &mockFileStore{}
+	msgChan := make(chan string, 10)
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client.processFileMetadata(ctx, &tracker.FileMetadata{
+		ID:                  "1",
+		OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=1",
+		ConsecutiveFailures: FailureThreshold - 1,
+	}, true)
+
+	assert.Empty(t, store.failureIds)
+	assert.Empty(t, breaker.failures)
+	assert.Empty(t, msgChan)
 }
 
 func TestBreakerNotifiesOnRecovery(t *testing.T) {

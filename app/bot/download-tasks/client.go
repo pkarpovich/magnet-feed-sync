@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
@@ -197,6 +199,13 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
+		// an aborted request says nothing about the tracker, so it must not count as a
+		// failure for the task, the breaker or the notifications
+		if ctx.Err() != nil {
+			slog.InfoContext(ctx, "parse aborted", "error", ctx.Err(), "id", fileMetadata.ID)
+			return
+		}
+
 		text := c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
@@ -309,10 +318,10 @@ func (c *Client) notifyFailing(metadata *tracker.FileMetadata, lastError string)
 		return
 	}
 
-	c.messagesForSend <- fmt.Sprintf(
+	c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
 		"⚠️ Task is failing after %d attempts:\n\n%s (%s)\n\n%s",
 		FailureThreshold, metadata.Name, metadata.ID, lastError,
-	)
+	))
 }
 
 func (c *Client) notifyRecovered(metadata *tracker.FileMetadata) {
@@ -320,10 +329,21 @@ func (c *Client) notifyRecovered(metadata *tracker.FileMetadata) {
 		return
 	}
 
-	c.messagesForSend <- fmt.Sprintf(
+	c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
 		"✅ Task recovered after %d failures:\n\n%s (%s)\n\nlast error: %s",
 		metadata.ConsecutiveFailures, metadata.Name, metadata.ID, metadata.LastError,
-	)
+	))
+}
+
+// escapeMarkdown makes plain text safe for the MarkdownV2 parse mode every admin
+// message is sent with (see events.NewMarkdownMessage) — telegram rejects the whole
+// message when a reserved char such as '(' or '-' is left unescaped.
+//
+// '\' has to be doubled up first, and by hand: tbapi.EscapeText leaves it alone, so a
+// task name like `a\*b` would reach telegram as `a\\*b` — a literal backslash followed
+// by an entity-opening '*' instead of the escaped literals we meant.
+func escapeMarkdown(text string) string {
+	return tbapi.EscapeText(tbapi.ModeMarkdownV2, strings.ReplaceAll(text, "\\", "\\\\"))
 }
 
 func (c *Client) recordParseFailure(url string, err error) {
@@ -370,7 +390,14 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	slog.InfoContext(ctx, "checking for updates")
 
 	runOk := true
-	defer func() { c.recordRun(ctx, runOk) }()
+	defer func() {
+		// a sweep cut short by shutdown never finished, so it must not overwrite the
+		// last run state the health endpoint reads
+		if ctx.Err() != nil {
+			return
+		}
+		c.recordRun(ctx, runOk)
+	}()
 
 	c.breaker.BeginRun()
 	before := c.breaker.Snapshot()
@@ -386,6 +413,13 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	skipped := make(map[string]int)
 	for _, metadata := range filesMetadata {
+		// shutdown cancels the sweep context: stop instead of failing every remaining
+		// task, which would trip the breaker and notify on each restart
+		if ctx.Err() != nil {
+			slog.InfoContext(ctx, "update sweep interrupted", "error", ctx.Err())
+			return
+		}
+
 		if c.isStretched(metadata) {
 			slog.DebugContext(ctx, "task is failing, retry postponed", "id", metadata.ID, "failures", metadata.ConsecutiveFailures)
 			continue
@@ -418,12 +452,12 @@ func (c *Client) notifyBreakerTransitions(delta breakerDelta) {
 		was := delta.before[name]
 		switch {
 		case state.Tripped && !was.Tripped:
-			c.messagesForSend <- fmt.Sprintf(
+			c.messagesForSend <- escapeMarkdown(fmt.Sprintf(
 				"🚫 Provider %s is blocked, %d task(s) skipped this run, next probe at %s",
 				name, delta.skipped[name], state.NextProbeAt.Format(time.RFC3339),
-			)
+			))
 		case was.Tripped && !state.Tripped:
-			c.messagesForSend <- fmt.Sprintf("✅ Provider %s is reachable again", name)
+			c.messagesForSend <- escapeMarkdown(fmt.Sprintf("✅ Provider %s is reachable again", name))
 		}
 	}
 }
@@ -487,5 +521,9 @@ func MetadataToMsg(metadata *tracker.FileMetadata) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("```json\n%s\n```", string(jsonData)), nil
+	// inside a MarkdownV2 code block only backticks and backslashes are reserved, and a
+	// single unescaped one from a task name or magnet makes telegram reject the message
+	body := strings.NewReplacer("\\", "\\\\", "`", "\\`").Replace(string(jsonData))
+
+	return fmt.Sprintf("```json\n%s\n```", body), nil
 }

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -38,9 +37,11 @@ type solverResponse struct {
 }
 
 type solverFetcher struct {
-	baseURL   string
-	client    *http.Client
-	mu        sync.Mutex
+	baseURL string
+	client  *http.Client
+	// sem serialises solver calls and guards sessionID; a channel rather than a mutex so
+	// a caller can give up when its context ends instead of waiting out a 180s solve
+	sem       chan struct{}
 	sessionID string
 }
 
@@ -50,12 +51,33 @@ func NewSolverFetcher(baseURL string) *solverFetcher {
 	return &solverFetcher{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: solverHTTPTimeout},
+		sem:     make(chan struct{}, 1),
 	}
 }
 
+func (f *solverFetcher) acquire(ctx context.Context) error {
+	// checked up front so an already dead context never wins a race for a free slot
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case f.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *solverFetcher) release() {
+	<-f.sem
+}
+
 func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	if err := f.acquire(ctx); err != nil {
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("wait for solver: %w", err)}
+	}
+	defer f.release()
 
 	if err := f.ensureSession(ctx); err != nil {
 		return nil, err
@@ -92,10 +114,13 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	return body, nil
 }
 
-// Close destroys the FlareSolverr session so the remote browser is released.
+// Close destroys the FlareSolverr session so the remote browser is released. It gives
+// up when ctx ends rather than waiting for an in-flight fetch to finish.
 func (f *solverFetcher) Close(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	if err := f.acquire(ctx); err != nil {
+		return fmt.Errorf("wait for solver: %w", err)
+	}
+	defer f.release()
 
 	if f.sessionID == "" {
 		return nil

@@ -183,10 +183,10 @@ func TestJackettProvider_Parse_EnclosureMagnet(t *testing.T) {
 
 func TestJackettProvider_TrackerURL_Extraction(t *testing.T) {
 	tests := []struct {
-		name       string
-		comments   string
-		guid       string
-		wantURL    string
+		name     string
+		comments string
+		guid     string
+		wantURL  string
 	}{
 		{
 			name:     "tracker url from comments",

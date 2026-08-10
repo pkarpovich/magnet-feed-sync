@@ -167,8 +167,8 @@ func (p *JackettProvider) extractID(trackerURL, originalURL string) string {
 }
 
 type torznabRSS struct {
-	XMLName xml.Name        `xml:"rss"`
-	Channel torznabChannel  `xml:"channel"`
+	XMLName xml.Name       `xml:"rss"`
+	Channel torznabChannel `xml:"channel"`
 }
 
 type torznabChannel struct {

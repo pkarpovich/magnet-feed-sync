@@ -93,7 +93,9 @@ docker compose up --build
   behind a Cloudflare managed challenge) or `blockedFetcher` when `FLARESOLVERR_URL` is unset; NNM and
   Jackett use `directFetcher`. The solver reuses one session for the whole process — a cold solve is ~74s
   versus ~2.4s warm — and `main.go` destroys it on shutdown with a detached context. A nil fetcher is not
-  supported; construct providers via `NewRutrackerProvider` / `NewNnmProvider` / `NewJackettProvider`
+  supported; construct providers via `NewRutrackerProvider` / `NewNnmProvider` / `NewJackettProvider`.
+  The solver serialises calls with a context-aware semaphore, not a mutex: a solve can take up to 180s,
+  so `Close` must be able to give up on its context instead of waiting the in-flight fetch out
 - Error taxonomy — `providers.ProviderError{Kind, Err}` wrapping a `Transient` / `Blocked` / `Permanent`
   kind, recoverable with `errors.As`. The fetcher classifies transport outcomes (403/429 and Cloudflare
   challenge markers → `Blocked`, 5xx/timeouts/net errors → `Transient`, 404 → `Permanent`); providers
@@ -104,7 +106,12 @@ docker compose up --build
   persisted per task (`consecutive_failures` / `last_error` / `last_error_at`); a task is *failing* at
   `FailureThreshold` (3) consecutive failures, which drives the 24h retry stretch, the health `failing`
   count, and one-shot Telegram transition messages
-- Context-based graceful shutdown
+- Context-based graceful shutdown — the cron sweep runs on the app context, so `CheckForUpdates` stops at
+  the next task when it is cancelled and neither records the aborted parse as a task failure nor overwrites
+  `last_run_at`; without those guards every restart mid-sweep would trip the breaker and notify
+- Every admin message goes out with `ParseMode: MarkdownV2` (`events.NewMarkdownMessage`), and Telegram
+  rejects a whole message over one unescaped reserved char. Plain-text alerts are escaped with
+  `escapeMarkdown`; `MetadataToMsg` wraps its JSON in a code fence and escapes only backticks/backslashes
 - Retry mechanism for database operations
 - Structured logging via `log/slog` with global default logger (`slog.SetDefault`) — use `slog.ErrorContext(ctx, ...)` in HTTP handlers for trace_id correlation
 - OpenTelemetry tracing via global `otel.Tracer()` provider with noop fallback when endpoint not configured

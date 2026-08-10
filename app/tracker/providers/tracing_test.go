@@ -44,7 +44,7 @@ func TestJackettProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		fmt.Fprint(w, xmlResponse)
+		_, _ = fmt.Fprint(w, xmlResponse)
 	}))
 	defer server.Close()
 
@@ -73,7 +73,7 @@ func TestRutrackerProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, htmlResponse)
+		_, _ = fmt.Fprint(w, htmlResponse)
 	}))
 	defer server.Close()
 
@@ -102,7 +102,7 @@ func TestNnmProvider_Parse_CreatesTracingSpan(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, htmlResponse)
+		_, _ = fmt.Fprint(w, htmlResponse)
 	}))
 	defer server.Close()
 
@@ -126,7 +126,7 @@ func TestProviderParse_NoopTracingNoCrash(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<html><body><a class="magnet-link" href="magnet:?xt=urn:btih:abc">m</a></body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body><a class="magnet-link" href="magnet:?xt=urn:btih:abc">m</a></body></html>`)
 	}))
 	defer server.Close()
 

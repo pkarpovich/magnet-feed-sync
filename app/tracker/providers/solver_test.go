@@ -1,14 +1,17 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -118,6 +121,60 @@ func TestSolverSessionReusedAcrossThreeFetches(t *testing.T) {
 	for _, g := range gets {
 		assert.Equal(t, creates[0].Session, g.Session)
 	}
+}
+
+func TestSolverCloseDoesNotWaitOutInFlightFetch(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	solver := &fakeSolver{html: "<html>page</html>"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		if req.Cmd == "request.get" {
+			close(started)
+			<-release
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		solver.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+
+	fetcher := NewSolverFetcher(server.URL)
+	fetchDone := make(chan struct{})
+	go func() {
+		defer close(fetchDone)
+		_, _ = fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	}()
+	<-started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := fetcher.Close(ctx)
+	require.Error(t, err, "Close gives up instead of blocking on the in-flight fetch")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+	close(release)
+	<-fetchDone
+}
+
+func TestSolverFetchGivesUpOnCanceledContext(t *testing.T) {
+	solver := &fakeSolver{html: "<html>page</html>"}
+	server := httptest.NewServer(solver)
+	defer server.Close()
+
+	fetcher := NewSolverFetcher(server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := fetcher.Fetch(ctx, "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	var providerErr *ProviderError
+	require.ErrorAs(t, err, &providerErr)
+	assert.Equal(t, KindTransient, providerErr.Kind)
 }
 
 func TestSolverCloseDestroysSession(t *testing.T) {

@@ -129,7 +129,7 @@ func run(cfg *config.Config) error {
 
 	schedulerErr := make(chan error, 1)
 	go func() {
-		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(context.Background()) }); err != nil {
+		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(ctx) }); err != nil {
 			schedulerErr <- err
 		}
 	}()
