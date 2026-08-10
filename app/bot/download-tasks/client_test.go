@@ -1,9 +1,12 @@
 package download_tasks
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -368,6 +371,69 @@ func TestProcessFileMetadata_ParseError_NoCrash(t *testing.T) {
 	})
 
 	assert.Empty(t, msgChan, "no notification should be sent on parse error")
+}
+
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	return &buf
+}
+
+func TestProcessFileMetadata_ParseError_LogsTaskIdAndUrl(t *testing.T) {
+	logs := captureLogs(t)
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, fmt.Errorf("network error: connection refused")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	})
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &line))
+	assert.Equal(t, "error parsing metadata", line["msg"])
+	assert.Equal(t, "3304959", line["id"])
+	assert.Equal(t, "https://rutracker.org/forum/viewtopic.php?t=3304959", line["url"])
+	assert.Equal(t, "network error: connection refused", line["error"])
+}
+
+func TestCheckFileForUpdates_StoreError_LogsTaskId(t *testing.T) {
+	logs := captureLogs(t)
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return nil, fmt.Errorf("no such row")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         &mockFileParser{},
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+	})
+
+	client.CheckFileForUpdates(context.Background(), "3304959")
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &line))
+	assert.Equal(t, "error getting metadata", line["msg"])
+	assert.Equal(t, "3304959", line["id"])
+	assert.Equal(t, "no such row", line["error"])
 }
 
 func TestProcessFileMetadata_EmptyOriginalUrl_Skipped(t *testing.T) {

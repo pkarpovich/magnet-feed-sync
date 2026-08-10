@@ -545,13 +545,13 @@ of any task's completion criteria.**
 - Modify: `app/observability/loki.go`, `loki_test.go`
 - Modify: `app/bot/download-tasks/client.go`, `client_test.go`
 
-- [ ] in `resolveValue`, if the resolved value satisfies `error`, store `err.Error()` so the text survives
+- [x] in `resolveValue`, if the resolved value satisfies `error`, store `err.Error()` so the text survives
       `json.Marshal` (today every error logs as `{}`)
-- [ ] add the task `id` and the tracker URL to the error logs in `processFileMetadata` and
+- [x] add the task `id` and the tracker URL to the error logs in `processFileMetadata` and
       `CheckFileForUpdates`
-- [ ] write `TestResolveValueErrorText` asserting an `error` attr serializes to its message string
-- [ ] write a test asserting the failure log for a task carries its id
-- [ ] run the per-task gate — must pass before Task 2
+- [x] write `TestResolveValueErrorText` asserting an `error` attr serializes to its message string
+- [x] write a test asserting the failure log for a task carries its id
+- [x] run the per-task gate — must pass before Task 2
 
 ### Task 2: Error model, Fetcher interface, and the direct fetcher
 
