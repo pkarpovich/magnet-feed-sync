@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/types"
@@ -65,6 +66,9 @@ type mockFileStore struct {
 	createOrReplaceFunc func(metadata *tracker.FileMetadata) error
 	getAllFunc          func() ([]*tracker.FileMetadata, error)
 	removeFunc          func(id string) error
+	successes           []string
+	failures            []taskStore.SyncFailure
+	failureIds          []string
 }
 
 func (m *mockFileStore) GetById(id string) (*tracker.FileMetadata, error) {
@@ -81,6 +85,17 @@ func (m *mockFileStore) GetAll() ([]*tracker.FileMetadata, error) {
 
 func (m *mockFileStore) Remove(id string) error {
 	return m.removeFunc(id)
+}
+
+func (m *mockFileStore) RecordSyncSuccess(id string, _ time.Time) error {
+	m.successes = append(m.successes, id)
+	return nil
+}
+
+func (m *mockFileStore) RecordSyncFailure(id string, failure taskStore.SyncFailure) error {
+	m.failureIds = append(m.failureIds, id)
+	m.failures = append(m.failures, failure)
+	return nil
 }
 
 type mockDownloadClient struct {
@@ -884,6 +899,184 @@ func TestCheckForUpdates_BlockedProvider_SkipsWithoutParse(t *testing.T) {
 
 	assert.Equal(t, 1, breaker.begun, "the run must be announced to the breaker exactly once")
 	assert.Empty(t, breaker.failures, "skipped tasks must not record anything")
+}
+
+func TestParseFailureIncrements(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         &mockBreaker{},
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	}, true)
+
+	require.Len(t, store.failures, 1, "a parse failure must be recorded once")
+	assert.Equal(t, []string{"3304959"}, store.failureIds)
+	assert.Equal(t, "Blocked: challenge", store.failures[0].Text)
+	assert.False(t, store.failures[0].At.IsZero(), "failure time must be set")
+	assert.Empty(t, store.successes, "a parse failure must not record a success")
+}
+
+func TestDownloadFailureLeavesCounterZero(t *testing.T) {
+	oldMagnet := "magnet:?xt=urn:btih:abc123"
+	newMagnet := "magnet:?xt=urn:btih:def456"
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "3304959", Magnet: oldMagnet, Location: "/downloads"}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error { return nil },
+	}
+
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "3304959", Magnet: newMagnet}, nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("qbittorrent unavailable")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		Magnet:      oldMagnet,
+	}, true)
+
+	assert.Empty(t, store.failures, "a download client error must not count as a task failure")
+	assert.Equal(t, []string{"3304959"}, store.successes, "the successful parse must still be recorded")
+}
+
+func TestStoreErrorLeavesCounterZero(t *testing.T) {
+	parser := &mockFileParser{
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "3304959", Magnet: "magnet:?xt=urn:btih:abc123"}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return nil, fmt.Errorf("database is locked")
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+	})
+
+	client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+		ID:          "3304959",
+		OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+	}, true)
+
+	assert.Empty(t, store.failures, "a store error must not count as a task failure")
+	assert.Equal(t, []string{"3304959"}, store.successes)
+}
+
+func TestManualRefreshDoesNotTripBreaker(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:          "3304959",
+				OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3304959",
+			}, nil
+		},
+	}
+
+	breaker := &mockBreaker{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.CheckFileForUpdates(context.Background(), "3304959")
+
+	assert.Empty(t, breaker.failures, "a manual refresh must not trip the breaker")
+	require.Len(t, store.failures, 1, "a manual refresh must still keep the counter truthful")
+	assert.Equal(t, "Blocked: challenge", store.failures[0].Text)
+}
+
+func TestCheckForUpdates_FailingTask_SkippedWithinDeadInterval(t *testing.T) {
+	tests := []struct {
+		name        string
+		failures    int
+		lastErrorAt time.Time
+		wantParsed  bool
+	}{
+		{name: "failing within interval", failures: FailureThreshold, lastErrorAt: time.Now().Add(-time.Hour), wantParsed: false},
+		{name: "failing after interval", failures: FailureThreshold, lastErrorAt: time.Now().Add(-25 * time.Hour), wantParsed: true},
+		{name: "below threshold", failures: FailureThreshold - 1, lastErrorAt: time.Now().Add(-time.Hour), wantParsed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := false
+			parser := &mockFileParser{
+				parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+					parsed = true
+					return nil, fmt.Errorf("still broken")
+				},
+			}
+
+			store := &mockFileStore{
+				getAllFunc: func() ([]*tracker.FileMetadata, error) {
+					return []*tracker.FileMetadata{{
+						ID:                  "3304959",
+						OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+						ConsecutiveFailures: tt.failures,
+						LastErrorAt:         sql.NullTime{Time: tt.lastErrorAt, Valid: true},
+					}}, nil
+				},
+			}
+
+			client := NewClient(&ClientCtx{
+				MessagesForSend: make(chan string, 10),
+				Tracker:         parser,
+				DClient:         &mockDownloadClient{},
+				Store:           store,
+			})
+
+			client.CheckForUpdates(context.Background())
+
+			assert.Equal(t, tt.wantParsed, parsed)
+		})
+	}
 }
 
 func TestMagnetsEqual(t *testing.T) {

@@ -663,21 +663,22 @@ of any task's completion criteria.**
 **Files:**
 - Modify: `app/bot/download-tasks/client.go`, `client_test.go`
 
-- [ ] define `FailureThreshold = 3` (exported) and `deadTaskInterval = 24h`
-- [ ] add `RecordSyncSuccess` / `RecordSyncFailure` to the local `FileStore` consumer interface and to
+- [x] define `FailureThreshold = 3` (exported) and `deadTaskInterval = 24h`
+- [x] add `RecordSyncSuccess` / `RecordSyncFailure` to the local `FileStore` consumer interface and to
       `mockFileStore`
-- [ ] add `fromCron bool` to `processFileMetadata`; record outcomes exactly per the seven-path table
+- [x] add `fromCron bool` to `processFileMetadata`; record outcomes exactly per the seven-path table
       (only a `c.tracker.Parse` failure records a failure; success recorded right after `Parse` returns;
       store and download-client errors record nothing). Store recording happens on **both** paths; breaker
       and notifications only when `fromCron`
-- [ ] skip a task in `CheckForUpdates` when `ConsecutiveFailures >= FailureThreshold` and
+- [x] skip a task in `CheckForUpdates` when `ConsecutiveFailures >= FailureThreshold` and
       `time.Since(LastErrorAt.Time) < deadTaskInterval`
-- [ ] write `TestParseFailureIncrements`, `TestDownloadFailureLeavesCounterZero`,
+- [x] write `TestParseFailureIncrements`, `TestDownloadFailureLeavesCounterZero`,
       `TestManualRefreshDoesNotTripBreaker`, and a test that a task over the threshold is skipped within
       24h and attempted after
-- [ ] confirm `grep -c 'c\.mu\.Lock()' app/bot/download-tasks/client.go` still returns 6 (outcome
+- [x] confirm `grep -c 'c\.mu\.Lock()' app/bot/download-tasks/client.go` still returns 6 (outcome
       recording must not change the locking structure)
-- [ ] run the per-task gate — must pass before Task 7
+- [x] run the per-task gate — must pass before Task 7 (gate check 5 is deferred for `FailureThreshold`:
+      its cross-package caller is `main.go` in Task 7, as the Fixed-constants table prescribes)
 
 ### Task 7: Cron run state and the real health endpoint
 

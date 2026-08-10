@@ -13,10 +13,16 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
+	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/utils"
 )
+
+// FailureThreshold is the consecutive failure count at which a task counts as failing.
+const FailureThreshold = 3
+
+const deadTaskInterval = 24 * time.Hour
 
 type FileParser interface {
 	Parse(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
@@ -35,6 +41,8 @@ type FileStore interface {
 	CreateOrReplace(metadata *tracker.FileMetadata) error
 	GetAll() ([]*tracker.FileMetadata, error)
 	Remove(id string) error
+	RecordSyncSuccess(id string, syncedAt time.Time) error
+	RecordSyncFailure(id string, failure taskStore.SyncFailure) error
 }
 
 type DownloadClient interface {
@@ -186,6 +194,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
+		c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
 		}
@@ -194,6 +203,8 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		slog.ErrorContext(ctx, "error parsing metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
 		return
 	}
+
+	c.recordSyncSuccess(ctx, fileMetadata.ID)
 
 	if fromCron {
 		if name := c.tracker.ProviderName(fileMetadata.OriginalUrl); name != "" {
@@ -265,6 +276,26 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	c.sendUpdateNotification(updatedMetadata)
 }
 
+func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
+	if err := c.store.RecordSyncSuccess(id, time.Now()); err != nil {
+		slog.ErrorContext(ctx, "error recording sync success", "error", err, "id", id)
+	}
+}
+
+func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) {
+	text := cause.Error()
+
+	var providerErr *providers.ProviderError
+	if errors.As(cause, &providerErr) {
+		text = fmt.Sprintf("%s: %s", providerErr.Kind, providerErr.Err)
+	}
+
+	failure := taskStore.SyncFailure{Text: text, At: time.Now()}
+	if err := c.store.RecordSyncFailure(id, failure); err != nil {
+		slog.ErrorContext(ctx, "error recording sync failure", "error", err, "id", id)
+	}
+}
+
 func (c *Client) recordParseFailure(url string, err error) {
 	name := c.tracker.ProviderName(url)
 	if name == "" {
@@ -320,6 +351,11 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	skipped := make(map[string]int)
 	for _, metadata := range filesMetadata {
+		if c.isStretched(metadata) {
+			slog.DebugContext(ctx, "task is failing, retry postponed", "id", metadata.ID, "failures", metadata.ConsecutiveFailures)
+			continue
+		}
+
 		name := c.tracker.ProviderName(metadata.OriginalUrl)
 		if name != "" && !c.breaker.Allow(name) {
 			skipped[name]++
@@ -332,6 +368,11 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	for name, count := range skipped {
 		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
 	}
+}
+
+func (c *Client) isStretched(metadata *tracker.FileMetadata) bool {
+	return metadata.ConsecutiveFailures >= FailureThreshold &&
+		time.Since(metadata.LastErrorAt.Time) < deadTaskInterval
 }
 
 func (c *Client) RemoveTask(id string) error {
