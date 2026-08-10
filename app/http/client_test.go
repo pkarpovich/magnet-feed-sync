@@ -383,16 +383,16 @@ func failingFiles(counts ...int) []*tracker.FileMetadata {
 	return files
 }
 
-func decodeHealth(t *testing.T, w *httptest.ResponseRecorder) HealthResponse {
+func decodeHealth(t *testing.T, w *httptest.ResponseRecorder) healthResponse {
 	t.Helper()
 
-	var resp HealthResponse
+	var resp healthResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 
 	return resp
 }
 
-func callHealth(t *testing.T, ctx *ClientCtx) (*httptest.ResponseRecorder, HealthResponse) {
+func callHealth(t *testing.T, ctx *ClientCtx) (*httptest.ResponseRecorder, healthResponse) {
 	t.Helper()
 
 	c := NewClient(ctx)

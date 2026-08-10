@@ -730,24 +730,26 @@ of any task's completion criteria.**
 *Mechanical, repo-local checks only. Live verification is Post-Completion and is NOT part of this task's
 completion criteria. Every checkbox below is a command with a defined expected result.*
 
-- [ ] `go vet ./...`, `go build ./...`, `go test ./... -race` all exit 0
-- [ ] `gofmt -s -l .` prints exactly the four pre-existing files listed in Context — no more, no fewer
-- [ ] `grep -c 'Message:[[:space:]]*"OK"' app/http/client.go` returns 0
-- [ ] `grep -rc 'fetchPage' app/tracker` returns 0 for every file
-- [ ] `grep -c 'blocked_403\|blocked_429\|blocked_cf_body\|blocked_cf_header\|transient_500\|permanent_404\|transient_timeout' app/tracker/providers/fetcher_test.go` returns 7
-- [ ] `grep -c 'TestHealthOK\|TestHealthDegraded\|TestHealthUnhealthyBreaker\|TestHealthUnhealthyStale\|TestHealthNeverRanWithinGrace' app/http/client_test.go` returns 5
-- [ ] `grep -c 'TestResolveValueErrorText' app/observability/loki_test.go` returns 1
-- [ ] `grep -c 'TestCreateOrReplacePreservesConsecutiveFailures' app/task-store/repository_test.go` returns 1
-- [ ] `grep -c 'TestBreakerTripSkipsWithoutFetch\|TestBreakerProbeAfterCooldown\|TestBreakerCooldownSequence\|TestBreakerSeededProvidersAreOK' app/tracker/breaker_test.go` returns 4
-- [ ] `grep -c 'TestNotifyOnceAtThreshold\|TestNotifyOnceOnRecovery\|TestBreakerNotifiesOncePerProvider\|TestManualRefreshDoesNotTripBreaker' app/bot/download-tasks/client_test.go` returns 4
-- [ ] `ls migrations | grep -c 'add-failure-tracking\|add-app-state'` returns 2, and
+- [x] `go vet ./...`, `go build ./...`, `go test ./... -race` all exit 0
+- [x] `gofmt -s -l .` prints exactly the four pre-existing files listed in Context — no more, no fewer
+- [x] `grep -c 'Message:[[:space:]]*"OK"' app/http/client.go` returns 0
+- [x] `grep -rc 'fetchPage' app/tracker` returns 0 for every file
+- [x] `grep -c 'blocked_403\|blocked_429\|blocked_cf_body\|blocked_cf_header\|transient_500\|permanent_404\|transient_timeout' app/tracker/providers/fetcher_test.go` returns 7
+- [x] `grep -c 'TestHealthOK\|TestHealthDegraded\|TestHealthUnhealthyBreaker\|TestHealthUnhealthyStale\|TestHealthNeverRanWithinGrace' app/http/client_test.go` returns 5
+- [x] `grep -c 'TestResolveValueErrorText' app/observability/loki_test.go` returns 1
+- [x] `grep -c 'TestCreateOrReplacePreservesConsecutiveFailures' app/task-store/repository_test.go` returns 1
+- [x] `grep -c 'TestBreakerTripSkipsWithoutFetch\|TestBreakerProbeAfterCooldown\|TestBreakerCooldownSequence\|TestBreakerSeededProvidersAreOK' app/tracker/breaker_test.go` returns 4
+- [x] `grep -c 'TestNotifyOnceAtThreshold\|TestNotifyOnceOnRecovery\|TestBreakerNotifiesOncePerProvider\|TestManualRefreshDoesNotTripBreaker' app/bot/download-tasks/client_test.go` returns 4
+- [x] `ls migrations | grep -c 'add-failure-tracking\|add-app-state'` returns 2, and
       `grep -c '+migrate Up' migrations/*add-failure-tracking*.sql migrations/*add-app-state*.sql` returns
       1 for each
-- [ ] `grep -c 'consecutive_failures' app/task-store/repository.go` is ≥ 4 (runtime CREATE TABLE, the
+- [x] `grep -c 'consecutive_failures' app/task-store/repository.go` is ≥ 4 (runtime CREATE TABLE, the
       `CreateOrReplace` INSERT list, and both record methods)
-- [ ] `grep -rc 'FLARESOLVERR_URL' app/config/config.go compose.yaml README.md` returns ≥ 1 for each
-- [ ] `grep -c 'c\.mu\.Lock()' app/bot/download-tasks/client.go` returns 6
-- [ ] the style greps from the per-task gate report zero violations over the gate's `$CHANGED` scope
+- [x] `grep -rc 'FLARESOLVERR_URL' app/config/config.go compose.yaml README.md` returns ≥ 1 for each
+- [x] `grep -c 'c\.mu\.Lock()' app/bot/download-tasks/client.go` returns 6
+- [x] the style greps from the per-task gate report zero violations over the gate's `$CHANGED` scope
+      (check 5 flagged `http.HealthResponse` — exported with no out-of-package caller and not prescribed
+      verbatim in Technical Details; renamed to `healthResponse` per the plan's visibility rule)
 
 ### Task 10: Update documentation and close out
 

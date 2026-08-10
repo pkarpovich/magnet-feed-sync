@@ -374,7 +374,7 @@ const (
 	statusBlocked   = "blocked"
 )
 
-type HealthResponse struct {
+type healthResponse struct {
 	Status    string            `json:"status"`
 	Tracked   int               `json:"tracked"`
 	Failing   int               `json:"failing"`
@@ -403,7 +403,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 	providerStates, anyBlocked := c.providerStates()
 	lastRunAt, hasRun := c.lastRun(ctx)
 
-	resp := HealthResponse{
+	resp := healthResponse{
 		Status:    statusOk,
 		Tracked:   len(files),
 		Failing:   failing,
