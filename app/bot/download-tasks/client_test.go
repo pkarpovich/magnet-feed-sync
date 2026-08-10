@@ -76,6 +76,7 @@ type mockFileStore struct {
 	failureIds          []string
 	runs                []bool
 	setLastRunErr       error
+	recordFailureErr    error
 }
 
 func (m *mockFileStore) GetById(id string) (*tracker.FileMetadata, error) {
@@ -100,6 +101,9 @@ func (m *mockFileStore) RecordSyncSuccess(id string, _ time.Time) error {
 }
 
 func (m *mockFileStore) RecordSyncFailure(id string, failure taskStore.SyncFailure) error {
+	if m.recordFailureErr != nil {
+		return m.recordFailureErr
+	}
 	m.failureIds = append(m.failureIds, id)
 	m.failures = append(m.failures, failure)
 	return nil
@@ -1150,6 +1154,43 @@ func TestNotifyOnceAtThreshold(t *testing.T) {
 	assert.Contains(t, msg, "Some Movie")
 	assert.Contains(t, msg, "3304959")
 	assert.Contains(t, msg, "Blocked: challenge")
+}
+
+// the alert fires once per streak and is claimed for good, so a run whose counter write
+// failed must not spend it: the store still says 2, and the real crossing comes later
+func TestNoNotifyWhenFailureNotRecorded(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{recordFailureErr: fmt.Errorf("database is locked")}
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         &mockBreaker{},
+	})
+
+	metadata := &tracker.FileMetadata{
+		ID:                  "3304959",
+		Name:                "Some Movie",
+		OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+		ConsecutiveFailures: FailureThreshold - 1,
+	}
+
+	client.processFileMetadata(context.Background(), metadata, true)
+	require.Empty(t, msgChan, "the counter never moved, so there is nothing to alert about")
+
+	store.recordFailureErr = nil
+	client.processFileMetadata(context.Background(), metadata, true)
+
+	require.Len(t, msgChan, 1, "the alert slot has to survive the failed write")
+	assert.Contains(t, <-msgChan, "Some Movie")
 }
 
 // a deleted row is off every list the health endpoint reads, so letting a refresh keep

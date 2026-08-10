@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -68,7 +69,7 @@ func (p *NnmProvider) Parse(ctx context.Context, pageURL string) (*Result, error
 		Title:     p.getTitle(doc),
 		Magnet:    magnet,
 		UpdatedAt: p.getLastUpdatedDate(doc),
-		Comment:   p.getLastComment(doc),
+		Comment:   p.getLastComment(ctx, doc),
 	}, nil
 }
 
@@ -120,15 +121,20 @@ func (p *NnmProvider) getLastUpdatedDate(doc *goquery.Document) (registrationDat
 	return registrationDate
 }
 
-func (p *NnmProvider) getLastComment(doc *goquery.Document) string {
+func (p *NnmProvider) getLastComment(ctx context.Context, doc *goquery.Document) string {
 	rssLink := p.getRssLink(doc)
 	if rssLink == "" {
 		slog.Warn("rss link not found in nnm page")
 		return ""
 	}
 
+	// gofeed's default client has no timeout and ParseURL ignores the sweep context, so a
+	// tracker that accepts the connection and never answers parks this goroutine forever —
+	// and the cron job runs in singleton mode, which would stall every later sweep with it
 	fp := gofeed.NewParser()
-	feed, err := fp.ParseURL(rssLink)
+	fp.Client = &http.Client{Timeout: directHTTPTimeout}
+
+	feed, err := fp.ParseURLWithContext(rssLink, ctx)
 	if err != nil || feed == nil {
 		slog.Error("failed to parse rss feed", "error", err)
 		return ""

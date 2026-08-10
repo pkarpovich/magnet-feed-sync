@@ -39,7 +39,8 @@ func NewDirectFetcher() Fetcher {
 func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build request: %w", err)}
+		// a parse failure also comes back as a *url.Error carrying the whole url
+		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build request: %w", withoutURL(err))}
 	}
 	req.Header.Set("User-Agent", directUserAgent)
 

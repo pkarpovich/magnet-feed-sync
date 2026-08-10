@@ -216,10 +216,14 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 			return
 		}
 
-		text := c.recordSyncFailure(ctx, fileMetadata.ID, err)
+		text, recorded := c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
-			c.notifyFailing(ctx, fileMetadata, text)
+			// the counter never moved, so the alert would claim a streak the store does not
+			// have and would burn the one-shot slot the real crossing needs later
+			if recorded {
+				c.notifyFailing(ctx, fileMetadata, text)
+			}
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -311,7 +315,8 @@ func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
 	c.clearFailingNotified(id)
 }
 
-func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) string {
+// recordSyncFailure reports the error text it stored and whether the counter actually moved.
+func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) (string, bool) {
 	text := cause.Error()
 
 	var providerErr *providers.ProviderError
@@ -322,9 +327,10 @@ func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) 
 	failure := taskStore.SyncFailure{Text: text, At: time.Now()}
 	if err := c.store.RecordSyncFailure(id, failure); err != nil {
 		slog.ErrorContext(ctx, "error recording sync failure", "error", err, "id", id)
+		return text, false
 	}
 
-	return text
+	return text, true
 }
 
 // notifyFailing fires once per failing streak, on the first cron run that observes the task
