@@ -86,6 +86,34 @@ func TestProviderExtractionFailureIsPermanent(t *testing.T) {
 	}
 }
 
+// the breaker recovers the kind with errors.As through the providers' fmt.Errorf wrap,
+// so a %v there would silently disable it
+func TestProviderFetchErrorKeepsKind(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider func(f Fetcher) Provider
+	}{
+		{name: "rutracker", provider: func(f Fetcher) Provider { return NewRutrackerProvider(f) }},
+		{name: "nnm", provider: func(f Fetcher) Provider { return NewNnmProvider(f) }},
+		{name: "jackett", provider: func(f Fetcher) Provider { return NewJackettProvider("http://jackett:9117", f) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetchErr := &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+			provider := tt.provider(&stubFetcher{err: fetchErr})
+
+			result, err := provider.Parse(context.Background(), "http://tracker.local/page?t=1")
+			require.Error(t, err)
+			assert.Nil(t, result)
+
+			var pe *ProviderError
+			require.True(t, errors.As(err, &pe))
+			assert.Equal(t, KindBlocked, pe.Kind)
+		})
+	}
+}
+
 func TestProviderNames(t *testing.T) {
 	fetcher := &stubFetcher{}
 

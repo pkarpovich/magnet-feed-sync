@@ -25,7 +25,8 @@ To create a new download task, send a message to the bot with tracker page.
 
 **Supported Trackers:**
 
-- [rutracker.org](https://rutracker.org)
+- [rutracker.org](https://rutracker.org) - requires a running [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)
+  instance (see `FLARESOLVERR_URL`); the site sits behind a Cloudflare managed challenge and cannot be fetched directly
 - [nnmclub.to](https://nnmclub.to)
 - [Jackett](https://github.com/Jackett/Jackett) (Torznab API) - any indexer supported by your Jackett instance
 
@@ -94,9 +95,14 @@ With a Jackett `/dl/` `.torrent` URL:
 
 Consumers should assert on `status`, not on the HTTP body text.
 
+> Breaking change: `GET /api/health` no longer returns `{"count": N, "message": "OK"}`, and it no longer always
+> answers HTTP 200 - an `unhealthy` status comes with a 503. Uptime monitors and container healthchecks that
+> asserted on `message == "OK"` or on a 200-only contract must be updated to assert `status == "ok"`, and that
+> change has to land together with the service deploy or the monitor will flap.
+
 ### Cron Jobs
 
-Set to run every hour, checking for updates on tracked pages and initiating new download tasks if updates are found.
+Runs on the `CRON` schedule (hourly by default), checking for updates on tracked pages and initiating new download tasks if updates are found.
 
 A tracker that returns a blocked response (HTTP 403/429 or a Cloudflare challenge) trips a per-provider
 circuit breaker: its tasks are skipped without issuing requests, and a single half-open probe is retried
@@ -113,6 +119,7 @@ Configure the bot using the following environment variables:
 - `QBITTORRENT_DESTINATION`: Default download location on qBittorrent.
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
+- `CRON`: cron expression for the update sweep, standard 5 fields (default `0 * * * *`). It also sets the health staleness window: a last run older than twice this interval makes `/api/health` report `unhealthy`. An expression that cannot be parsed falls back to a 2h window and logs a warning.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
 

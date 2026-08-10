@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"golang.org/x/net/html/charset"
 )
@@ -18,9 +19,10 @@ type Fetcher interface {
 }
 
 const (
-	directUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-	challengeMarker = "Just a moment..."
-	maxResponseSize = 10 * 1024 * 1024
+	directUserAgent   = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+	challengeMarker   = "Just a moment..."
+	maxResponseSize   = 10 * 1024 * 1024
+	directHTTPTimeout = 30 * time.Second
 )
 
 type directFetcher struct {
@@ -29,7 +31,8 @@ type directFetcher struct {
 
 // NewDirectFetcher returns a Fetcher issuing plain HTTP requests to the tracker.
 func NewDirectFetcher() Fetcher {
-	return &directFetcher{client: http.DefaultClient}
+	// the cron sweep passes a context without deadline, so the bound has to live on the client
+	return &directFetcher{client: &http.Client{Timeout: directHTTPTimeout}}
 }
 
 func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, error) {
@@ -50,7 +53,7 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		kind := f.classifyStatus(resp.StatusCode)
+		kind := classifyStatus(resp.StatusCode)
 		return nil, &ProviderError{Kind: kind, Err: fmt.Errorf("bad status: %s", resp.Status)}
 	}
 
@@ -66,7 +69,9 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	return body, nil
 }
 
-func (f *directFetcher) classifyStatus(code int) ErrorKind {
+// classifyStatus maps a tracker HTTP status onto an ErrorKind; shared by the direct
+// fetcher and the solver, which sees the same statuses through solution.status.
+func classifyStatus(code int) ErrorKind {
 	switch code {
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		return KindBlocked

@@ -72,6 +72,16 @@ docker compose up --build
 - SQLite via `modernc.org/sqlite` (pure Go driver)
 - Migrations in `/migrations/` using sql-migrate
 - Database file persisted in Docker volume at `/db/`
+- Two tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`) and
+  `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep)
+- The schema is declared **twice** — in `/migrations/` and in the runtime `CREATE TABLE IF NOT EXISTS` in
+  `NewRepository`. Both must be updated together; only the migration applies to an existing database, so a
+  new column needs `sql-migrate up` before the new binary starts
+- `CreateOrReplace` is `INSERT OR REPLACE`, which SQLite executes as DELETE + INSERT: any column missing from
+  its INSERT list silently resets to its DEFAULT on every save. `TestCreateOrReplacePreservesConsecutiveFailures`
+  guards this. Sync outcomes use targeted `UPDATE`s (`RecordSyncSuccess` / `RecordSyncFailure`) instead
+- DB-backed tests go through `newTestRepo(t)` in `app/task-store/repository_test.go` — `database.openDB`
+  resolves `.db/<file>` against the process CWD, so the helper does `t.Chdir(t.TempDir())`
 
 ## Key Patterns
 
@@ -114,6 +124,7 @@ Environment variables (see compose.yaml):
 - `TELEGRAM_SUPER_USERS`: Comma-separated admin user IDs
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
+- `CRON`: update-sweep schedule, standard 5-field expression (default `0 * * * *`). `main.go` also derives the health staleness window from it (twice the interval between the next two firings; `staleRunFallback` 2h + a WARN log when it cannot be parsed)
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` and the service still starts
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")

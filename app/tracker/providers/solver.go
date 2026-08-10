@@ -75,7 +75,21 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("flaresolverr returned no solution")}
 	}
 
-	return []byte(resp.Solution.Response), nil
+	// flaresolverr reports the command as ok even when the tracker refused it, so the
+	// tracker's own status has to be classified here or a 403 reaches the parser as html
+	if status := resp.Solution.Status; status != 0 && status != http.StatusOK {
+		return nil, &ProviderError{
+			Kind: classifyStatus(status),
+			Err:  fmt.Errorf("bad status: %d %s", status, http.StatusText(status)),
+		}
+	}
+
+	body := []byte(resp.Solution.Response)
+	if bytes.Contains(body, []byte(challengeMarker)) {
+		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+	}
+
+	return body, nil
 }
 
 // Close destroys the FlareSolverr session so the remote browser is released.

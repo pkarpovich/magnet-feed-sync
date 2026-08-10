@@ -292,7 +292,7 @@ func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) 
 
 	var providerErr *providers.ProviderError
 	if errors.As(cause, &providerErr) {
-		text = fmt.Sprintf("%s: %s", providerErr.Kind, providerErr.Err)
+		text = providerErr.Error()
 	}
 
 	failure := taskStore.SyncFailure{Text: text, At: time.Now()}

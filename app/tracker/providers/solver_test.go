@@ -180,6 +180,73 @@ func TestSolverErrorIsBlocked(t *testing.T) {
 	}
 }
 
+func TestSolverClassifiesTrackerStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		solution solverSolution
+		want     ErrorKind
+	}{
+		{name: "blocked_403", solution: solverSolution{Status: http.StatusForbidden, Response: "<html>denied</html>"}, want: KindBlocked},
+		{name: "blocked_429", solution: solverSolution{Status: http.StatusTooManyRequests, Response: "<html>slow down</html>"}, want: KindBlocked},
+		{name: "permanent_404", solution: solverSolution{Status: http.StatusNotFound, Response: "<html>gone</html>"}, want: KindPermanent},
+		{name: "transient_500", solution: solverSolution{Status: http.StatusInternalServerError, Response: "<html>oops</html>"}, want: KindTransient},
+		{
+			name:     "blocked_cf_body",
+			solution: solverSolution{Status: http.StatusOK, Response: "<html><title>Just a moment...</title></html>"},
+			want:     KindBlocked,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req solverRequest
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+				w.Header().Set("Content-Type", "application/json")
+				if req.Cmd != "request.get" {
+					_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+					return
+				}
+
+				body, err := json.Marshal(solverResponse{Status: "ok", Message: "Challenge not detected!", Solution: &tt.solution})
+				require.NoError(t, err)
+				_, _ = w.Write(body)
+			}))
+			defer server.Close()
+
+			body, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+			require.Error(t, err)
+			assert.Nil(t, body)
+
+			var pe *ProviderError
+			require.True(t, errors.As(err, &pe))
+			assert.Equal(t, tt.want, pe.Kind)
+		})
+	}
+}
+
+func TestSolverMissingSolutionStatusIsAccepted(t *testing.T) {
+	solver := &fakeSolver{html: "<html>page</html>"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		solver.record(req)
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != "request.get" {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","message":"ok","solution":{"response":"<html>page</html>"}}`))
+	}))
+	defer server.Close()
+
+	body, err := NewSolverFetcher(server.URL).Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "page")
+}
+
 func TestSolverUnreachableIsBlocked(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	server.Close()
