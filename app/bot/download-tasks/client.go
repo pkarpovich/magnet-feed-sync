@@ -43,6 +43,7 @@ type FileStore interface {
 	Remove(id string) error
 	RecordSyncSuccess(id string, syncedAt time.Time) error
 	RecordSyncFailure(id string, failure taskStore.SyncFailure) error
+	SetLastRun(at time.Time, ok bool) error
 }
 
 type DownloadClient interface {
@@ -339,10 +340,14 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	slog.InfoContext(ctx, "checking for updates")
 
+	runOk := true
+	defer func() { c.recordRun(ctx, runOk) }()
+
 	c.breaker.BeginRun()
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
+		runOk = false
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		slog.ErrorContext(ctx, "error getting files metadata", "error", err)
@@ -367,6 +372,12 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	for name, count := range skipped {
 		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
+	}
+}
+
+func (c *Client) recordRun(ctx context.Context, ok bool) {
+	if err := c.store.SetLastRun(time.Now(), ok); err != nil {
+		slog.ErrorContext(ctx, "error recording run state", "error", err)
 	}
 }
 

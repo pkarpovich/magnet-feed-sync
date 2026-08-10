@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tbapi "github.com/OvyFlash/telegram-bot-api"
+	"github.com/robfig/cron/v3"
 	downloadTasks "magnet-feed-sync/app/bot/download-tasks"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
@@ -146,8 +147,20 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	}
 
+	httpClient := http.NewClient(&http.ClientCtx{
+		Config:           cfg.Http,
+		Store:            store,
+		TaskCreator:      downloadTasksClient,
+		DownloadClient:   dClient,
+		Breaker:          breaker,
+		RunState:         store,
+		StaleRunAfter:    staleRunAfter(cfg.Cron),
+		StartedAt:        time.Now(),
+		FailureThreshold: downloadTasks.FailureThreshold,
+	})
+
 	go tgListener.SendMessagesForAdmins(ctx)
-	go http.NewClient(cfg.Http, store, downloadTasksClient, dClient).Start(ctx, done)
+	go httpClient.Start(ctx, done)
 
 	go func() {
 		if err := tgListener.Do(); err != nil {
@@ -176,6 +189,21 @@ func run(cfg *config.Config) error {
 	}
 
 	return runErr
+}
+
+const staleRunFallback = 2 * time.Hour
+
+func staleRunAfter(cronExpr string) time.Duration {
+	sched, err := cron.ParseStandard(cronExpr)
+	if err != nil {
+		slog.Warn("invalid cron expression, using fallback stale run interval", "cron", cronExpr, "error", err)
+		return staleRunFallback
+	}
+
+	first := sched.Next(time.Now())
+	second := sched.Next(first)
+
+	return 2 * second.Sub(first)
 }
 
 func newProviderBreaker(providerList []providers.Provider) *tracker.Breaker {

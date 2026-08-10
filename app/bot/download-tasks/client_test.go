@@ -69,6 +69,8 @@ type mockFileStore struct {
 	successes           []string
 	failures            []taskStore.SyncFailure
 	failureIds          []string
+	runs                []bool
+	setLastRunErr       error
 }
 
 func (m *mockFileStore) GetById(id string) (*tracker.FileMetadata, error) {
@@ -96,6 +98,11 @@ func (m *mockFileStore) RecordSyncFailure(id string, failure taskStore.SyncFailu
 	m.failureIds = append(m.failureIds, id)
 	m.failures = append(m.failures, failure)
 	return nil
+}
+
+func (m *mockFileStore) SetLastRun(_ time.Time, ok bool) error {
+	m.runs = append(m.runs, ok)
+	return m.setLastRunErr
 }
 
 type mockDownloadClient struct {
@@ -1204,4 +1211,68 @@ func TestCheckForUpdates_NoopTracingNoCrash(t *testing.T) {
 	})
 
 	client.CheckForUpdates(context.Background())
+}
+
+func TestCheckForUpdates_RecordsRunOutcome(t *testing.T) {
+	tests := []struct {
+		name       string
+		getAllFunc func() ([]*tracker.FileMetadata, error)
+		wantOk     bool
+	}{
+		{
+			name:       "sweep completed",
+			getAllFunc: func() ([]*tracker.FileMetadata, error) { return nil, nil },
+			wantOk:     true,
+		},
+		{
+			name:       "sweep could not start",
+			getAllFunc: func() ([]*tracker.FileMetadata, error) { return nil, fmt.Errorf("db is locked") },
+			wantOk:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockFileStore{getAllFunc: tt.getAllFunc}
+			client := NewClient(&ClientCtx{
+				MessagesForSend: make(chan string, 10),
+				Tracker:         &mockFileParser{},
+				DClient:         &mockDownloadClient{},
+				Store:           store,
+			})
+
+			client.CheckForUpdates(context.Background())
+
+			require.Equal(t, []bool{tt.wantOk}, store.runs)
+		})
+	}
+}
+
+func TestCheckForUpdates_TaskFailureKeepsRunOk(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1"},
+			}, nil
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+	})
+
+	client.CheckForUpdates(context.Background())
+
+	require.Equal(t, []bool{true}, store.runs)
+	require.Len(t, store.failureIds, 1)
 }

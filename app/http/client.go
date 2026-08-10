@@ -39,24 +39,49 @@ type DownloadClient interface {
 	GetDefaultLocation() string
 }
 
-type Client struct {
-	config         config.HttpConfig
-	store          FileStore
-	taskCreator    TaskCreator
-	downloadClient DownloadClient
+type BreakerSnapshotter interface {
+	Snapshot() map[string]tracker.State
 }
 
-func NewClient(
-	cfg config.HttpConfig,
-	store FileStore,
-	taskCreator TaskCreator,
-	downloadClient DownloadClient,
-) *Client {
+type RunStateReader interface {
+	GetLastRun() (time.Time, bool, error)
+}
+
+type Client struct {
+	config           config.HttpConfig
+	store            FileStore
+	taskCreator      TaskCreator
+	downloadClient   DownloadClient
+	breaker          BreakerSnapshotter
+	runState         RunStateReader
+	staleRunAfter    time.Duration
+	startedAt        time.Time
+	failureThreshold int
+}
+
+type ClientCtx struct {
+	Config           config.HttpConfig
+	Store            FileStore
+	TaskCreator      TaskCreator
+	DownloadClient   DownloadClient
+	Breaker          BreakerSnapshotter
+	RunState         RunStateReader
+	StaleRunAfter    time.Duration
+	StartedAt        time.Time
+	FailureThreshold int
+}
+
+func NewClient(ctx *ClientCtx) *Client {
 	return &Client{
-		taskCreator:    taskCreator,
-		downloadClient: downloadClient,
-		config:         cfg,
-		store:          store,
+		config:           ctx.Config,
+		store:            ctx.Store,
+		taskCreator:      ctx.TaskCreator,
+		downloadClient:   ctx.DownloadClient,
+		breaker:          ctx.Breaker,
+		runState:         ctx.RunState,
+		staleRunAfter:    ctx.StaleRunAfter,
+		startedAt:        ctx.StartedAt,
+		failureThreshold: ctx.FailureThreshold,
 	}
 }
 
@@ -342,9 +367,19 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const (
+	statusOk        = "ok"
+	statusDegraded  = "degraded"
+	statusUnhealthy = "unhealthy"
+	statusBlocked   = "blocked"
+)
+
 type HealthResponse struct {
-	Count   int    `json:"count"`
-	Message string `json:"message"`
+	Status    string            `json:"status"`
+	Tracked   int               `json:"tracked"`
+	Failing   int               `json:"failing"`
+	LastRunAt *time.Time        `json:"last_run_at,omitempty"`
+	Providers map[string]string `json:"providers"`
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -358,15 +393,87 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = json.NewEncoder(w).Encode(HealthResponse{
-		Count:   len(files),
-		Message: "OK",
-	})
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to encode health response", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	failing := 0
+	for _, f := range files {
+		if f.ConsecutiveFailures >= c.failureThreshold {
+			failing++
+		}
 	}
+
+	providerStates, anyBlocked := c.providerStates()
+	lastRunAt, hasRun := c.lastRun(ctx)
+
+	resp := HealthResponse{
+		Status:    statusOk,
+		Tracked:   len(files),
+		Failing:   failing,
+		Providers: providerStates,
+	}
+	if hasRun {
+		resp.LastRunAt = &lastRunAt
+	}
+
+	code := http.StatusOK
+	switch {
+	case anyBlocked || c.runIsStale(lastRunAt, hasRun):
+		resp.Status = statusUnhealthy
+		code = http.StatusServiceUnavailable
+	case failing > 0:
+		resp.Status = statusDegraded
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(ctx, "failed to encode health response", "error", err)
+	}
+}
+
+func (c *Client) providerStates() (map[string]string, bool) {
+	states := make(map[string]string)
+	if c.breaker == nil {
+		return states, false
+	}
+
+	anyBlocked := false
+	for name, state := range c.breaker.Snapshot() {
+		if state.Tripped {
+			states[name] = statusBlocked
+			anyBlocked = true
+			continue
+		}
+		states[name] = statusOk
+	}
+
+	return states, anyBlocked
+}
+
+func (c *Client) lastRun(ctx context.Context) (time.Time, bool) {
+	if c.runState == nil {
+		return time.Time{}, false
+	}
+
+	at, _, err := c.runState.GetLastRun()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to read last run state", "error", err)
+		return time.Time{}, false
+	}
+
+	return at, !at.IsZero()
+}
+
+func (c *Client) runIsStale(lastRunAt time.Time, hasRun bool) bool {
+	if hasRun {
+		return time.Since(lastRunAt) > c.staleRunAfter
+	}
+
+	// a freshly booted service has not run yet; the grace period starts at boot
+	if c.startedAt.IsZero() {
+		return false
+	}
+
+	return time.Since(c.startedAt) > c.staleRunAfter
 }
 
 func (c *Client) fileHandler(w http.ResponseWriter, r *http.Request) {

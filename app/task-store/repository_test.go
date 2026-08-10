@@ -148,3 +148,32 @@ func TestRecordSyncOnMissingTaskIsNoError(t *testing.T) {
 	_, err := repo.GetById("missing")
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }
+
+func TestGetLastRunWithoutStateIsEmpty(t *testing.T) {
+	repo := newTestRepo(t)
+
+	at, ok, err := repo.GetLastRun()
+	require.NoError(t, err)
+	assert.True(t, at.IsZero())
+	assert.False(t, ok)
+}
+
+func TestSetLastRunRoundTrips(t *testing.T) {
+	repo := newTestRepo(t)
+
+	first := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.SetLastRun(first, true))
+
+	at, ok, err := repo.GetLastRun()
+	require.NoError(t, err)
+	assert.True(t, first.Equal(at))
+	assert.True(t, ok)
+
+	second := first.Add(time.Hour)
+	require.NoError(t, repo.SetLastRun(second, false))
+
+	at, ok, err = repo.GetLastRun()
+	require.NoError(t, err)
+	assert.True(t, second.Equal(at))
+	assert.False(t, ok)
+}

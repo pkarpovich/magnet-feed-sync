@@ -689,23 +689,23 @@ of any task's completion criteria.**
 - Modify: `app/http/client.go`, `client_test.go`
 - Modify: `app/main.go`, `go.mod` (promote `robfig/cron/v3` to direct)
 
-- [ ] write the `app_state` migration by hand plus the mirrored runtime `CREATE TABLE IF NOT EXISTS`, and
+- [x] write the `app_state` migration by hand plus the mirrored runtime `CREATE TABLE IF NOT EXISTS`, and
       add `SetLastRun` / `GetLastRun` (reusing `newTestRepo`)
-- [ ] persist the run outcome via `defer` at the end of `CheckForUpdates`, including the early-return path;
+- [x] persist the run outcome via `defer` at the end of `CheckForUpdates`, including the early-return path;
       `last_run_ok = false` only when `store.GetAll` failed
-- [ ] compute `staleRunAfter` in `main.go` via `cron.ParseStandard(cfg.Cron)` (gap between the next two
+- [x] compute `staleRunAfter` in `main.go` via `cron.ParseStandard(cfg.Cron)` (gap between the next two
       fire times × 2, `staleRunFallback` on error with a WARN log)
-- [ ] convert `http.NewClient` to the `ClientCtx` options struct exactly as written in Technical Details
+- [x] convert `http.NewClient` to the `ClientCtx` options struct exactly as written in Technical Details
       (including `Config` — omitting it breaks `Start` and `fileHandler`) and add the two consumer
       interfaces; update all **14** call sites in `client_test.go`
-- [ ] rewrite `healthHandler` to return `status`/`tracked`/`failing`/`last_run_at`/`providers` with the
+- [x] rewrite `healthHandler` to return `status`/`tracked`/`failing`/`last_run_at`/`providers` with the
       three-branch ordered evaluation, `failing` counted as `consecutive_failures >= FailureThreshold`,
       and HTTP 503 for `unhealthy`
-- [ ] write `TestHealthOK`, `TestHealthDegraded`, `TestHealthUnhealthyBreaker`, `TestHealthUnhealthyStale`
+- [x] write `TestHealthOK`, `TestHealthDegraded`, `TestHealthUnhealthyBreaker`, `TestHealthUnhealthyStale`
       (`last_run_at = now-3h`, `staleRunAfter = 2h` → 503; `now-90m` → not stale) and
       `TestHealthNeverRanWithinGrace` (no `last_run_at`, `StartedAt = now-10m` → ok/200;
       `StartedAt = now-3h` → 503)
-- [ ] run the per-task gate — must pass before Task 8
+- [x] run the per-task gate — must pass before Task 8
 
 ### Task 8: Telegram notifications on state transitions
 

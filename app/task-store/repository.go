@@ -1,8 +1,11 @@
 package task_store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"magnet-feed-sync/app/database"
@@ -29,6 +32,11 @@ func NewRepository(db *database.Client) (*Repository, error) {
     		last_error TEXT NOT NULL DEFAULT '',
     		last_error_at TIMESTAMP
 	)`)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)`)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +215,63 @@ func (r *Repository) RecordSyncFailure(id string, failure SyncFailure) error {
 	}
 
 	return nil
+}
+
+const (
+	lastRunAtKey = "last_run_at"
+	lastRunOkKey = "last_run_ok"
+)
+
+func (r *Repository) SetLastRun(at time.Time, ok bool) error {
+	if err := r.setState(lastRunAtKey, at.UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+
+	return r.setState(lastRunOkKey, strconv.FormatBool(ok))
+}
+
+func (r *Repository) GetLastRun() (time.Time, bool, error) {
+	rawAt, err := r.state(lastRunAtKey)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if rawAt == "" {
+		return time.Time{}, false, nil
+	}
+
+	at, err := time.Parse(time.RFC3339, rawAt)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("parse last run at: %w", err)
+	}
+
+	rawOk, err := r.state(lastRunOkKey)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+
+	return at, rawOk == "true", nil
+}
+
+func (r *Repository) setState(key, value string) error {
+	_, err := r.db.Exec(`INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)`, key, value)
+	if err != nil {
+		return fmt.Errorf("set app state %s: %w", key, err)
+	}
+
+	return nil
+}
+
+func (r *Repository) state(key string) (string, error) {
+	var value string
+	err := r.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get app state %s: %w", key, err)
+	}
+
+	return value, nil
 }
 
 func (r *Repository) Remove(id string) error {
