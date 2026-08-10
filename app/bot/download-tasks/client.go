@@ -34,6 +34,7 @@ type ProviderBreaker interface {
 	BeginRun()
 	RecordFailure(name string, kind providers.ErrorKind)
 	RecordSuccess(name string)
+	Snapshot() map[string]tracker.State
 }
 
 type FileStore interface {
@@ -91,6 +92,7 @@ func (noopBreaker) Allow(string) bool                         { return true }
 func (noopBreaker) BeginRun()                                 {}
 func (noopBreaker) RecordFailure(string, providers.ErrorKind) {}
 func (noopBreaker) RecordSuccess(string)                      {}
+func (noopBreaker) Snapshot() map[string]tracker.State        { return nil }
 
 func (c *Client) OnMessage(ctx context.Context, msg bot.Message, location string) (bool, string, error) {
 	metadata, err := c.CreateFromURL(ctx, msg.Text, location)
@@ -195,9 +197,10 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 
 	updatedMetadata, err := c.tracker.Parse(ctx, fileMetadata.OriginalUrl, "")
 	if err != nil {
-		c.recordSyncFailure(ctx, fileMetadata.ID, err)
+		text := c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
+			c.notifyFailing(fileMetadata, text)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -211,6 +214,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		if name := c.tracker.ProviderName(fileMetadata.OriginalUrl); name != "" {
 			c.breaker.RecordSuccess(name)
 		}
+		c.notifyRecovered(fileMetadata)
 	}
 
 	c.mu.Lock()
@@ -283,7 +287,7 @@ func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
 	}
 }
 
-func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) {
+func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) string {
 	text := cause.Error()
 
 	var providerErr *providers.ProviderError
@@ -295,6 +299,31 @@ func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) 
 	if err := c.store.RecordSyncFailure(id, failure); err != nil {
 		slog.ErrorContext(ctx, "error recording sync failure", "error", err, "id", id)
 	}
+
+	return text
+}
+
+// notifyFailing fires once, on the run that pushes the task from the silent ramp-up to failing.
+func (c *Client) notifyFailing(metadata *tracker.FileMetadata, lastError string) {
+	if metadata.ConsecutiveFailures != FailureThreshold-1 {
+		return
+	}
+
+	c.messagesForSend <- fmt.Sprintf(
+		"⚠️ Task is failing after %d attempts:\n\n%s (%s)\n\n%s",
+		FailureThreshold, metadata.Name, metadata.ID, lastError,
+	)
+}
+
+func (c *Client) notifyRecovered(metadata *tracker.FileMetadata) {
+	if metadata.ConsecutiveFailures < FailureThreshold {
+		return
+	}
+
+	c.messagesForSend <- fmt.Sprintf(
+		"✅ Task recovered after %d failures:\n\n%s (%s)\n\nlast error: %s",
+		metadata.ConsecutiveFailures, metadata.Name, metadata.ID, metadata.LastError,
+	)
 }
 
 func (c *Client) recordParseFailure(url string, err error) {
@@ -344,6 +373,7 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	defer func() { c.recordRun(ctx, runOk) }()
 
 	c.breaker.BeginRun()
+	before := c.breaker.Snapshot()
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
@@ -372,6 +402,29 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 
 	for name, count := range skipped {
 		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
+	}
+
+	c.notifyBreakerTransitions(breakerDelta{before: before, after: c.breaker.Snapshot(), skipped: skipped})
+}
+
+type breakerDelta struct {
+	before  map[string]tracker.State
+	after   map[string]tracker.State
+	skipped map[string]int
+}
+
+func (c *Client) notifyBreakerTransitions(delta breakerDelta) {
+	for name, state := range delta.after {
+		was := delta.before[name]
+		switch {
+		case state.Tripped && !was.Tripped:
+			c.messagesForSend <- fmt.Sprintf(
+				"🚫 Provider %s is blocked, %d task(s) skipped this run, next probe at %s",
+				name, delta.skipped[name], state.NextProbeAt.Format(time.RFC3339),
+			)
+		case was.Tripped && !state.Tripped:
+			c.messagesForSend <- fmt.Sprintf("✅ Provider %s is reachable again", name)
+		}
 	}
 }
 

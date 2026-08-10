@@ -712,18 +712,18 @@ of any task's completion criteria.**
 **Files:**
 - Modify: `app/bot/download-tasks/client.go`, `client_test.go`
 
-- [ ] read `consecutive_failures` before recording and notify ok→failing only when
+- [x] read `consecutive_failures` before recording and notify ok→failing only when
       `before == FailureThreshold-1 && after == FailureThreshold`, failing→ok only when
       `before >= FailureThreshold && after == 0`
-- [ ] accumulate skipped counts per provider during the sweep and send **one** breaker message per tripped
+- [x] accumulate skipped counts per provider during the sweep and send **one** breaker message per tripped
       provider at the **end** of `CheckForUpdates` (name, skipped count, `NextProbeAt`); one more when a
       half-open probe succeeds
-- [ ] include the task name/id and `last_error` in task messages; send only when `fromCron`
-- [ ] send on `messagesForSend` **outside** any `c.mu` critical section (unbuffered channel — a send under
+- [x] include the task name/id and `last_error` in task messages; send only when `fromCron`
+- [x] send on `messagesForSend` **outside** any `c.mu` critical section (unbuffered channel — a send under
       the mutex deadlocks the sweep)
-- [ ] write `TestNotifyOnceAtThreshold` (3 failures → exactly one message; 4th and 5th → none),
+- [x] write `TestNotifyOnceAtThreshold` (3 failures → exactly one message; 4th and 5th → none),
       `TestNotifyOnceOnRecovery`, `TestBreakerNotifiesOncePerProvider`
-- [ ] run the per-task gate — must pass before Task 9
+- [x] run the per-task gate — must pass before Task 9
 
 ### Task 9: Verify the implementation against the repository
 

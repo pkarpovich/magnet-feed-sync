@@ -37,6 +37,7 @@ func (m *mockFileParser) ProviderName(url string) string {
 
 type mockBreaker struct {
 	allowed   map[string]bool
+	states    map[string]tracker.State
 	begun     int
 	failures  []string
 	kinds     []providers.ErrorKind
@@ -59,6 +60,10 @@ func (m *mockBreaker) RecordFailure(name string, kind providers.ErrorKind) {
 
 func (m *mockBreaker) RecordSuccess(name string) {
 	m.successes = append(m.successes, name)
+}
+
+func (m *mockBreaker) Snapshot() map[string]tracker.State {
+	return m.states
 }
 
 type mockFileStore struct {
@@ -1024,8 +1029,9 @@ func TestManualRefreshDoesNotTripBreaker(t *testing.T) {
 	}
 
 	breaker := &mockBreaker{}
+	msgChan := make(chan string, 10)
 	client := NewClient(&ClientCtx{
-		MessagesForSend: make(chan string, 10),
+		MessagesForSend: msgChan,
 		Tracker:         parser,
 		DClient:         &mockDownloadClient{},
 		Store:           store,
@@ -1037,6 +1043,183 @@ func TestManualRefreshDoesNotTripBreaker(t *testing.T) {
 	assert.Empty(t, breaker.failures, "a manual refresh must not trip the breaker")
 	require.Len(t, store.failures, 1, "a manual refresh must still keep the counter truthful")
 	assert.Equal(t, "Blocked: challenge", store.failures[0].Text)
+	assert.Empty(t, msgChan, "a manual refresh must not notify")
+}
+
+func TestNotifyOnceAtThreshold(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           &mockFileStore{},
+		Breaker:         &mockBreaker{},
+	})
+
+	for failures := 0; failures < 5; failures++ {
+		client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+			ID:                  "3304959",
+			Name:                "Some Movie",
+			OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+			ConsecutiveFailures: failures,
+		}, true)
+	}
+
+	require.Len(t, msgChan, 1, "only the run that crosses the threshold notifies")
+	msg := <-msgChan
+	assert.Contains(t, msg, "Some Movie")
+	assert.Contains(t, msg, "3304959")
+	assert.Contains(t, msg, "Blocked: challenge")
+}
+
+func TestNotifyOnceOnRecovery(t *testing.T) {
+	tests := []struct {
+		name       string
+		failures   int
+		wantNotify bool
+	}{
+		{name: "recovery from failing", failures: FailureThreshold, wantNotify: true},
+		{name: "recovery during ramp-up is silent", failures: FailureThreshold - 1, wantNotify: false},
+	}
+
+	magnet := "magnet:?xt=urn:btih:abc123"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := &mockFileParser{
+				providerName: "rutracker",
+				parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+					return &tracker.FileMetadata{ID: "3304959", Magnet: magnet}, nil
+				},
+			}
+
+			store := &mockFileStore{
+				getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+					return &tracker.FileMetadata{ID: "3304959", Magnet: magnet, Location: "/downloads"}, nil
+				},
+				createOrReplaceFunc: func(metadata *tracker.FileMetadata) error { return nil },
+			}
+
+			msgChan := make(chan string, 10)
+			client := NewClient(&ClientCtx{
+				MessagesForSend: msgChan,
+				Tracker:         parser,
+				DClient:         &mockDownloadClient{},
+				Store:           store,
+				Breaker:         &mockBreaker{},
+			})
+
+			client.processFileMetadata(context.Background(), &tracker.FileMetadata{
+				ID:                  "3304959",
+				Name:                "Some Movie",
+				OriginalUrl:         "https://rutracker.org/forum/viewtopic.php?t=3304959",
+				ConsecutiveFailures: tt.failures,
+				LastError:           "Blocked: challenge",
+			}, true)
+
+			if !tt.wantNotify {
+				assert.Empty(t, msgChan)
+				return
+			}
+
+			require.Len(t, msgChan, 1)
+			msg := <-msgChan
+			assert.Contains(t, msg, "Some Movie")
+			assert.Contains(t, msg, "3304959")
+			assert.Contains(t, msg, "Blocked: challenge")
+		})
+	}
+}
+
+func TestBreakerNotifiesOncePerProvider(t *testing.T) {
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{
+				{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1"},
+				{ID: "2", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=2"},
+				{ID: "3", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=3"},
+			}, nil
+		},
+	}
+
+	msgChan := make(chan string, 10)
+	breaker := tracker.NewBreaker(nil, "rutracker")
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.CheckForUpdates(context.Background())
+
+	require.Len(t, msgChan, 1, "a tripped provider notifies once, not once per skipped task")
+	msg := <-msgChan
+	assert.Contains(t, msg, "rutracker")
+	assert.Contains(t, msg, "2 task(s) skipped")
+
+	client.CheckForUpdates(context.Background())
+	assert.Empty(t, msgChan, "an already blocked provider does not re-notify")
+}
+
+func TestBreakerNotifiesOnRecovery(t *testing.T) {
+	magnet := "magnet:?xt=urn:btih:abc123"
+	blocked := true
+	parser := &mockFileParser{
+		providerName: "rutracker",
+		parseFunc: func(url, location string) (*tracker.FileMetadata, error) {
+			if blocked {
+				return nil, &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
+			}
+			return &tracker.FileMetadata{ID: "1", Magnet: magnet}, nil
+		},
+	}
+
+	store := &mockFileStore{
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{{ID: "1", OriginalUrl: "https://rutracker.org/forum/viewtopic.php?t=1"}}, nil
+		},
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: magnet, Location: "/downloads"}, nil
+		},
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error { return nil },
+	}
+
+	now := time.Now()
+	msgChan := make(chan string, 10)
+	breaker := tracker.NewBreaker(func() time.Time { return now }, "rutracker")
+	client := NewClient(&ClientCtx{
+		MessagesForSend: msgChan,
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{},
+		Store:           store,
+		Breaker:         breaker,
+	})
+
+	client.CheckForUpdates(context.Background())
+	require.Len(t, msgChan, 1)
+	<-msgChan
+
+	blocked = false
+	now = now.Add(2 * time.Hour)
+	client.CheckForUpdates(context.Background())
+
+	require.Len(t, msgChan, 1, "a successful half-open probe notifies once")
+	assert.Contains(t, <-msgChan, "rutracker is reachable again")
 }
 
 func TestCheckForUpdates_FailingTask_SkippedWithinDeadInterval(t *testing.T) {
