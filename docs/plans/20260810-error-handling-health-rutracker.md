@@ -563,20 +563,20 @@ of any task's completion criteria.**
   `recordingProvider` implement `providers.Provider` and stop compiling once `Name()` joins it)
 - Modify: `app/main.go`
 
-- [ ] add `ErrorKind`, its `String()` returning exactly `Transient`/`Blocked`/`Permanent`, and
+- [x] add `ErrorKind`, its `String()` returning exactly `Transient`/`Blocked`/`Permanent`, and
       `ProviderError` with `Error()` and `Unwrap()`
-- [ ] add the `Fetcher` interface and `directFetcher` (sends `directUserAgent`, applies the full transport
+- [x] add the `Fetcher` interface and `directFetcher` (sends `directUserAgent`, applies the full transport
       classification matrix, keeps charset decoding and the 10 MiB cap); delete `fetchPage`
-- [ ] add `Name() string` to `Provider` returning `rutracker` / `nnm` / `jackett`; give the two test
+- [x] add `Name() string` to `Provider` returning `rutracker` / `nnm` / `jackett`; give the two test
       doubles a `name` field and a `Name()` method
-- [ ] add `NewRutrackerProvider(f Fetcher)` and `NewNnmProvider(f Fetcher)` (both gain an unexported
+- [x] add `NewRutrackerProvider(f Fetcher)` and `NewNnmProvider(f Fetcher)` (both gain an unexported
       `fetcher` field), extend `NewJackettProvider(baseURL string, f Fetcher)`, and update all 18 provider
       construction sites — a nil fetcher is not supported
-- [ ] wrap provider extraction failures (e.g. "no magnet link found") as `KindPermanent`
-- [ ] write the classification matrix table test with the seven pinned case names
-- [ ] write `TestProviderExtractionFailureIsPermanent` and a test asserting the request's `User-Agent`
+- [x] wrap provider extraction failures (e.g. "no magnet link found") as `KindPermanent`
+- [x] write the classification matrix table test with the seven pinned case names
+- [x] write `TestProviderExtractionFailureIsPermanent` and a test asserting the request's `User-Agent`
       equals `directUserAgent`, plus a test for `ErrorKind.String()`
-- [ ] run the per-task gate — must pass before Task 3
+- [x] run the per-task gate — must pass before Task 3
 
 ### Task 3: Route RuTracker through FlareSolverr
 

@@ -48,7 +48,7 @@ func TestJackettProvider_Parse_CreatesTracingSpan(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/test/results?q=test")
 	require.NoError(t, err)
 	assert.Equal(t, "Test Torrent", result.Title)
@@ -77,7 +77,7 @@ func TestRutrackerProvider_Parse_CreatesTracingSpan(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"?t=123")
 	require.NoError(t, err)
 	assert.Equal(t, "Test Rutracker Torrent", result.Title)
@@ -106,7 +106,7 @@ func TestNnmProvider_Parse_CreatesTracingSpan(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &NnmProvider{}
+	provider := NewNnmProvider(NewDirectFetcher())
 	result, err := provider.Parse(context.Background(), server.URL+"?t=456")
 	require.NoError(t, err)
 	assert.Equal(t, "Test NNM Torrent", result.Title)
@@ -130,7 +130,7 @@ func TestProviderParse_NoopTracingNoCrash(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := &RutrackerProvider{}
+	provider := NewRutrackerProvider(NewDirectFetcher())
 	_, err := provider.Parse(context.Background(), server.URL+"?t=1")
 	require.NoError(t, err)
 }

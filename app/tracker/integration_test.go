@@ -11,10 +11,15 @@ import (
 )
 
 type recordingProvider struct {
+	name          string
 	canHandleURLs []string
 	parseCalls    []string
 	result        *providers.Result
 	err           error
+}
+
+func (p *recordingProvider) Name() string {
+	return p.name
 }
 
 func (p *recordingProvider) CanHandle(url string) bool {

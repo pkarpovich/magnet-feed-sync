@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,9 +15,20 @@ import (
 	"magnet-feed-sync/app/utils"
 )
 
-type RutrackerProvider struct{}
+type RutrackerProvider struct {
+	fetcher Fetcher
+}
 
 const RutrackerUrl = "https://rutracker.org/forum"
+
+// NewRutrackerProvider builds a rutracker provider fetching pages through f.
+func NewRutrackerProvider(f Fetcher) *RutrackerProvider {
+	return &RutrackerProvider{fetcher: f}
+}
+
+func (p *RutrackerProvider) Name() string {
+	return "rutracker"
+}
 
 func (p *RutrackerProvider) CanHandle(u string) bool {
 	return strings.HasPrefix(u, RutrackerUrl)
@@ -26,7 +38,7 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 	ctx, span := otel.Tracer("tracker").Start(ctx, "RutrackerProvider.Parse")
 	defer span.End()
 
-	body, err := fetchPage(ctx, pageURL)
+	body, err := p.fetcher.Fetch(ctx, pageURL)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch rutracker page: %w", err)
 		span.RecordError(err)
@@ -36,7 +48,7 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		err = fmt.Errorf("failed to parse rutracker HTML: %w", err)
+		err = &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("failed to parse rutracker HTML: %w", err)}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -44,7 +56,7 @@ func (p *RutrackerProvider) Parse(ctx context.Context, pageURL string) (*Result,
 
 	magnet := p.getMagnetLink(doc)
 	if magnet == "" {
-		err = fmt.Errorf("no magnet link found in rutracker page")
+		err = &ProviderError{Kind: KindPermanent, Err: errors.New("no magnet link found in rutracker page")}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err

@@ -37,9 +37,14 @@ func (m *mockDownloadClient) GetDefaultLocation() string {
 }
 
 type mockProvider struct {
+	name            string
 	canHandleResult bool
 	result          *providers.Result
 	err             error
+}
+
+func (m *mockProvider) Name() string {
+	return m.name
 }
 
 func (m *mockProvider) CanHandle(url string) bool {

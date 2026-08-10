@@ -67,14 +67,16 @@ func run(cfg *config.Config) error {
 
 	dClient := qbittorrent.NewClient(cfg.QBittorrent)
 
+	directFetcher := providers.NewDirectFetcher()
+
 	providerList := []providers.Provider{
-		&providers.RutrackerProvider{},
-		&providers.NnmProvider{},
+		providers.NewRutrackerProvider(directFetcher),
+		providers.NewNnmProvider(directFetcher),
 	}
 	if cfg.Jackett.URL != "" {
 		redacted := redactURL(cfg.Jackett.URL)
 		slog.Info("jackett provider enabled", "url", redacted)
-		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL))
+		providerList = append(providerList, providers.NewJackettProvider(cfg.Jackett.URL, directFetcher))
 	}
 	t := tracker.NewParser(dClient, providerList...)
 

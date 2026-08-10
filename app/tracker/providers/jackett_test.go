@@ -94,7 +94,7 @@ func TestJackettProvider_CanHandle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider := NewJackettProvider(tt.baseURL)
+			provider := NewJackettProvider(tt.baseURL, NewDirectFetcher())
 			assert.Equal(t, tt.want, provider.CanHandle(tt.url))
 		})
 	}
@@ -110,7 +110,7 @@ func TestJackettProvider_Parse_ValidResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 
 	result, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/rutracker/results/torznab?apikey=KEY&t=details&id=6810475")
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestJackettProvider_Parse_EmptyResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 
 	_, err = provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/rutracker/results/torznab")
 	assert.Error(t, err)
@@ -149,7 +149,7 @@ func TestJackettProvider_Parse_NoTrackerURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 
 	result, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/test/results/torznab?id=12345")
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestJackettProvider_Parse_EnclosureMagnet(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 
 	result, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/nnm/results/torznab")
 	require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestJackettProvider_TrackerURL_Extraction(t *testing.T) {
 		},
 	}
 
-	provider := NewJackettProvider("http://localhost:9117")
+	provider := NewJackettProvider("http://localhost:9117", NewDirectFetcher())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			item := torznabItem{
@@ -258,7 +258,7 @@ func TestJackettProvider_ExtractID(t *testing.T) {
 		},
 	}
 
-	provider := NewJackettProvider("http://nas:9117")
+	provider := NewJackettProvider("http://nas:9117", NewDirectFetcher())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := provider.extractID(tt.trackerURL, tt.originalURL)
@@ -274,7 +274,7 @@ func TestJackettProvider_Parse_InvalidXML(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewJackettProvider(server.URL)
+	provider := NewJackettProvider(server.URL, NewDirectFetcher())
 
 	_, err := provider.Parse(context.Background(), server.URL+"/api/v2.0/indexers/test/results/torznab")
 	assert.Error(t, err)
