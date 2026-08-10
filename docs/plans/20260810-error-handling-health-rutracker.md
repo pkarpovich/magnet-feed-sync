@@ -585,29 +585,29 @@ of any task's completion criteria.**
 - Modify: `app/config/config.go`, `config_test.go`
 - Modify: `app/main.go`, `compose.yaml`, `README.md`
 
-- [ ] add `FLARESOLVERR_URL` to config (empty = solver disabled), to `compose.yaml`, **and to the env-var
+- [x] add `FLARESOLVERR_URL` to config (empty = solver disabled), to `compose.yaml`, **and to the env-var
       list in `README.md`** (documented here, not in Task 10, so Task 9 can verify it)
-- [ ] implement `solverFetcher` holding `baseURL`, `mu sync.Mutex`, `sessionID string` and an
+- [x] implement `solverFetcher` holding `baseURL`, `mu sync.Mutex`, `sessionID string` and an
       `*http.Client` with `Timeout: solverHTTPTimeout`; send `Content-Type: application/json`
-- [ ] on `Fetch`: lock, lazily `sessions.create` with
+- [x] on `Fetch`: lock, lazily `sessions.create` with
       `sessionID = "magnet-feed-sync-" + strconv.FormatInt(time.Now().UnixNano(), 36)` computed once per
       process, then `request.get` with `maxTimeout: solverMaxTimeout`. Apply the **per-command** success
       rule (`HTTP 200 && status=="ok"` for every command, plus `solution != nil` for `request.get` only) —
       a shared validator requiring `solution` would reject every successful `sessions.create`.
       **Write no session-recreation logic** — a missing session is not an error (verified contract)
-- [ ] add `blockedFetcher` and `func (f *solverFetcher) Close(ctx context.Context) error` issuing
+- [x] add `blockedFetcher` and `func (f *solverFetcher) Close(ctx context.Context) error` issuing
       `sessions.destroy` (no-op when `sessionID` is empty); `Close` is NOT part of `Fetcher` — `main.go`
       holds the concrete type
-- [ ] in `main.go` register the close with a **detached** context: `run()` calls `cancel()` before
+- [x] in `main.go` register the close with a **detached** context: `run()` calls `cancel()` before
       deferred functions execute, so a plain `defer solver.Close(ctx)` would always fail with
       `context.Canceled` and leak the browser. Use `context.WithoutCancel(ctx)` plus a 10s timeout and log
       the error
-- [ ] wire RuTracker to `solverFetcher` when `FLARESOLVERR_URL` is set, else `blockedFetcher`; NNM and
+- [x] wire RuTracker to `solverFetcher` when `FLARESOLVERR_URL` is set, else `blockedFetcher`; NNM and
       Jackett keep `directFetcher`
-- [ ] write `TestSolverFetchSuccess`, `TestSolverSessionReusedAcrossThreeFetches` (fake returns a
+- [x] write `TestSolverFetchSuccess`, `TestSolverSessionReusedAcrossThreeFetches` (fake returns a
       solution-less `status:"ok"` for `sessions.create` and the fetch still succeeds), `TestSolverErrorIsBlocked`
       (HTTP 500 + `status:"error"`), and a case where `status:"ok"` lacks `solution` on `request.get`
-- [ ] run the per-task gate — must pass before Task 4
+- [x] run the per-task gate — must pass before Task 4
 
 ### Task 4: Per-provider circuit breaker
 

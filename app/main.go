@@ -69,8 +69,27 @@ func run(cfg *config.Config) error {
 
 	directFetcher := providers.NewDirectFetcher()
 
+	rutrackerFetcher := providers.NewBlockedFetcher()
+	if cfg.FlaresolverrURL != "" {
+		solver := providers.NewSolverFetcher(cfg.FlaresolverrURL)
+		rutrackerFetcher = solver
+		slog.Info("rutracker provider uses flaresolverr", "url", cfg.FlaresolverrURL)
+
+		// run() cancels ctx before deferred functions run, so the session teardown
+		// needs a context that survives it
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer closeCancel()
+			if err := solver.Close(closeCtx); err != nil {
+				slog.Error("error closing flaresolverr session", "error", err)
+			}
+		}()
+	} else {
+		slog.Warn("flaresolverr url is not configured, rutracker pages will be reported as blocked")
+	}
+
 	providerList := []providers.Provider{
-		providers.NewRutrackerProvider(directFetcher),
+		providers.NewRutrackerProvider(rutrackerFetcher),
 		providers.NewNnmProvider(directFetcher),
 	}
 	if cfg.Jackett.URL != "" {

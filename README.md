@@ -84,6 +84,7 @@ Configure the bot using the following environment variables:
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
+- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
 
 > Breaking change: the Synology DownloadStation client has been removed. qBittorrent is now the only supported download client. Remove any `DOWNLOAD_CLIENT` and `SYNOLOGY_*` variables from your environment.
 
