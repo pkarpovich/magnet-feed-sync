@@ -460,16 +460,16 @@ tests and production reach their schema by the same path.
 - Create: `cmd/migrate/main.go`
 - Create: `cmd/migrate/main_test.go`
 
-- [ ] implement `run() error` opening the database with `database.NewClient("tasks.db")`, calling
+- [x] implement `run() error` opening the database with `database.NewClient("tasks.db")`, calling
       `migrations.Apply`, logging the number applied via plain `slog` to stderr, and closing the database
-- [ ] make `main` a two-line wrapper that closes explicitly and exits non-zero on error — no `defer` on the
+- [x] make `main` a two-line wrapper that closes explicitly and exits non-zero on error — no `defer` on the
       exit path, because `os.Exit`/`log.Fatal` skip it and a WAL database would be left unrolled
-- [ ] wire no observability: no Loki, no tracing, no config loading
-- [ ] keep it flagless: no `down`, no `status`, no arguments
-- [ ] write a test for `run()` succeeding against a temp database (use `t.Chdir(t.TempDir())` as
+- [x] wire no observability: no Loki, no tracing, no config loading
+- [x] keep it flagless: no `down`, no `status`, no arguments
+- [x] write a test for `run()` succeeding against a temp database (use `t.Chdir(t.TempDir())` as
       `newTestRepo` does) and asserting a second call applies zero
-- [ ] write a test for `run()` returning an error when the database path is unusable
-- [ ] run tests — must pass before Task 3
+- [x] write a test for `run()` returning an error when the database path is unusable
+- [x] run tests — must pass before Task 3
 
 ### Task 3: Make migrations the single source of schema
 
