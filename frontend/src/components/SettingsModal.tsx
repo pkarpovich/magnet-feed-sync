@@ -2,7 +2,7 @@ import { Divider, Headline, IconButton, Modal, Select } from "@telegram-apps/tel
 import type { ChangeEvent } from "react";
 import { useCallback, useState } from "react";
 
-import type { FileLocation } from "../hooks/useFileLocations.ts";
+import type { FileLocation, UpdateLocationResult } from "../hooks/useFileLocations.ts";
 import CloseIcon from "../icons/close.svg";
 import SettingsIcon from "../icons/settings.svg";
 import styles from "./FileMetadataRow.module.css";
@@ -11,17 +11,29 @@ import { SettingsModalHeader } from "./SettingsModalHeader.tsx";
 type Props = {
     id: string;
     locations: FileLocation[];
-    onChange: (fileId: string, newLocation: string) => Promise<void>;
+    onChange: (fileId: string, newLocation: string) => Promise<UpdateLocationResult>;
     title: string;
     value: string;
 };
 
 export const SettingsModal = ({ id, locations, onChange, title, value }: Props) => {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [status, setStatus] = useState("");
 
     const handleChange = useCallback(
         async (e: ChangeEvent<HTMLSelectElement>) => {
-            await onChange(id, e.target.value);
+            setStatus("");
+
+            try {
+                const result = await onChange(id, e.target.value);
+                setStatus(
+                    result.moved
+                        ? "Saved, files moved"
+                        : `Saved. Files not moved: ${result.reason ?? "unknown reason"}`,
+                );
+            } catch (err) {
+                setStatus(err instanceof Error ? err.message : "Failed to update location");
+            }
         },
         [id, onChange],
     );
@@ -67,6 +79,7 @@ export const SettingsModal = ({ id, locations, onChange, title, value }: Props) 
                     </option>
                 ))}
             </Select>
+            {status ? <div className={styles.settingsStatus}>{status}</div> : null}
         </Modal>
     );
 };

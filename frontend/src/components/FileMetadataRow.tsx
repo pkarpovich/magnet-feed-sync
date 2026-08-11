@@ -2,7 +2,7 @@ import { IconButton } from "@telegram-apps/telegram-ui";
 import clsx from "clsx";
 import { useCallback, useMemo, useState } from "react";
 
-import type { FileLocation } from "../hooks/useFileLocations.ts";
+import type { FileLocation, UpdateLocationResult } from "../hooks/useFileLocations.ts";
 import MagnetIcon from "../icons/magnet.svg";
 import RefreshIcon from "../icons/refresh.svg";
 import RemoveIcon from "../icons/remove.svg";
@@ -18,7 +18,7 @@ type Props = {
     locations: FileLocation[];
     magnet: string;
     name: string;
-    onLocationChange: (fileId: string, newLocation: string) => Promise<void>;
+    onLocationChange: (fileId: string, newLocation: string) => Promise<UpdateLocationResult>;
     onRefreshFileMetadata: (id: string) => Promise<void>;
     onRemove: (id: string) => Promise<void>;
     originalUrl: string;
