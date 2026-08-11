@@ -43,6 +43,8 @@ type Config struct {
 	OtelEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	LokiURL         string `env:"LOKI_URL"`
 	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
+	// NatsURL is where watch notifications go; empty disables publishing.
+	NatsURL string `env:"NATS_URL"`
 }
 
 func Init() (*Config, error) {

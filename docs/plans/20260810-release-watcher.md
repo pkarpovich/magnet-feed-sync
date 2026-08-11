@@ -973,27 +973,27 @@ adding a second one.
 - Modify: `app/config/config_test.go`
 - Modify: `go.mod`, `go.sum`
 
-- [ ] add the NATS client dependency (`go get github.com/nats-io/nats.go`) and add `NATS_URL` to config
-- [ ] implement the concrete JetStream publisher satisfying the `publisher` interface from Task 4, with
+- [x] add the NATS client dependency (`go get github.com/nats-io/nats.go`) and add `NATS_URL` to config
+- [x] implement the concrete JetStream publisher satisfying the `publisher` interface from Task 4, with
       payload construction living inside the publisher
-- [ ] connect with retry-on-failed-connect, unlimited reconnects and a short dial timeout; a failed initial
+- [x] connect with retry-on-failed-connect, unlimited reconnects and a short dial timeout; a failed initial
       connect is logged and the service starts anyway (see Technical Details — a fatal connect would
       crash-loop the container whenever NATS restarts)
-- [ ] build the payload exactly as prescribed, capping `new` at `maxPayloadItems` and re-trimming after
+- [x] build the payload exactly as prescribed, capping `new` at `maxPayloadItems` and re-trimming after
       marshalling to respect `maxPayloadBytes`, always reporting `total` (post-dedup, pre-filter) and
       `matched`, with `found_at` as RFC3339 UTC
-- [ ] publish to `subjectPrefix + watch.ID` under `natsPublishTimeout`, set the message id to
+- [x] publish to `subjectPrefix + watch.ID` under `natsPublishTimeout`, set the message id to
       `<watch_id>:<newest external id>` for stream-side dedup, and require the ack before returning
       success; **never create or reconfigure a stream**
-- [ ] make an empty `NATS_URL` disable publishing: warn once at startup and return an error from the
+- [x] make an empty `NATS_URL` disable publishing: warn once at startup and return an error from the
       publish call so the engine does not mark anything seen
-- [ ] write tests for payload construction: field values, item cap, byte cap trimming, `total`/`matched`
+- [x] write tests for payload construction: field values, item cap, byte cap trimming, `total`/`matched`
       preserved when items are dropped, `found_at` format
-- [ ] write tests for subject and message-id construction from the watch id
-- [ ] write tests for error cases: publish failure surfaces as an error; disabled publisher returns an
+- [x] write tests for subject and message-id construction from the watch id
+- [x] write tests for error cases: publish failure surfaces as an error; disabled publisher returns an
       error rather than silently succeeding; a construction-time connect failure does not return a fatal
       error from the constructor
-- [ ] run tests — must pass before Task 6
+- [x] run tests — must pass before Task 6
 
 ### Task 6: Effects wiring — publish-then-mark and the Telegram mirror
 

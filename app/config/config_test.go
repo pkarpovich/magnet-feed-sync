@@ -17,6 +17,17 @@ func TestInit_DefaultValues(t *testing.T) {
 	assert.Empty(t, cfg.OtelEndpoint)
 	assert.Empty(t, cfg.LokiURL)
 	assert.Empty(t, cfg.FlaresolverrURL)
+	assert.Empty(t, cfg.NatsURL)
+}
+
+func TestInit_NatsFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("NATS_URL", "nats://nats:4222")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "nats://nats:4222", cfg.NatsURL)
 }
 
 func TestInit_FlaresolverrFromEnv(t *testing.T) {
