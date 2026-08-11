@@ -58,3 +58,28 @@ func TestInit_CustomObservabilityValues(t *testing.T) {
 	assert.Equal(t, "http://otel:4318", cfg.OtelEndpoint)
 	assert.Equal(t, "http://loki:3100", cfg.LokiURL)
 }
+
+func TestInit_JackettFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("JACKETT_URL", "http://jackett:9117")
+	t.Setenv("JACKETT_API_KEY", "secret-key")
+	t.Setenv("JACKETT_PUBLIC_URL", "https://jackett.example.com")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "http://jackett:9117", cfg.Jackett.URL)
+	assert.Equal(t, "secret-key", cfg.Jackett.APIKey)
+	assert.Equal(t, "https://jackett.example.com", cfg.Jackett.PublicURL)
+}
+
+func TestInit_JackettPublicURLDefaultsToURL(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("JACKETT_URL", "http://jackett:9117")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "http://jackett:9117", cfg.Jackett.PublicURL)
+	assert.Empty(t, cfg.Jackett.APIKey)
+}

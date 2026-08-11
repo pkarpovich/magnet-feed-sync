@@ -875,24 +875,26 @@ adding a second one.
 - Modify: `app/config/config.go`
 - Modify: `app/config/config_test.go`
 
-- [ ] add `SearchResult` (including `Query`) and `SearchSource` to `app/watcher/source.go` exactly as
+- [x] add `SearchResult` (including `Query`) and `SearchSource` to `app/watcher/source.go` exactly as
       prescribed in Technical Details (`Watch` is already there from Task 1)
-- [ ] add `JACKETT_API_KEY` and `JACKETT_PUBLIC_URL` to `JackettConfig` (the latter defaulting to the
+- [x] add `JACKETT_API_KEY` and `JACKETT_PUBLIC_URL` to `JackettConfig` (the latter defaulting to the
       existing URL when empty) and extend the config test
-- [ ] implement the Jackett source using the exact request template in Technical Details
+- [x] implement the Jackett source using the exact request template in Technical Details
       (`jackettSearchPath`, `apikey`, `t=search`, `q`; no `cat`, no `limit`), map **all** `<item>`
       elements, apply the field mapping rules, and set `Query` on every result
-- [ ] extend the torznab structs to parse `torznab:attr` with the **namespace-URL** struct tag so
+- [x] extend the torznab structs to parse `torznab:attr` with the **namespace-URL** struct tag so
       `Seeders` is populated (see the trap in Technical Details)
-- [ ] rewrite the scheme+host of `DownloadURL` to the configured public base, preserving path and query
-- [ ] treat a non-2xx response or unparseable XML as an error, never as an empty result set
-- [ ] write tests against an `httptest` server with a torznab fixture containing several items, asserting
+- [x] rewrite the scheme+host of `DownloadURL` to the configured public base, preserving path and query
+- [x] treat a non-2xx response or unparseable XML as an error, never as an empty result set
+- [x] write tests against an `httptest` server with a torznab fixture containing several items, asserting
       the count, `PageURL` from `<comments>`, seeders from `torznab:attr`, and the external id from `t=`
-- [ ] write a test whose `httptest` handler asserts on `r.URL.Path` and the full query string, so a wrong
+- [x] write a test whose `httptest` handler asserts on `r.URL.Path` and the full query string, so a wrong
       endpoint or a missing `t=search` fails the test rather than only production
-- [ ] write a test asserting the internal host in `<link>` is rewritten to the public base
-- [ ] write tests for error cases: non-2xx, malformed XML, item with neither `<comments>` nor `<guid>`
-- [ ] run tests — must pass before Task 3
+- [x] write a test asserting the internal host in `<link>` is rewritten to the public base
+- [x] write tests for error cases: non-2xx, malformed XML, item with neither `<comments>` nor `<guid>`
+      (the last is skipped with a warn rather than failing the whole search, so one broken row cannot
+      kill a 226-result page)
+- [x] run tests — must pass before Task 3
 
 ### Task 3: ext.to source — search and signed magnet
 

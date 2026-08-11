@@ -26,6 +26,10 @@ type HttpConfig struct {
 
 type JackettConfig struct {
 	URL string `env:"JACKETT_URL"`
+	// APIKey is required to search: the URL alone carries no key.
+	APIKey string `env:"JACKETT_API_KEY"`
+	// PublicURL replaces the internal host Jackett puts in download links; it defaults to URL.
+	PublicURL string `env:"JACKETT_PUBLIC_URL"`
 }
 
 type Config struct {
@@ -51,6 +55,10 @@ func Init() (*Config, error) {
 	err = cleanenv.ReadEnv(&cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if cfg.Jackett.PublicURL == "" {
+		cfg.Jackett.PublicURL = cfg.Jackett.URL
 	}
 
 	return &cfg, nil

@@ -1,6 +1,9 @@
 package watcher
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Watch is a saved hunt: the queries to run, the sources to run them against, the two
 // regex filters and the bookkeeping the cron cycle keeps.
@@ -29,6 +32,12 @@ type SearchResult struct {
 	Query       string
 	Seeders     int
 	PublishedAt time.Time
+}
+
+// SearchSource is one indexer a watch can be run against.
+type SearchSource interface {
+	Name() string
+	Search(ctx context.Context, query string) ([]SearchResult, error)
 }
 
 const seenKeySeparator = "\x00"
