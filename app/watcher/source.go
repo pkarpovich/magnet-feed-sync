@@ -40,6 +40,13 @@ type SearchSource interface {
 	Search(ctx context.Context, query string) ([]SearchResult, error)
 }
 
+// KnownSources lists every source name a watch may reference. It is deliberately static
+// rather than derived from the running source set: a source disabled at startup (no api
+// key, no solver) must not make an existing watch unsaveable.
+func KnownSources() []string {
+	return []string{sourceJackett, sourceExtto}
+}
+
 const seenKeySeparator = "\x00"
 
 // SeenKey identifies a result within a watch. Both sources hand out plain integer ids, so

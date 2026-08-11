@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
+	watch_store "magnet-feed-sync/app/watch-store"
+	"magnet-feed-sync/app/watcher"
 )
 
 type mockTaskCreator struct {
@@ -666,4 +668,431 @@ func TestSetFileLocationStoreFailureIsAnError(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Equal(t, 0, dClient.setLocationCalls)
+}
+
+type mockWatchStore struct {
+	watches   map[string]*watcher.Watch
+	order     []string
+	seen      []watch_store.SeenRow
+	disabled  []string
+	createErr error
+	updateErr error
+	getAllErr error
+	seenErr   error
+}
+
+func newMockWatchStore(watches ...*watcher.Watch) *mockWatchStore {
+	store := &mockWatchStore{watches: make(map[string]*watcher.Watch, len(watches))}
+	for _, w := range watches {
+		store.watches[w.ID] = w
+		store.order = append(store.order, w.ID)
+	}
+
+	return store
+}
+
+func (m *mockWatchStore) Create(w *watcher.Watch) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+
+	stored := *w
+	stored.Rev = 1
+	m.watches[w.ID] = &stored
+	m.order = append(m.order, w.ID)
+
+	return nil
+}
+
+func (m *mockWatchStore) Update(w *watcher.Watch) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+
+	current, ok := m.watches[w.ID]
+	if !ok {
+		return fmt.Errorf("watch %s: %w", w.ID, watch_store.ErrNotFound)
+	}
+
+	stored := *w
+	stored.Rev = current.Rev + 1
+	m.watches[w.ID] = &stored
+
+	return nil
+}
+
+func (m *mockWatchStore) Disable(id string) error {
+	if _, ok := m.watches[id]; !ok {
+		return fmt.Errorf("watch %s: %w", id, watch_store.ErrNotFound)
+	}
+
+	m.disabled = append(m.disabled, id)
+
+	return nil
+}
+
+func (m *mockWatchStore) GetAll() ([]*watcher.Watch, error) {
+	if m.getAllErr != nil {
+		return nil, m.getAllErr
+	}
+
+	watches := make([]*watcher.Watch, 0, len(m.order))
+	for _, id := range m.order {
+		watches = append(watches, m.watches[id])
+	}
+
+	return watches, nil
+}
+
+func (m *mockWatchStore) GetByID(id string) (*watcher.Watch, error) {
+	w, ok := m.watches[id]
+	if !ok {
+		return nil, fmt.Errorf("watch %s: %w", id, watch_store.ErrNotFound)
+	}
+
+	return w, nil
+}
+
+func (m *mockWatchStore) SeenRows(watchID string) ([]watch_store.SeenRow, error) {
+	return m.seen, m.seenErr
+}
+
+func acceptanceWatch() *watcher.Watch {
+	return &watcher.Watch{
+		ID:           "one-night-only-en",
+		Queries:      []string{"One Night Only 2026", "Только на одну ночь 2026"},
+		Sources:      []string{"jackett", "extto"},
+		IncludeRegex: `(?i)one[ ._-]night[ ._-]only.*2026|только[ ._-]на[ ._-]одну[ ._-]ночь.*2026`,
+		ExcludeRegex: `(?i)bee gees|def leppard|one desire|streisand|rupaul|top chef|concert|chinese|\b2016\b`,
+		Rev:          1,
+	}
+}
+
+func newWatchClient(store watchStore) *Client {
+	return NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    &mockTaskCreator{},
+		DownloadClient: &mockDownloadClient{},
+		WatchStore:     store,
+	})
+}
+
+func newWatchRequest(method, path, body string) *http.Request {
+	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	return req
+}
+
+// watchByID builds a request against a single watch, including the path value the router
+// would have extracted.
+func watchByID(method, id, body string) *http.Request {
+	req := newWatchRequest(method, "/api/watches/"+id, body)
+	req.SetPathValue("watchId", id)
+
+	return req
+}
+
+func decodeWatch(t *testing.T, w *httptest.ResponseRecorder) watchResponse {
+	t.Helper()
+
+	var resp watchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	return resp
+}
+
+func TestCreateWatch(t *testing.T) {
+	store := newMockWatchStore()
+
+	body := `{"id":"one-night-only-en","queries":["One Night Only 2026","Только на одну ночь 2026"],
+		"sources":["jackett","extto"],"include_regex":"(?i)one[ ._-]night[ ._-]only.*2026","exclude_regex":"(?i)bee gees"}`
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", body))
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	resp := decodeWatch(t, w)
+	assert.Equal(t, "one-night-only-en", resp.ID)
+	assert.Equal(t, []string{"One Night Only 2026", "Только на одну ночь 2026"}, resp.Queries)
+	assert.Equal(t, []string{"jackett", "extto"}, resp.Sources)
+	assert.Equal(t, "(?i)one[ ._-]night[ ._-]only.*2026", resp.IncludeRegex)
+	assert.Equal(t, 1, resp.Rev)
+	assert.Nil(t, resp.SeededAt)
+
+	require.Contains(t, store.watches, "one-night-only-en")
+}
+
+// an omitted sources list is the schema default, not an error: a watch without sources would
+// silently never search anything
+func TestCreateWatchDefaultsSources(t *testing.T) {
+	store := newMockWatchStore()
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", `{"id":"anime-dub","queries":["some anime"]}`))
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, watcher.KnownSources(), decodeWatch(t, w).Sources)
+}
+
+func TestCreateWatchValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		contains string
+	}{
+		{
+			name:     "bad id charset",
+			body:     `{"id":"One Night.Only","queries":["x"]}`,
+			contains: "id must match",
+		},
+		{
+			name:     "no queries",
+			body:     `{"id":"ok-id","queries":[]}`,
+			contains: "non-empty query",
+		},
+		{
+			name:     "blank queries only",
+			body:     `{"id":"ok-id","queries":["   "]}`,
+			contains: "non-empty query",
+		},
+		{
+			name:     "invalid include regex",
+			body:     `{"id":"ok-id","queries":["x"],"include_regex":"(unclosed"}`,
+			contains: "invalid include_regex",
+		},
+		{
+			name:     "invalid exclude regex",
+			body:     `{"id":"ok-id","queries":["x"],"exclude_regex":"["}`,
+			contains: "invalid exclude_regex",
+		},
+		{
+			name:     "unknown source",
+			body:     `{"id":"ok-id","queries":["x"],"sources":["rutracker"]}`,
+			contains: `unknown source "rutracker"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockWatchStore()
+			w := httptest.NewRecorder()
+
+			newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", tt.body))
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), tt.contains)
+			assert.Empty(t, store.watches)
+		})
+	}
+}
+
+func TestCreateWatchDuplicateID(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	w := httptest.NewRecorder()
+
+	body := `{"id":"one-night-only-en","queries":["One Night Only 2026"]}`
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", body))
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Len(t, store.order, 1)
+}
+
+func TestCreateWatchInvalidBody(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	newWatchClient(newMockWatchStore()).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", "not json"))
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestCreateWatchStoreFailure(t *testing.T) {
+	store := newMockWatchStore()
+	store.createErr = errors.New("db is down")
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", `{"id":"ok-id","queries":["x"]}`))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestListWatches(t *testing.T) {
+	lastRun := time.Now().Add(-20 * time.Minute).UTC()
+	seeded := time.Now().Add(-2 * time.Hour).UTC()
+
+	first := acceptanceWatch()
+	first.SeededAt = &seeded
+	first.LastRunAt = &lastRun
+	first.LastStatus = `jackett "One Night Only 2026": 502`
+	first.Rev = 3
+
+	second := &watcher.Watch{ID: "house-of-the-dragon", Queries: []string{"House of the Dragon"}, Sources: []string{"jackett"}, Rev: 1}
+
+	store := newMockWatchStore(first, second)
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleWatches(w, httptest.NewRequest(http.MethodGet, "/api/watches", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp []watchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 2)
+
+	assert.Equal(t, "one-night-only-en", resp[0].ID)
+	assert.Equal(t, 3, resp[0].Rev)
+	assert.Equal(t, `jackett "One Night Only 2026": 502`, resp[0].LastStatus)
+	require.NotNil(t, resp[0].LastRunAt)
+	require.NotNil(t, resp[0].SeededAt)
+
+	assert.Equal(t, "house-of-the-dragon", resp[1].ID)
+	assert.Nil(t, resp[1].LastRunAt)
+	assert.Empty(t, resp[1].Seen)
+}
+
+func TestListWatchesStoreFailure(t *testing.T) {
+	store := newMockWatchStore()
+	store.getAllErr = errors.New("db is down")
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleWatches(w, httptest.NewRequest(http.MethodGet, "/api/watches", nil))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// a silent seed announces nothing, so the rows it recorded are the only way to tell it apart
+// from a watch that is quietly broken
+func TestGetWatchIncludesSeenRows(t *testing.T) {
+	firstSeen := time.Now().Add(-time.Hour).UTC()
+	store := newMockWatchStore(acceptanceWatch())
+	store.seen = []watch_store.SeenRow{
+		{Source: "jackett", ExternalID: "1883913", Title: "Только на одну ночь / One Night Only (2026) TSRip", FirstSeenAt: firstSeen},
+		{Source: "extto", ExternalID: "20151803", Title: "One.Night.Only.2026.1080p.WEB-DL", FirstSeenAt: firstSeen},
+	}
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleWatch(w, watchByID(http.MethodGet, "one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeWatch(t, w)
+	assert.Equal(t, "one-night-only-en", resp.ID)
+	require.Len(t, resp.Seen, 2)
+	assert.Equal(t, "jackett", resp.Seen[0].Source)
+	assert.Equal(t, "1883913", resp.Seen[0].ID)
+	assert.Equal(t, "extto", resp.Seen[1].Source)
+	assert.Equal(t, "20151803", resp.Seen[1].ID)
+}
+
+func TestGetWatchNotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	newWatchClient(newMockWatchStore()).handleWatch(w, watchByID(http.MethodGet, "missing", ""))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestGetWatchSeenRowsFailure(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	store.seenErr = errors.New("db is down")
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleWatch(w, watchByID(http.MethodGet, "one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestUpdateWatchBumpsRev(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	w := httptest.NewRecorder()
+
+	body := `{"queries":["One Night Only 2026"],"exclude_regex":"(?i)bee gees|rupaul"}`
+	newWatchClient(store).handleUpdateWatch(w, watchByID(http.MethodPatch, "one-night-only-en", body))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeWatch(t, w)
+	assert.Equal(t, 2, resp.Rev)
+	assert.Equal(t, []string{"One Night Only 2026"}, resp.Queries)
+	assert.Equal(t, "(?i)bee gees|rupaul", resp.ExcludeRegex)
+	// an omitted field keeps its stored value rather than being reset
+	assert.Equal(t, acceptanceWatch().IncludeRegex, resp.IncludeRegex)
+	assert.Equal(t, []string{"jackett", "extto"}, resp.Sources)
+}
+
+func TestUpdateWatchNotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	newWatchClient(newMockWatchStore()).handleUpdateWatch(w, watchByID(http.MethodPatch, "missing", `{"queries":["x"]}`))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestUpdateWatchValidation(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleUpdateWatch(w, watchByID(http.MethodPatch, "one-night-only-en", `{"include_regex":"(unclosed"}`))
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid include_regex")
+	assert.Equal(t, 1, store.watches["one-night-only-en"].Rev)
+}
+
+func TestUpdateWatchStoreFailure(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	store.updateErr = errors.New("db is down")
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleUpdateWatch(w, watchByID(http.MethodPatch, "one-night-only-en", `{"queries":["x"]}`))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestRemoveWatchSoftDeletes(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleRemoveWatch(w, watchByID(http.MethodDelete, "one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"one-night-only-en"}, store.disabled)
+	// soft delete: the row and its seen set survive
+	assert.Contains(t, store.watches, "one-night-only-en")
+}
+
+func TestRemoveWatchNotFound(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	newWatchClient(newMockWatchStore()).handleRemoveWatch(w, watchByID(http.MethodDelete, "missing", ""))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// the routes are registered unconditionally, so an unconfigured store must answer rather
+// than panic
+func TestWatchHandlersWithoutStore(t *testing.T) {
+	c := newWatchClient(nil)
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"create", c.handleCreateWatch},
+		{"list", c.handleWatches},
+		{"get", c.handleWatch},
+		{"update", c.handleUpdateWatch},
+		{"remove", c.handleRemoveWatch},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+
+			tt.handler(w, newWatchRequest(http.MethodPost, "/api/watches", "{}"))
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+		})
+	}
 }

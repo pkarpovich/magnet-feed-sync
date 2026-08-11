@@ -1049,20 +1049,22 @@ adding a second one.
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
+- ➕ Modify: `app/watcher/source.go` (adds `KnownSources()`, so the http validation and the engine cannot
+  disagree on which source names exist)
 
-- [ ] add the watch store to the existing `ClientCtx` options struct as a new field (do **not** add
+- [x] add the watch store to the existing `ClientCtx` options struct as a new field (do **not** add
       positional parameters) and pass it from `main.go`
-- [ ] add the five CRUD routes from the API table, defining a consumer-side watch-store interface in the
+- [x] add the five CRUD routes from the API table, defining a consumer-side watch-store interface in the
       http package with only the methods these handlers call
-- [ ] validate on create and update: id against `watchIDPattern`, at least one non-empty query, both
+- [x] validate on create and update: id against `watchIDPattern`, at least one non-empty query, both
       regexes compiling, known source names only; return 400 with a specific message per failure and 409
       on a duplicate id
-- [ ] make `GET /api/watches/{id}` include the watch's seen rows so a silent seed is inspectable
-- [ ] make `DELETE` a soft delete setting `disabled_at`
-- [ ] write tests for create success and for each validation failure (bad id charset, no queries, invalid
+- [x] make `GET /api/watches/{id}` include the watch's seen rows so a silent seed is inspectable
+- [x] make `DELETE` a soft delete setting `disabled_at`
+- [x] write tests for create success and for each validation failure (bad id charset, no queries, invalid
       regex, unknown source, duplicate id)
-- [ ] write tests for list, get-with-seen-rows, update bumping `rev`, and soft delete
-- [ ] run tests — must pass before Task 9
+- [x] write tests for list, get-with-seen-rows, update bumping `rev`, and soft delete
+- [x] run tests — must pass before Task 9
 
 ### Task 9: Search endpoints
 

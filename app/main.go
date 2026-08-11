@@ -190,6 +190,7 @@ func run(cfg *config.Config) error {
 		DownloadClient:   dClient,
 		Breaker:          breaker,
 		RunState:         store,
+		WatchStore:       watchRepo,
 		StaleRunAfter:    staleRunAfter(cfg.Cron),
 		StartedAt:        time.Now(),
 		FailureThreshold: downloadTasks.FailureThreshold,
