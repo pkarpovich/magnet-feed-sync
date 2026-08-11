@@ -136,12 +136,20 @@ A bare `go run ./app` no longer creates its own schema, so apply the migrations 
 go run ./cmd/migrate    # same code path the deploy container uses
 ```
 
+A database created by an older build of the server — `files` present, no `gorp_migrations` — is adopted on
+the first run: the migrations its columns already satisfy are recorded rather than replayed, so nothing
+needs deleting by hand.
+
 `sql-migrate` is still available for everything the runner deliberately does not do — `down`, `status`, and
 creating new migrations. It reads `dbconfig.yml`, which points at `app/migrations`:
 
 ```bash
-make apply-migrations              # sql-migrate up
-make new-migration name=add-thing  # sql-migrate new
+make new-migration name=add-thing  # sql-migrate new, lands in app/migrations/
+make apply-migrations              # sql-migrate up, equivalent to go run ./cmd/migrate
+
+go install github.com/rubenv/sql-migrate/...@latest  # needed for the two below
+sql-migrate status
+sql-migrate down
 ```
 
 New migrations must go in `app/migrations/` — the runner embeds that directory with `go:embed`, and a file

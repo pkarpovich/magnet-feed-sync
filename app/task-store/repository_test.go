@@ -59,6 +59,21 @@ func TestNewRepositoryOnEmptyDatabase(t *testing.T) {
 
 	_, err := NewRepository(db)
 	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "table files is missing")
+}
+
+func TestNewRepositoryWithoutAppState(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DROP TABLE app_state`)
+	require.NoError(t, err)
+
+	_, err = NewRepository(db)
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "table app_state is missing")
 }
 
 func TestNewRepositoryWithoutFailureColumns(t *testing.T) {

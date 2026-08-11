@@ -94,18 +94,32 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   compose runs to completion before the app starts (`depends_on: condition: service_completed_successfully`),
   so the app can only ever see a migrated schema. They live under `app/` because `go:embed` cannot reach
   files above the directory declaring it; `dbconfig.yml` points the CLI at the same `dir`
-- Database file persisted in Docker volume at `/db/`
+- Database file lives at `/.db/tasks.db` in **both** containers: neither image sets a `WORKDIR`, so CWD is
+  `/` and `database.openDB` resolves `.db/<file>` from there; compose binds `.db:/.db` on each. The migrate
+  container and the app must mount the identical path — a mismatch silently gives the app an empty database
+  and `ErrSchemaNotInitialised`
+- `database.Client.DB()` exposes the raw `*sql.DB`. It exists only so `migrations.Apply` can run on the
+  connection the client opened; everything else goes through the retry-wrapped `Exec` / `Query` / `QueryRow`
 - Two tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`) and
   `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep)
 - The schema is declared **once**, in the migrations. `NewRepository` creates nothing; it *verifies* and
   returns `ErrSchemaNotInitialised` when the check fails. The check is on **columns**, not table existence —
   the incident this replaced had `files` present and the three failure columns missing, which a table check
-  passes. `newTestRepo(t)` therefore runs `migrations.Apply` on the temp database first, so tests and
-  production reach their schema by the same path
+  passes. Table existence is still checked *first*, because `PRAGMA table_info` on a missing table returns
+  no rows and no error — without it an empty database is reported as a missing column. `newTestRepo(t)`
+  runs `migrations.Apply` on the temp database first, so tests and production reach their schema by the
+  same path
 - `20240101000000-create-files.sql` is a baseline that reconstructs the *historical* shape of `files`: it
   includes `rss_url` (dropped by `20240511212753`) and omits `last_comment` / `location` (added by the two
   later 2024 migrations, which would fail with `duplicate column name`). Its `IF NOT EXISTS` is load-bearing
   — it is not in production's `gorp_migrations`, so it runs there against the live table as a no-op
+- `Apply` **adopts** a database that has `files` but no `gorp_migrations` at all — what every checkout that
+  ran the server before this change has, since the old `NewRepository` created the modern table and no
+  history. Replaying the set there dies on `DROP COLUMN rss_url`, and the baseline is recorded before the
+  failure, so the database is poisoned for every retry. `adoptUnmanagedSchema` instead counts how many
+  migrations the live columns already satisfy and records them with `migrate.SkipMax`. The count stops at
+  the first unsatisfied one: the app's own `CREATE TABLE` only ever grew, so what it produced is always a
+  *prefix* of the set. A database that already has `gorp_migrations` is left entirely to sql-migrate
 - `CreateOrReplace` is `INSERT OR REPLACE`, which SQLite executes as DELETE + INSERT: any column missing from
   its INSERT list silently resets to its DEFAULT on every save. `TestCreateOrReplacePreservesConsecutiveFailures`
   guards this. Sync outcomes use targeted `UPDATE`s (`RecordSyncSuccess` / `RecordSyncFailure`) instead

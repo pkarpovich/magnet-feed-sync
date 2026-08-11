@@ -32,69 +32,44 @@ func NewRepository(db *database.Client) (*Repository, error) {
 }
 
 func (r *Repository) verifySchema() error {
-	columns, err := r.fileColumns()
-	if err != nil {
+	// checked before the columns: PRAGMA table_info on a missing table returns no rows
+	// and no error, which would report an absent database as an absent column
+	if err := r.requireTable("files"); err != nil {
 		return err
 	}
 
 	for _, name := range requiredFileColumns {
-		if !columns[name] {
+		found, err := r.count(`SELECT COUNT(*) FROM pragma_table_info('files') WHERE name = ?`, name)
+		if err != nil {
+			return err
+		}
+		if found == 0 {
 			return fmt.Errorf("files.%s is missing: %w", name, ErrSchemaNotInitialised)
 		}
 	}
 
-	exists, err := r.tableExists("app_state")
+	return r.requireTable("app_state")
+}
+
+func (r *Repository) requireTable(name string) error {
+	found, err := r.count(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name)
 	if err != nil {
 		return err
 	}
-	if !exists {
-		return fmt.Errorf("table app_state is missing: %w", ErrSchemaNotInitialised)
+	if found == 0 {
+		return fmt.Errorf("table %s is missing: %w", name, ErrSchemaNotInitialised)
 	}
 
 	return nil
 }
 
-func (r *Repository) fileColumns() (map[string]bool, error) {
-	rows, err := r.db.Query(`PRAGMA table_info(files)`)
-	if err != nil {
-		return nil, fmt.Errorf("read files schema: %w", err)
-	}
-	defer func() {
-		err := rows.Close()
-		if err != nil {
-			slog.Error("failed to close rows", "error", err)
-		}
-	}()
-
-	columns := make(map[string]bool)
-	for rows.Next() {
-		var (
-			cid, notNull, pk int
-			name, columnType string
-			defaultValue     sql.NullString
-		)
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return nil, fmt.Errorf("read files schema: %w", err)
-		}
-
-		columns[name] = true
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read files schema: %w", err)
-	}
-
-	return columns, nil
-}
-
-func (r *Repository) tableExists(name string) (bool, error) {
+func (r *Repository) count(query, arg string) (int, error) {
 	var count int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("read %s schema: %w", name, err)
+	if err := r.db.QueryRow(query, arg).Scan(&count); err != nil {
+		return 0, fmt.Errorf("read schema: %w", err)
 	}
 
-	return count > 0, nil
+	return count, nil
 }
 
 func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {

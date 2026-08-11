@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	_ "modernc.org/sqlite"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -21,14 +22,6 @@ func NewClient(filename string) (*Client, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	if err := setSqlitePragma(db); err != nil {
-		if err := db.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close database: %w", err)
-		}
-
-		return nil, fmt.Errorf("failed to set SQLite pragmas: %w", err)
-	}
-
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
@@ -36,22 +29,15 @@ func NewClient(filename string) (*Client, error) {
 	return &Client{db: db}, nil
 }
 
-func setSqlitePragma(db *sql.DB) error {
-	pragmas := map[string]string{
-		"journal_mode": "WAL",
-		"busy_timeout": "30000",
-		"synchronous":  "NORMAL",
-		"cache_size":   "1000",
-		"foreign_keys": "ON",
-	}
-
-	for name, value := range pragmas {
-		query := fmt.Sprintf("PRAGMA %s = %s", name, value)
-		if _, err := db.Exec(query); err != nil {
-			return fmt.Errorf("failed to set pragma %s: %w", name, err)
-		}
-	}
-	return nil
+// carried in the DSN rather than executed once after opening: everything except
+// journal_mode is per-connection state, and `db.Exec` reaches whichever single connection
+// the pool hands out, leaving the other nine at the SQLite defaults (busy_timeout 0)
+var sqlitePragmas = []string{
+	"journal_mode(WAL)",
+	"busy_timeout(30000)",
+	"synchronous(NORMAL)",
+	"cache_size(1000)",
+	"foreign_keys(ON)",
 }
 
 func createFolderIfNotExists(folder string) error {
@@ -67,7 +53,7 @@ func openDB(filename string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create database folder: %w", err)
 	}
 
-	dbPath := fmt.Sprintf("%s/%s", dbFolder, filename)
+	dbPath := fmt.Sprintf("file:%s/%s?_pragma=%s", dbFolder, filename, strings.Join(sqlitePragmas, "&_pragma="))
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
