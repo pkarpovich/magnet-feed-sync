@@ -131,6 +131,7 @@ Temporary Items
 .env
 .db
 /server
+/migrate
 
 # ralphex progress logs
 .ralphex/progress/

@@ -12,36 +12,65 @@ import (
 	"magnet-feed-sync/app/tracker"
 )
 
+// deliberately not `sql-migrate up`: the CLI skips adoption and can poison an unmanaged database
+var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary (`go run ./cmd/migrate`)")
+
+// the columns whose absence caused the incident: the table existed, they did not
+var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at"}
+
 type Repository struct {
 	db *database.Client
 }
 
 func NewRepository(db *database.Client) (*Repository, error) {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS files (
-    		id TEXT PRIMARY KEY,
-    		original_url TEXT,
-    		magnet TEXT,
-    		name TEXT,
-    		last_sync_at TIMESTAMP,
-    		last_comment TEXT NOT NULL DEFAULT '',
-    		location TEXT NOT NULL DEFAULT '/downloads/tv shows',
-    		torrent_updated_at TIMESTAMP,
-    		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            delete_at TIMESTAMP DEFAULT NULL,
-    		consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    		last_error TEXT NOT NULL DEFAULT '',
-    		last_error_at TIMESTAMP
-	)`)
-	if err != nil {
+	r := &Repository{db: db}
+
+	if err := r.verifySchema(); err != nil {
 		return nil, err
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)`)
-	if err != nil {
-		return nil, err
+	return r, nil
+}
+
+func (r *Repository) verifySchema() error {
+	// checked before the columns: PRAGMA table_info on a missing table returns no rows
+	// and no error, which would report an absent database as an absent column
+	if err := r.requireTable("files"); err != nil {
+		return err
 	}
 
-	return &Repository{db: db}, nil
+	for _, name := range requiredFileColumns {
+		found, err := r.count(`SELECT COUNT(*) FROM pragma_table_info('files') WHERE name = ?`, name)
+		if err != nil {
+			return err
+		}
+		if found == 0 {
+			return fmt.Errorf("files.%s is missing: %w", name, ErrSchemaNotInitialised)
+		}
+	}
+
+	return r.requireTable("app_state")
+}
+
+func (r *Repository) requireTable(name string) error {
+	found, err := r.count(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name)
+	if err != nil {
+		return err
+	}
+	if found == 0 {
+		return fmt.Errorf("table %s is missing: %w", name, ErrSchemaNotInitialised)
+	}
+
+	return nil
+}
+
+func (r *Repository) count(query, arg string) (int, error) {
+	var count int
+	if err := r.db.QueryRow(query, arg).Scan(&count); err != nil {
+		return 0, fmt.Errorf("read schema: %w", err)
+	}
+
+	return count, nil
 }
 
 func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {

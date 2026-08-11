@@ -16,6 +16,10 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=bind,target=. \
     CGO_ENABLED=0 GOARCH=$TARGETARCH go build -o /bin/server ./app
 
+RUN --mount=type=cache,target=/go/pkg/mod/ \
+    --mount=type=bind,target=. \
+    CGO_ENABLED=0 GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /bin/migrate ./cmd/migrate
+
 
 FROM node:${NODE_VERSION}-alpine as base
 
@@ -42,6 +46,13 @@ RUN --mount=type=bind,source=./frontend/package.json,target=package.json \
 
 COPY frontend .
 RUN pnpm run build
+
+
+FROM alpine:latest AS migrate-final
+
+COPY --from=build /bin/migrate /bin/
+
+ENTRYPOINT [ "/bin/migrate" ]
 
 
 FROM alpine:latest AS final

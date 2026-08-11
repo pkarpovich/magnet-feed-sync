@@ -1,4 +1,10 @@
 services:
+  migrate:
+    build:
+      context: .
+      target: migrate-final
+    image: magnet-feed-sync-migrate:local
+
   magnet-feed-sync:
     build:
       context: .

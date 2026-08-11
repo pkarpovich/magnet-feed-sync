@@ -111,16 +111,53 @@ most once per 24 hours instead of every run. Both transitions are announced once
 
 ## Database migrations
 
-The container runs the server directly and does not apply migrations. Run them **before** starting a new
-version, or every read fails with `no such column` and the API, the health endpoint and the cron sweep all
-break:
+Migrations live in `app/migrations/` and are the **single source of truth** for the schema. The server
+creates no tables; it verifies on startup that the expected columns are present and refuses to start
+otherwise, so a half-migrated database fails loudly at boot instead of failing every read with
+`no such column`.
+
+### Deployments
+
+Nothing to do by hand. `docker compose up -d` runs a one-shot `magnet-feed-sync-migrate` container that
+applies whatever is pending and exits; the app only starts once it has exited 0
+(`depends_on: condition: service_completed_successfully`). Re-running is free — already-applied migrations
+are recorded in `gorp_migrations` and a no-op run exits 0 immediately. A failed migration stops the deploy
+before the app starts rather than crash-looping it.
+
+The migration runner is published as its own small image (`…/magnet-feed-sync-migrate`), built from the
+same repository and tagged alongside the app on every release. The app image is unchanged and does not
+contain the migration tooling.
+
+### Local development
+
+A bare `go run ./app` no longer creates its own schema, so apply the migrations first:
 
 ```bash
-sql-migrate up   # or: make apply-migrations
+go run ./cmd/migrate    # same code path the deploy container uses
 ```
 
-This release adds two migrations: `add-failure-tracking` (per-task failure state) and `add-app-state`
-(cron run state).
+A database created by an older build of the server — `files` present, no `gorp_migrations` — is adopted on
+the first run: the migrations its columns already satisfy are recorded rather than replayed, so nothing
+needs deleting by hand.
+
+`sql-migrate` is still available for everything the runner deliberately does not do — `down`, `status`, and
+creating new migrations. It reads `dbconfig.yml`, which points at `app/migrations`:
+
+```bash
+make apply-migrations              # go run ./cmd/migrate
+make new-migration name=add-thing  # sql-migrate new, lands in app/migrations/
+
+go install github.com/rubenv/sql-migrate/...@latest  # needed for the two below
+sql-migrate status
+sql-migrate down
+```
+
+Do not use `sql-migrate up`. The CLI has no adoption step, so on an unmanaged database it records the
+baseline and then fails on `DROP COLUMN rss_url` — and with the baseline recorded, the runner's adoption no
+longer fires either, leaving a database no command can migrate. Use `go run ./cmd/migrate` to apply.
+
+New migrations must go in `app/migrations/` — the runner embeds that directory with `go:embed`, and a file
+placed anywhere else is silently not part of the image.
 
 ## Configuration
 

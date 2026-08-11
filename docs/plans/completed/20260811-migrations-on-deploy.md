@@ -433,26 +433,26 @@ tests and production reach their schema by the same path.
 - Modify: `app/database/client.go`
 - Modify: `go.mod`, `go.sum`
 
-- [ ] run the **Base precondition** check from Context; if the two 2026 migrations are absent, stop and
+- [x] run the **Base precondition** check from Context; if the two 2026 migrations are absent, stop and
       mark the plan `⚠️ blocked`
-- [ ] `go get github.com/rubenv/sql-migrate@v1.8.1` — pinned, because the API, dependency-graph and size
+- [x] `go get github.com/rubenv/sql-migrate@v1.8.1` — pinned, because the API, dependency-graph and size
       facts in Context are stated for that version
-- [ ] move every `*.sql` from `migrations/` into `app/migrations/` **keeping names byte-for-byte** — they
+- [x] move every `*.sql` from `migrations/` into `app/migrations/` **keeping names byte-for-byte** — they
       are the ids already stored in `gorp_migrations`
-- [ ] add `app/migrations/20240101000000-create-files.sql` with the SQL given verbatim in Technical
+- [x] add `app/migrations/20240101000000-create-files.sql` with the SQL given verbatim in Technical
       Details, including `rss_url`, excluding `last_comment`/`location`, and with `IF NOT EXISTS`
-- [ ] add `app/migrations/embed.go` with the `//go:embed *.sql` variable and
+- [x] add `app/migrations/embed.go` with the `//go:embed *.sql` variable and
       `Apply(db *sql.DB) (int, error)` as prescribed
-- [ ] add the `DB() *sql.DB` accessor to `database.Client`
-- [ ] point `dbconfig.yml` at `dir: app/migrations`
-- [ ] write a test applying to an **empty** temporary database and asserting `files` ends up with
+- [x] add the `DB() *sql.DB` accessor to `database.Client`
+- [x] point `dbconfig.yml` at `dir: app/migrations`
+- [x] write a test applying to an **empty** temporary database and asserting `files` ends up with
       `consecutive_failures`, `last_error`, `last_error_at`, `last_comment`, `location`, and **without**
       `rss_url`, and that `app_state` exists
-- [ ] write a test asserting a second `Apply` on the same database returns 0 applied
-- [ ] write the incident regression test using `migrate.ExecMax(..., 4)` as prescribed: apply the first
+- [x] write a test asserting a second `Apply` on the same database returns 0 applied
+- [x] write the incident regression test using `migrate.ExecMax(..., 4)` as prescribed: apply the first
       four, insert a row into `files`, apply everything, assert the three failure columns exist and the row
       survived
-- [ ] run tests — must pass before Task 2
+- [x] run tests — must pass before Task 2
 
 ### Task 2: The migrate binary
 
@@ -460,16 +460,16 @@ tests and production reach their schema by the same path.
 - Create: `cmd/migrate/main.go`
 - Create: `cmd/migrate/main_test.go`
 
-- [ ] implement `run() error` opening the database with `database.NewClient("tasks.db")`, calling
+- [x] implement `run() error` opening the database with `database.NewClient("tasks.db")`, calling
       `migrations.Apply`, logging the number applied via plain `slog` to stderr, and closing the database
-- [ ] make `main` a two-line wrapper that closes explicitly and exits non-zero on error — no `defer` on the
+- [x] make `main` a two-line wrapper that closes explicitly and exits non-zero on error — no `defer` on the
       exit path, because `os.Exit`/`log.Fatal` skip it and a WAL database would be left unrolled
-- [ ] wire no observability: no Loki, no tracing, no config loading
-- [ ] keep it flagless: no `down`, no `status`, no arguments
-- [ ] write a test for `run()` succeeding against a temp database (use `t.Chdir(t.TempDir())` as
+- [x] wire no observability: no Loki, no tracing, no config loading
+- [x] keep it flagless: no `down`, no `status`, no arguments
+- [x] write a test for `run()` succeeding against a temp database (use `t.Chdir(t.TempDir())` as
       `newTestRepo` does) and asserting a second call applies zero
-- [ ] write a test for `run()` returning an error when the database path is unusable
-- [ ] run tests — must pass before Task 3
+- [x] write a test for `run()` returning an error when the database path is unusable
+- [x] run tests — must pass before Task 3
 
 ### Task 3: Make migrations the single source of schema
 
@@ -477,36 +477,37 @@ tests and production reach their schema by the same path.
 - Modify: `app/task-store/repository.go`
 - Modify: `app/task-store/repository_test.go`
 
-- [ ] delete both `CREATE TABLE IF NOT EXISTS` statements from `NewRepository` — this duplicated
+- [x] delete both `CREATE TABLE IF NOT EXISTS` statements from `NewRepository` — this duplicated
       declaration is the reason the missing columns went unnoticed
-- [ ] add `ErrSchemaNotInitialised` and make `NewRepository` verify **columns**, not just tables:
+- [x] add `ErrSchemaNotInitialised` and make `NewRepository` verify **columns**, not just tables:
       `PRAGMA table_info(files)` must contain `consecutive_failures`, `last_error`, `last_error_at`, and
       `sqlite_master` must contain `app_state`; anything missing returns the error wrapped with which check
       failed
-- [ ] make `newTestRepo(t)` run `migrations.Apply` on the temporary database before constructing the
+- [x] make `newTestRepo(t)` run `migrations.Apply` on the temporary database before constructing the
       repository
-- [ ] write a test asserting `NewRepository` returns `ErrSchemaNotInitialised` on an empty database
-- [ ] write a test asserting it also returns the error when `files` exists but the failure columns do not —
+- [x] write a test asserting `NewRepository` returns `ErrSchemaNotInitialised` on an empty database
+- [x] write a test asserting it also returns the error when `files` exists but the failure columns do not —
       this is the exact production case, and a table-existence check would pass it
-- [ ] write a test asserting `NewRepository` succeeds after `migrations.Apply`
-- [ ] run tests — must pass before Task 4
+- [x] write a test asserting `NewRepository` succeeds after `migrations.Apply`
+- [x] run tests — must pass before Task 4
 
 ### Task 4: Dockerfile stage for the migrate image
 
 **Files:**
 - Modify: `Dockerfile`
 
-- [ ] add the migrate build RUN to the existing `build` stage exactly as given in Technical Details,
+- [x] add the migrate build RUN to the existing `build` stage exactly as given in Technical Details,
       including `GOARCH=$TARGETARCH`, the cache and bind mounts, and `-ldflags="-s -w"`
-- [ ] add the `migrate-final` stage exactly as given, **placed before the existing `final` stage** so that
+- [x] add the `migrate-final` stage exactly as given, **placed before the existing `final` stage** so that
       `final` remains the last stage in the file
-- [ ] leave the `final` stage byte-identical — verify with `git diff -- Dockerfile` that no line inside the
+- [x] leave the `final` stage byte-identical — verify with `git diff -- Dockerfile` that no line inside the
       `FROM alpine:latest AS final` block changed
-- [ ] confirm `grep -c 'AS migrate-final' Dockerfile` prints 1
-- [ ] **if `docker info` succeeds:** `docker build --target migrate-final -t mfs-migrate:check .` then
+- [x] confirm `grep -c 'AS migrate-final' Dockerfile` prints 1
+- [x] **if `docker info` succeeds:** `docker build --target migrate-final -t mfs-migrate:check .` then
       `docker image inspect mfs-migrate:check --format '{{.Size}}'` prints a value below 20000000; also
       `docker build -t mfs-app:check .` (no `--target`) and confirm its entrypoint is `/bin/server`
-- [ ] **if `docker info` fails:** record "docker unavailable — skipped" in the progress log and treat the
+      (docker unavailable — skipped)
+- [x] **if `docker info` fails:** record "docker unavailable — skipped" in the progress log and treat the
       two Docker items as satisfied; the `git diff` and `grep` checks above are the binding ones
 
 ### Task 5: Compose wiring
@@ -515,16 +516,17 @@ tests and production reach their schema by the same path.
 - Modify: `compose.yaml`
 - Modify: `compose.override.yml`
 
-- [ ] add the one-shot `migrate` service to `compose.yaml` exactly as prescribed: new image,
+- [x] add the one-shot `migrate` service to `compose.yaml` exactly as prescribed: new image,
       `restart: "no"`, only the `.db` volume, no environment, no networks, no traefik labels
-- [ ] add `depends_on` with `condition: service_completed_successfully` to `magnet-feed-sync`
-- [ ] add the `migrate` override to `compose.override.yml` with **both** `build.target: migrate-final` and
+- [x] add `depends_on` with `condition: service_completed_successfully` to `magnet-feed-sync`
+- [x] add the `migrate` override to `compose.override.yml` with **both** `build.target: migrate-final` and
       `image: magnet-feed-sync-migrate:local`, mirroring the app service — without the image override a
       local build stamps itself onto the registry tag
-- [ ] **if `docker info` succeeds:**
+- [x] **if `docker info` succeeds:**
       `docker compose config --format json | jq -e '.services["magnet-feed-sync"].depends_on.migrate.condition == "service_completed_successfully"'`
       exits 0. `variable is not set` warnings on stderr are expected, because `.env` is not committed
-- [ ] **if `docker info` fails:** confirm instead that `compose.yaml` contains
+      (docker unavailable — skipped)
+- [x] **if `docker info` fails:** confirm instead that `compose.yaml` contains
       `service_completed_successfully` and a `migrate:` service with `restart: "no"`
 
 ### Task 6: Release pipeline builds both images
@@ -532,27 +534,27 @@ tests and production reach their schema by the same path.
 **Files:**
 - Modify: `.gitea/workflows/release.yml`
 
-- [ ] add `target: final` to the **existing** build-push step — without it the workflow builds whatever
+- [x] add `target: final` to the **existing** build-push step — without it the workflow builds whatever
       stage happens to be last, which is how the migrate image would end up published under the app's tags
-- [ ] add a second build-push step after it with `target: migrate-final` and the tags and cache refs given
+- [x] add a second build-push step after it with `target: migrate-final` and the tags and cache refs given
       verbatim in Technical Details
-- [ ] keep the updater webhook and the Telegram notification as the final two steps, in that order
-- [ ] confirm `grep -c 'id: version' .gitea/workflows/release.yml` prints 1 and
+- [x] keep the updater webhook and the Telegram notification as the final two steps, in that order
+- [x] confirm `grep -c 'id: version' .gitea/workflows/release.yml` prints 1 and
       `grep -c 'target:' .gitea/workflows/release.yml` prints 2
 
 ### Task 7: Verify the implementation
 
-- [ ] confirm the server binary never links the migration library:
+- [x] confirm the server binary never links the migration library:
       `go list -deps ./app | grep -q sql-migrate` **exits 1** (no match). Note `grep -c` would print `0`
       and also exit 1 — use `-q` and judge by exit status only
-- [ ] confirm `go list -deps ./cmd/migrate | grep -q sql-migrate` **exits 0**
-- [ ] confirm no existing migration was renamed: every `.sql` name under `app/migrations/` other than
+- [x] confirm `go list -deps ./cmd/migrate | grep -q sql-migrate` **exits 0**
+- [x] confirm no existing migration was renamed: every `.sql` name under `app/migrations/` other than
       `20240101000000-create-files.sql` also existed under `migrations/` at the base commit
       (`git show $(git merge-base HEAD origin/HEAD):migrations` vs `ls app/migrations`). Additional
       migrations introduced by unrelated work are allowed; renames of the existing ones are not
-- [ ] confirm the only new exported identifiers are the three pre-approved in Code-Quality Rules
-- [ ] run `go test ./... -race`, `go vet ./...`, `go build ./...`
-- [ ] confirm `gofmt -s -l .` prints nothing
+- [x] confirm the only new exported identifiers are the three pre-approved in Code-Quality Rules
+- [x] run `go test ./... -race`, `go vet ./...`, `go build ./...`
+- [x] confirm `gofmt -s -l .` prints nothing
 
 ### Task 8: Update documentation and close out
 
@@ -560,12 +562,12 @@ tests and production reach their schema by the same path.
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] update `CLAUDE.md`: migrations live in `app/migrations/` and are applied by a separate one-shot
+- [x] update `CLAUDE.md`: migrations live in `app/migrations/` and are applied by a separate one-shot
       container before the app starts; the schema is declared **once**, in migrations; remove the note
       describing the old double declaration
-- [ ] update `README.md`: the new migration flow, the second image, the updated `sql-migrate` paths, and
+- [x] update `README.md`: the new migration flow, the second image, the updated `sql-migrate` paths, and
       the fact that a bare `go run ./app` now requires migrations to have been applied first
-- [ ] move this plan to `docs/plans/completed/` — **do this only after the final review reports clean.** A
+- [x] move this plan to `docs/plans/completed/` — **do this only after the final review reports clean.** A
       reviewer that cannot find the plan at `docs/plans/20260811-migrations-on-deploy.md` should look in
       `docs/plans/completed/`; that is expected and is not a finding
 

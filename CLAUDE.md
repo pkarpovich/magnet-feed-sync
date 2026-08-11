@@ -10,17 +10,18 @@ Magnet Feed Sync is a Telegram bot and web interface for automating torrent down
 
 ### Backend (Go)
 ```bash
-# Install migration tool
+# Apply database migrations (same code path the deploy uses)
+go run ./cmd/migrate
+
+# Install migration tool (only needed for `new`, `down` and `status`)
 go install github.com/rubenv/sql-migrate/...@latest
 
-# Apply database migrations
-sql-migrate up
-
-# Create new migration
+# Create new migration — lands in app/migrations/ via dbconfig.yml
 sql-migrate new <migration_name>
 
-# Build binary
+# Build binaries
 go build -o server ./app
+go build -o migrate ./cmd/migrate
 ```
 
 ### Frontend
@@ -36,6 +37,11 @@ pnpm lint         # ESLint with zero warnings tolerance
 ```bash
 docker compose up --build
 ```
+
+Two images are built from this Dockerfile: the app (`final`) and the migration runner (`migrate-final`).
+`final` must stay the **last** stage — a build without `target:` builds whatever is last, which is how the
+migrate binary could end up published under the app's tags. The release workflow pins `target:` on both
+steps, so stage order no longer decides that, but keep the ordering anyway.
 
 ## Architecture
 
@@ -61,9 +67,20 @@ docker compose up --build
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
+- **migrations/**: the `*.sql` migration set plus `embed.go`, which embeds it with `//go:embed *.sql` and
+  exposes `Apply(db *sql.DB) (int, error)`. Imported by `cmd/migrate` and by the `task-store` test helper,
+  **never by `app/main.go`** — the server binary's dependency graph stays free of `sql-migrate`
 - **types/**: Shared type definitions (Location)
 - **observability/**: Structured logging (slog) with Loki backend and OpenTelemetry tracing setup
 - **utils/**: Shared utility functions (magnet link parsing, date parsing)
+
+### Migration runner (`/cmd/migrate`)
+Flagless one-shot binary: opens the database with `database.NewClient("tasks.db")` — the same `.db/<file>`
+resolution and pragmas as the server — calls `migrations.Apply`, logs the count with plain `slog` to stderr
+and exits. Exit code is the whole contract with compose: 0 on success including "nothing to apply",
+non-zero on any failure. It closes the database explicitly rather than with `defer`, because `os.Exit`
+skips deferred calls and a skipped `Close` leaves the WAL unrolled for the app container starting seconds
+later. No config loading, no Loki, no tracing — the migrate image must not pull the observability stack.
 
 ### Frontend (`/frontend`)
 - React 18 + TypeScript 5 + Vite
@@ -73,18 +90,52 @@ docker compose up --build
 
 ### Database
 - SQLite via `modernc.org/sqlite` (pure Go driver)
-- Migrations in `/migrations/` using sql-migrate
-- Database file persisted in Docker volume at `/db/`
+- Migrations in `/app/migrations/` using sql-migrate, applied by a **separate one-shot container** that
+  compose runs to completion before the app starts (`depends_on: condition: service_completed_successfully`),
+  so the app can only ever see a migrated schema. They live under `app/` because `go:embed` cannot reach
+  files above the directory declaring it; `dbconfig.yml` points the CLI at the same `dir`
+- Database file lives at `/.db/tasks.db` in **both** containers: neither image sets a `WORKDIR`, so CWD is
+  `/` and `database.openDB` resolves `.db/<file>` from there; compose binds `.db:/.db` on each. The migrate
+  container and the app must mount the identical path — a mismatch silently gives the app an empty database
+  and `ErrSchemaNotInitialised`
+- `database.Client.DB()` exposes the raw `*sql.DB`. It exists only so `migrations.Apply` can run on the
+  connection the client opened; everything else goes through the retry-wrapped `Exec` / `Query` / `QueryRow`
 - Two tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`) and
   `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep)
-- The schema is declared **twice** — in `/migrations/` and in the runtime `CREATE TABLE IF NOT EXISTS` in
-  `NewRepository`. Both must be updated together; only the migration applies to an existing database, so a
-  new column needs `sql-migrate up` before the new binary starts
+- The schema is declared **once**, in the migrations. `NewRepository` creates nothing; it *verifies* and
+  returns `ErrSchemaNotInitialised` when the check fails. The check is on **columns**, not table existence —
+  the incident this replaced had `files` present and the three failure columns missing, which a table check
+  passes. Table existence is still checked *first*, because `PRAGMA table_info` on a missing table returns
+  no rows and no error — without it an empty database is reported as a missing column. `newTestRepo(t)`
+  runs `migrations.Apply` on the temp database first, so tests and production reach their schema by the
+  same path
+- `20240101000000-create-files.sql` is a baseline that reconstructs the *historical* shape of `files`: it
+  includes `rss_url` (dropped by `20240511212753`) and omits `last_comment` / `location` (added by the two
+  later 2024 migrations, which would fail with `duplicate column name`). Its `IF NOT EXISTS` is load-bearing
+  — it is not in production's `gorp_migrations`, so it runs there against the live table as a no-op
+- `Apply` **adopts** a database that has `files` but no `gorp_migrations` at all — what every checkout that
+  ran the server before this change has, since the old `NewRepository` created the modern table and no
+  history. Replaying the set there dies on `DROP COLUMN rss_url`, and the baseline is recorded before the
+  failure, so the database is poisoned for every retry. `adoptUnmanagedSchema` instead counts how many
+  migrations the live columns already satisfy and records them itself. The count stops at
+  the first unsatisfied one: the app's own `CREATE TABLE` only ever grew, so what it produced is always a
+  *prefix* of the set. A database with a **non-empty** `gorp_migrations` is left entirely to sql-migrate
+- Adoption writes that prefix in **one transaction** (`recordAdopted`), rather than with `migrate.SkipMax`,
+  which commits per record and creates the table before the first one. A kill in the middle of that left
+  history neither absent nor complete: adoption never fired again and the leftovers replayed straight into
+  `DROP COLUMN rss_url`. For the same reason "managed" is a **row count**, not table existence — sql-migrate
+  creates the table before recording anything, so an aborted run can leave it empty, and an empty table is
+  no history to hand over. `TestApplyAdoptsDespiteEmptyMigrationTable` reproduces the original failure
+- Apply migrations with `go run ./cmd/migrate` (what `make apply-migrations` runs), never `sql-migrate up`.
+  The CLI has no adoption step: on an unmanaged database it records the baseline and then dies on
+  `DROP COLUMN rss_url`, and the recorded baseline disables the runner's adoption too. `sql-migrate` is for
+  `new` / `down` / `status` only
 - `CreateOrReplace` is `INSERT OR REPLACE`, which SQLite executes as DELETE + INSERT: any column missing from
   its INSERT list silently resets to its DEFAULT on every save. `TestCreateOrReplacePreservesConsecutiveFailures`
   guards this. Sync outcomes use targeted `UPDATE`s (`RecordSyncSuccess` / `RecordSyncFailure`) instead
 - DB-backed tests go through `newTestRepo(t)` in `app/task-store/repository_test.go` — `database.openDB`
-  resolves `.db/<file>` against the process CWD, so the helper does `t.Chdir(t.TempDir())`
+  resolves `.db/<file>` against the process CWD, so the helper does `t.Chdir(t.TempDir())` and then
+  `migrations.Apply` before constructing the repository
 
 ## Key Patterns
 

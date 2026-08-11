@@ -32,12 +32,25 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: final
           push: true
           tags: |
             ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:latest
             ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:${{ steps.version.outputs.version }}
           cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:cache
           cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync:cache,mode=max
+
+      - name: Build and push migrate image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: migrate-final
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync-migrate:latest
+            ${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync-migrate:${{ steps.version.outputs.version }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync-migrate:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/pkarpovich/magnet-feed-sync-migrate:cache,mode=max
 
       - name: Trigger deployment
         run: |

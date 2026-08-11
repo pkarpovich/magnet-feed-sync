@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"magnet-feed-sync/app/database"
+	"magnet-feed-sync/app/migrations"
 	"magnet-feed-sync/app/tracker"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestRepo(t *testing.T) *Repository {
+func newTestDB(t *testing.T) *database.Client {
 	t.Helper()
 
 	t.Chdir(t.TempDir())
@@ -22,6 +23,17 @@ func newTestRepo(t *testing.T) *Repository {
 	t.Cleanup(func() {
 		require.NoError(t, db.Close())
 	})
+
+	return db
+}
+
+func newTestRepo(t *testing.T) *Repository {
+	t.Helper()
+
+	db := newTestDB(t)
+
+	_, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
 
 	repo, err := NewRepository(db)
 	require.NoError(t, err)
@@ -40,6 +52,65 @@ func testMetadata() *tracker.FileMetadata {
 		TorrentUpdatedAt: time.Date(2026, 7, 30, 9, 0, 0, 0, time.UTC),
 		Location:         "/downloads/tv shows",
 	}
+}
+
+func TestNewRepositoryOnEmptyDatabase(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := NewRepository(db)
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "table files is missing")
+}
+
+func TestNewRepositoryWithoutAppState(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
+
+	_, err = db.Exec(`DROP TABLE app_state`)
+	require.NoError(t, err)
+
+	_, err = NewRepository(db)
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "table app_state is missing")
+}
+
+func TestNewRepositoryWithoutFailureColumns(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := db.Exec(`CREATE TABLE files (
+		id TEXT PRIMARY KEY,
+		original_url TEXT,
+		magnet TEXT,
+		name TEXT,
+		last_sync_at TIMESTAMP,
+		last_comment TEXT NOT NULL DEFAULT '',
+		location TEXT NOT NULL DEFAULT '/downloads/tv shows',
+		torrent_updated_at TIMESTAMP,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		delete_at TIMESTAMP DEFAULT NULL
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(`CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+
+	_, err = NewRepository(db)
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "consecutive_failures")
+}
+
+func TestNewRepositoryAfterMigrations(t *testing.T) {
+	db := newTestDB(t)
+
+	applied, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
+	require.Positive(t, applied)
+
+	repo, err := NewRepository(db)
+	require.NoError(t, err)
+	assert.NotNil(t, repo)
 }
 
 func TestCreateOrReplaceRoundTripsFailureFields(t *testing.T) {
