@@ -28,8 +28,28 @@ type solverRequest struct {
 }
 
 type solverSolution struct {
-	Status   int    `json:"status"`
-	Response string `json:"response"`
+	Status    int            `json:"status"`
+	Response  string         `json:"response"`
+	Cookies   []solverCookie `json:"cookies"`
+	UserAgent string         `json:"userAgent"`
+}
+
+// solverCookie mirrors the cookie shape flaresolverr emits. net/http.Cookie cannot be
+// unmarshalled directly: its Expires is a time.Time and the solver sends a unix number.
+type solverCookie struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain"`
+	Path   string `json:"path"`
+}
+
+// SolvedPage is a page fetched through FlareSolverr together with the browser state that
+// produced it. The cookie and the User-Agent belong together — presenting one without the
+// other re-triggers the challenge immediately.
+type SolvedPage struct {
+	Body      []byte
+	Cookies   []*http.Cookie
+	UserAgent string
 }
 
 type solverResponse struct {
@@ -81,6 +101,31 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	}
 	defer f.release()
 
+	page, err := f.request(ctx, pageURL)
+	if err != nil {
+		return nil, err
+	}
+
+	if bytes.Contains(page.Body, []byte(challengeMarker)) {
+		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+	}
+
+	return page.Body, nil
+}
+
+// Solve fetches pageURL and returns the cookies and User-Agent alongside the body, for a
+// caller that continues the session with its own http client. Unlike Fetch it does not
+// judge the body: such a caller owns its own challenge detection.
+func (f *solverFetcher) Solve(ctx context.Context, pageURL string) (*SolvedPage, error) {
+	if err := f.acquire(ctx); err != nil {
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("wait for solver: %w", err)}
+	}
+	defer f.release()
+
+	return f.request(ctx, pageURL)
+}
+
+func (f *solverFetcher) request(ctx context.Context, pageURL string) (*SolvedPage, error) {
 	if err := f.ensureSession(ctx); err != nil {
 		return nil, err
 	}
@@ -117,12 +162,20 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 		}
 	}
 
-	body := []byte(resp.Solution.Response)
-	if bytes.Contains(body, []byte(challengeMarker)) {
-		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+	return &SolvedPage{
+		Body:      []byte(resp.Solution.Response),
+		Cookies:   solvedCookies(resp.Solution.Cookies),
+		UserAgent: resp.Solution.UserAgent,
+	}, nil
+}
+
+func solvedCookies(cookies []solverCookie) []*http.Cookie {
+	out := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		out = append(out, &http.Cookie{Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path})
 	}
 
-	return body, nil
+	return out
 }
 
 // Close destroys the FlareSolverr session so the remote browser is released. It gives

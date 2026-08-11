@@ -159,6 +159,61 @@ func TestSolverCloseDoesNotWaitOutInFlightFetch(t *testing.T) {
 	<-fetchDone
 }
 
+// TestSolverSolveReturnsSessionState covers the seam the ext.to source needs: the body is
+// not enough, because presenting the cookie without its User-Agent re-triggers the
+// challenge. The cookie's numeric `expires` is part of the fixture on purpose — it is why
+// the solution cannot decode straight into net/http.Cookie.
+func TestSolverSolveReturnsSessionState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != cmdRequestGet {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","message":"Challenge solved!","solution":{
+			"status":200,"response":"<html>browse</html>","userAgent":"Mozilla/5.0 Firefox",
+			"cookies":[{"name":"cf_clearance","value":"abc","domain":".extto.com","path":"/","expires":1760000000.5},
+			           {"name":"extto_sess","value":"42","domain":".extto.com","path":"/"}]}}`))
+	}))
+	defer server.Close()
+
+	page, err := NewSolverFetcher(server.URL).Solve(context.Background(), "https://search.extto.com/")
+	require.NoError(t, err)
+
+	assert.Equal(t, "<html>browse</html>", string(page.Body))
+	assert.Equal(t, "Mozilla/5.0 Firefox", page.UserAgent)
+	require.Len(t, page.Cookies, 2)
+	assert.Equal(t, "cf_clearance", page.Cookies[0].Name)
+	assert.Equal(t, "abc", page.Cookies[0].Value)
+	assert.Equal(t, ".extto.com", page.Cookies[0].Domain)
+	assert.Equal(t, "extto_sess", page.Cookies[1].Name)
+}
+
+func TestSolverSolveReportsRefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != cmdRequestGet {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","solution":{"status":403,"response":"<html>denied</html>"}}`))
+	}))
+	defer server.Close()
+
+	_, err := NewSolverFetcher(server.URL).Solve(context.Background(), "https://search.extto.com/")
+	require.Error(t, err)
+
+	var providerErr *ProviderError
+	require.ErrorAs(t, err, &providerErr)
+	assert.Equal(t, KindBlocked, providerErr.Kind)
+}
+
 func TestSolverFetchGivesUpOnCanceledContext(t *testing.T) {
 	solver := &fakeSolver{html: "<html>page</html>"}
 	server := httptest.NewServer(solver)

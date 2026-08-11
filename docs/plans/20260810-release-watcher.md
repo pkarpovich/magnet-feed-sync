@@ -904,31 +904,31 @@ adding a second one.
 - Create: `app/watcher/testdata/extto_browse.html`
 - Modify: the solver implementation under `app/tracker/providers/` (adds the `Solve` method)
 
-- [ ] add `Cookies` and `UserAgent` to the existing `solverSolution` struct — it currently parses only
+- [x] add `Cookies` and `UserAgent` to the existing `solverSolution` struct — it currently parses only
       `Status` and `Response`, so FlareSolverr's cookie and UA are discarded and `Solve` would have
       nothing to return
-- [ ] add `SolvedPage` and the `Solve(ctx, url) (*SolvedPage, error)` method to the existing solver in
+- [x] add `SolvedPage` and the `Solve(ctx, url) (*SolvedPage, error)` method to the existing solver in
       `app/tracker/providers` as specified in "Solver seam"; leave `Fetcher` and all its callers unchanged
-- [ ] implement the ext.to source holding cookie, User-Agent and both page tokens behind a mutex, calling
+- [x] implement the ext.to source holding cookie, User-Agent and both page tokens behind a mutex, calling
       the consumer-side solver interface only on cookie refresh and using its own `*http.Client` otherwise
-- [ ] implement `Search` as the `/browse/` GET in the wire-protocol section, sending the exact headers
+- [x] implement `Search` as the `/browse/` GET in the wire-protocol section, sending the exact headers
       listed there, parsing rows with the given field mapping, setting `Query`, and caching both tokens
-- [ ] detect a challenge by the two body markers, refresh the cookie once and retry the GET; a second
+- [x] detect a challenge by the two body markers, refresh the cookie once and retry the GET; a second
       challenge is an error and a signed POST is never auto-retried
-- [ ] implement `Magnet` with the signed POST: hex sha256 of `id|ts|searchPageToken`, `sessid` = the csrf
+- [x] implement `Magnet` with the signed POST: hex sha256 of `id|ts|searchPageToken`, `sessid` = the csrf
       token, `hash` and `name` present but empty; performing a search first when no fresh tokens are held,
       and treating a false/missing `success` or an empty `url` as an error
-- [ ] create `testdata/extto_browse.html` by copying the verbatim row markup from the wire-protocol
+- [x] create `testdata/extto_browse.html` by copying the verbatim row markup from the wire-protocol
       section, repeated three times with different ids, titles and seed counts — **do not invent markup**
-- [ ] write tests for row parsing against the fixture: id from `data-id`, title with highlight `<span>`
+- [x] write tests for row parsing against the fixture: id from `data-id`, title with highlight `<span>`
       tags stripped, page URL, seeders matched by the `Seeds` label, `PublishedAt` from the `Age` cell's
       `title` attribute
-- [ ] write a test asserting the signature against the golden vector in the wire-protocol section
+- [x] write a test asserting the signature against the golden vector in the wire-protocol section
       (assert the literal 64-hex string; do not recompute the expectation) and that the form carries all
       six fields
-- [ ] write tests for error cases: challenge twice, HTML with no matching rows, magnet response with
+- [x] write tests for error cases: challenge twice, HTML with no matching rows, magnet response with
       `success:false`, solver unconfigured
-- [ ] run tests — must pass before Task 4
+- [x] run tests — must pass before Task 4
 
 ### Task 4: Watcher engine — merge, filter, delta
 
