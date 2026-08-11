@@ -144,13 +144,17 @@ needs deleting by hand.
 creating new migrations. It reads `dbconfig.yml`, which points at `app/migrations`:
 
 ```bash
+make apply-migrations              # go run ./cmd/migrate
 make new-migration name=add-thing  # sql-migrate new, lands in app/migrations/
-make apply-migrations              # sql-migrate up, equivalent to go run ./cmd/migrate
 
 go install github.com/rubenv/sql-migrate/...@latest  # needed for the two below
 sql-migrate status
 sql-migrate down
 ```
+
+Do not use `sql-migrate up`. The CLI has no adoption step, so on an unmanaged database it records the
+baseline and then fails on `DROP COLUMN rss_url` — and with the baseline recorded, the runner's adoption no
+longer fires either, leaving a database no command can migrate. Use `go run ./cmd/migrate` to apply.
 
 New migrations must go in `app/migrations/` — the runner embeds that directory with `go:embed`, and a file
 placed anywhere else is silently not part of the image.

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"time"
 
 	migrate "github.com/rubenv/sql-migrate"
 )
@@ -35,14 +36,6 @@ func Apply(db *sql.DB) (int, error) {
 // recorded first the failure is permanent. Record the ids the live schema already
 // reflects instead, so only the genuinely pending ones run.
 func adoptUnmanagedSchema(db *sql.DB) error {
-	managed, err := tableExists(db, "gorp_migrations")
-	if err != nil {
-		return err
-	}
-	if managed {
-		return nil
-	}
-
 	bootstrapped, err := tableExists(db, "files")
 	if err != nil {
 		return err
@@ -51,16 +44,81 @@ func adoptUnmanagedSchema(db *sql.DB) error {
 		return nil
 	}
 
+	managed, err := hasMigrationHistory(db)
+	if err != nil {
+		return err
+	}
+	if managed {
+		return nil
+	}
+
 	skip, err := alreadyReflected(db)
 	if err != nil {
 		return err
 	}
 
-	if _, err := migrate.SkipMax(db, "sqlite3", source(), migrate.Up, skip); err != nil {
+	return recordAdopted(db, skip)
+}
+
+// writes the adopted prefix in one transaction. `migrate.SkipMax` commits per record and
+// creates the table before the first one, so an interrupt anywhere in the middle — a
+// killed container, a deploy timeout — leaves history that is neither absent nor complete.
+// Adoption is then skipped for good and the leftovers replay into the very `DROP COLUMN
+// rss_url` failure this exists to avoid. All-or-nothing is the only safe shape.
+func recordAdopted(db *sql.DB, count int) error {
+	all, err := source().FindMigrations()
+	if err != nil {
+		return fmt.Errorf("adopt existing schema: %w", err)
+	}
+	if count > len(all) {
+		count = len(all)
+	}
+	if count == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("adopt existing schema: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	// the shape sql-migrate creates for sqlite3; `IF NOT EXISTS` so an empty table left
+	// behind by an aborted run is reused rather than fought over
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS gorp_migrations (id varchar(255) NOT NULL PRIMARY KEY, applied_at datetime)`); err != nil {
+		return fmt.Errorf("adopt existing schema: %w", err)
+	}
+
+	now := time.Now()
+	for _, m := range all[:count] {
+		if _, err := tx.Exec(`INSERT INTO gorp_migrations (id, applied_at) VALUES (?, ?)`, m.Id, now); err != nil {
+			return fmt.Errorf("adopt existing schema: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("adopt existing schema: %w", err)
 	}
 
 	return nil
+}
+
+// a table with no rows is not history: sql-migrate creates it before recording anything,
+// so an aborted run can leave it empty and there is nothing to hand over to sql-migrate.
+func hasMigrationHistory(db *sql.DB) (bool, error) {
+	present, err := tableExists(db, "gorp_migrations")
+	if err != nil || !present {
+		return false, err
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM gorp_migrations`).Scan(&count); err != nil {
+		return false, fmt.Errorf("read migration history: %w", err)
+	}
+
+	return count > 0, nil
 }
 
 // how many migrations, counted from the oldest, the live schema already satisfies. The

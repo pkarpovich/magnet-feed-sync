@@ -12,7 +12,8 @@ import (
 	"magnet-feed-sync/app/tracker"
 )
 
-var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary or `sql-migrate up`")
+// deliberately not `sql-migrate up`: the CLI skips adoption and can poison an unmanaged database
+var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary (`go run ./cmd/migrate`)")
 
 // the columns whose absence caused the incident: the table existed, they did not
 var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at"}

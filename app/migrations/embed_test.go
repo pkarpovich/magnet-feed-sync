@@ -231,6 +231,65 @@ func TestApplyAdoptsPreRssRemovalSchema(t *testing.T) {
 	assert.Contains(t, names, "consecutive_failures")
 }
 
+// adoption used to record ids one committed transaction at a time, so a kill in the middle
+// left history that was neither absent nor complete — adoption never fired again and the
+// leftovers replayed into `DROP COLUMN rss_url`. It writes one transaction now, so the only
+// states a crash can leave are "no history" and "fully adopted".
+func TestAdoptionIsAtomic(t *testing.T) {
+	db := newTestDB(t)
+
+	seedLegacyServerSchema(t, db)
+
+	require.NoError(t, adoptUnmanagedSchema(db))
+
+	ids := appliedIDs(t, db)
+	require.Len(t, ids, 6)
+
+	var recorded int
+	err := db.QueryRow("SELECT COUNT(*) FROM gorp_migrations").Scan(&recorded)
+	require.NoError(t, err)
+	assert.Equal(t, len(ids), recorded)
+}
+
+// sql-migrate creates gorp_migrations before it records anything, so an aborted run can
+// leave the table empty. An empty table is not history: adoption must still run, or the
+// database is stuck replaying migrations its columns already satisfy.
+func TestApplyAdoptsDespiteEmptyMigrationTable(t *testing.T) {
+	db := newTestDB(t)
+
+	seedLegacyServerSchema(t, db)
+	_, err := db.Exec(`CREATE TABLE gorp_migrations (id varchar(255) NOT NULL PRIMARY KEY, applied_at datetime)`)
+	require.NoError(t, err)
+
+	applied, err := Apply(db)
+	require.NoError(t, err)
+	assert.Equal(t, 0, applied)
+
+	assert.Len(t, appliedIDs(t, db), 6)
+
+	var title string
+	err = db.QueryRow("SELECT name FROM files WHERE id = ?", "id-1").Scan(&title)
+	require.NoError(t, err)
+	assert.Equal(t, "Legacy Row", title)
+}
+
+// the rows adoption writes have to be readable by sql-migrate itself — it selects them
+// back into a time.Time on every subsequent run.
+func TestAdoptedRecordsAreReadableBySqlMigrate(t *testing.T) {
+	db := newTestDB(t)
+
+	seedLegacyServerSchema(t, db)
+	require.NoError(t, adoptUnmanagedSchema(db))
+
+	records, err := migrate.GetMigrationRecords(db, "sqlite3")
+	require.NoError(t, err)
+	require.Len(t, records, 6)
+	for _, record := range records {
+		assert.NotEmpty(t, record.Id)
+		assert.False(t, record.AppliedAt.IsZero())
+	}
+}
+
 // the production shape at the time of the incident: 10 columns, no failure tracking,
 // app_state already created by the old NewRepository, three 2024 ids in gorp_migrations.
 func seedProductionSchema(t *testing.T, db *sql.DB) {

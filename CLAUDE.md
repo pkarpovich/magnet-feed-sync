@@ -117,9 +117,19 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   ran the server before this change has, since the old `NewRepository` created the modern table and no
   history. Replaying the set there dies on `DROP COLUMN rss_url`, and the baseline is recorded before the
   failure, so the database is poisoned for every retry. `adoptUnmanagedSchema` instead counts how many
-  migrations the live columns already satisfy and records them with `migrate.SkipMax`. The count stops at
+  migrations the live columns already satisfy and records them itself. The count stops at
   the first unsatisfied one: the app's own `CREATE TABLE` only ever grew, so what it produced is always a
-  *prefix* of the set. A database that already has `gorp_migrations` is left entirely to sql-migrate
+  *prefix* of the set. A database with a **non-empty** `gorp_migrations` is left entirely to sql-migrate
+- Adoption writes that prefix in **one transaction** (`recordAdopted`), rather than with `migrate.SkipMax`,
+  which commits per record and creates the table before the first one. A kill in the middle of that left
+  history neither absent nor complete: adoption never fired again and the leftovers replayed straight into
+  `DROP COLUMN rss_url`. For the same reason "managed" is a **row count**, not table existence — sql-migrate
+  creates the table before recording anything, so an aborted run can leave it empty, and an empty table is
+  no history to hand over. `TestApplyAdoptsDespiteEmptyMigrationTable` reproduces the original failure
+- Apply migrations with `go run ./cmd/migrate` (what `make apply-migrations` runs), never `sql-migrate up`.
+  The CLI has no adoption step: on an unmanaged database it records the baseline and then dies on
+  `DROP COLUMN rss_url`, and the recorded baseline disables the runner's adoption too. `sql-migrate` is for
+  `new` / `down` / `status` only
 - `CreateOrReplace` is `INSERT OR REPLACE`, which SQLite executes as DELETE + INSERT: any column missing from
   its INSERT list silently resets to its DEFAULT on every save. `TestCreateOrReplacePreservesConsecutiveFailures`
   guards this. Sync outcomes use targeted `UPDATE`s (`RecordSyncSuccess` / `RecordSyncFailure`) instead
