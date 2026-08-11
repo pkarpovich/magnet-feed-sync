@@ -562,12 +562,12 @@ tests and production reach their schema by the same path.
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] update `CLAUDE.md`: migrations live in `app/migrations/` and are applied by a separate one-shot
+- [x] update `CLAUDE.md`: migrations live in `app/migrations/` and are applied by a separate one-shot
       container before the app starts; the schema is declared **once**, in migrations; remove the note
       describing the old double declaration
-- [ ] update `README.md`: the new migration flow, the second image, the updated `sql-migrate` paths, and
+- [x] update `README.md`: the new migration flow, the second image, the updated `sql-migrate` paths, and
       the fact that a bare `go run ./app` now requires migrations to have been applied first
-- [ ] move this plan to `docs/plans/completed/` — **do this only after the final review reports clean.** A
+- [x] move this plan to `docs/plans/completed/` — **do this only after the final review reports clean.** A
       reviewer that cannot find the plan at `docs/plans/20260811-migrations-on-deploy.md` should look in
       `docs/plans/completed/`; that is expected and is not a finding
 
