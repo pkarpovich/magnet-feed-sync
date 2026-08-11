@@ -12,36 +12,89 @@ import (
 	"magnet-feed-sync/app/tracker"
 )
 
+var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary or `sql-migrate up`")
+
+// the columns whose absence caused the incident: the table existed, they did not
+var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at"}
+
 type Repository struct {
 	db *database.Client
 }
 
 func NewRepository(db *database.Client) (*Repository, error) {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS files (
-    		id TEXT PRIMARY KEY,
-    		original_url TEXT,
-    		magnet TEXT,
-    		name TEXT,
-    		last_sync_at TIMESTAMP,
-    		last_comment TEXT NOT NULL DEFAULT '',
-    		location TEXT NOT NULL DEFAULT '/downloads/tv shows',
-    		torrent_updated_at TIMESTAMP,
-    		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            delete_at TIMESTAMP DEFAULT NULL,
-    		consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    		last_error TEXT NOT NULL DEFAULT '',
-    		last_error_at TIMESTAMP
-	)`)
-	if err != nil {
+	r := &Repository{db: db}
+
+	if err := r.verifySchema(); err != nil {
 		return nil, err
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT)`)
+	return r, nil
+}
+
+func (r *Repository) verifySchema() error {
+	columns, err := r.fileColumns()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &Repository{db: db}, nil
+	for _, name := range requiredFileColumns {
+		if !columns[name] {
+			return fmt.Errorf("files.%s is missing: %w", name, ErrSchemaNotInitialised)
+		}
+	}
+
+	exists, err := r.tableExists("app_state")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("table app_state is missing: %w", ErrSchemaNotInitialised)
+	}
+
+	return nil
+}
+
+func (r *Repository) fileColumns() (map[string]bool, error) {
+	rows, err := r.db.Query(`PRAGMA table_info(files)`)
+	if err != nil {
+		return nil, fmt.Errorf("read files schema: %w", err)
+	}
+	defer func() {
+		err := rows.Close()
+		if err != nil {
+			slog.Error("failed to close rows", "error", err)
+		}
+	}()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, columnType string
+			defaultValue     sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, fmt.Errorf("read files schema: %w", err)
+		}
+
+		columns[name] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read files schema: %w", err)
+	}
+
+	return columns, nil
+}
+
+func (r *Repository) tableExists(name string) (bool, error) {
+	var count int
+	err := r.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("read %s schema: %w", name, err)
+	}
+
+	return count > 0, nil
 }
 
 func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {

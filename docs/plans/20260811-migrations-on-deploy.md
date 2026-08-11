@@ -477,19 +477,19 @@ tests and production reach their schema by the same path.
 - Modify: `app/task-store/repository.go`
 - Modify: `app/task-store/repository_test.go`
 
-- [ ] delete both `CREATE TABLE IF NOT EXISTS` statements from `NewRepository` — this duplicated
+- [x] delete both `CREATE TABLE IF NOT EXISTS` statements from `NewRepository` — this duplicated
       declaration is the reason the missing columns went unnoticed
-- [ ] add `ErrSchemaNotInitialised` and make `NewRepository` verify **columns**, not just tables:
+- [x] add `ErrSchemaNotInitialised` and make `NewRepository` verify **columns**, not just tables:
       `PRAGMA table_info(files)` must contain `consecutive_failures`, `last_error`, `last_error_at`, and
       `sqlite_master` must contain `app_state`; anything missing returns the error wrapped with which check
       failed
-- [ ] make `newTestRepo(t)` run `migrations.Apply` on the temporary database before constructing the
+- [x] make `newTestRepo(t)` run `migrations.Apply` on the temporary database before constructing the
       repository
-- [ ] write a test asserting `NewRepository` returns `ErrSchemaNotInitialised` on an empty database
-- [ ] write a test asserting it also returns the error when `files` exists but the failure columns do not —
+- [x] write a test asserting `NewRepository` returns `ErrSchemaNotInitialised` on an empty database
+- [x] write a test asserting it also returns the error when `files` exists but the failure columns do not —
       this is the exact production case, and a table-existence check would pass it
-- [ ] write a test asserting `NewRepository` succeeds after `migrations.Apply`
-- [ ] run tests — must pass before Task 4
+- [x] write a test asserting `NewRepository` succeeds after `migrations.Apply`
+- [x] run tests — must pass before Task 4
 
 ### Task 4: Dockerfile stage for the migrate image
 
