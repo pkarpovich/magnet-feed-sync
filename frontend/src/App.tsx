@@ -13,8 +13,10 @@ export const App = () => {
 
     const handleUpdateFileLocation = useCallback(
         async (fileId: string, newLocation: string) => {
-            await onUpdateFileLocation(fileId, newLocation);
+            const result = await onUpdateFileLocation(fileId, newLocation);
             onReloadFiles();
+
+            return result;
         },
         [onReloadFiles, onUpdateFileLocation],
     );

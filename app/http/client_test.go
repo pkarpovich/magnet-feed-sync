@@ -3,7 +3,9 @@ package http
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +31,9 @@ type mockTaskCreator struct {
 	returnMeta           *tracker.FileMetadata
 	returnErr            error
 	downloadErr          error
+	updateLocationCalls  int
+	lastUpdatedLocation  string
+	updateLocationErr    error
 }
 
 func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
@@ -44,8 +49,14 @@ func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string
 	return m.downloadErr
 }
 
-func (m *mockTaskCreator) RemoveTask(id string) error                      { return nil }
-func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error    { return nil }
+func (m *mockTaskCreator) RemoveTask(id string) error { return nil }
+
+func (m *mockTaskCreator) UpdateTaskLocation(id, location string) error {
+	m.updateLocationCalls++
+	m.lastUpdatedLocation = location
+	return m.updateLocationErr
+}
+
 func (m *mockTaskCreator) CheckFileForUpdates(_ context.Context, _ string) {}
 func (m *mockTaskCreator) RefreshAll(_ context.Context)                    { m.refreshAllCalls++ }
 
@@ -75,14 +86,27 @@ type mockRunState struct {
 func (m *mockRunState) GetLastRun() (time.Time, bool, error) { return m.at, m.ok, m.err }
 
 type mockDownloadClient struct {
-	defaultLocation string
+	defaultLocation  string
+	locations        []types.Location
+	hash             string
+	hashErr          error
+	setLocationErr   error
+	setLocationCalls int
+	lastSetLocation  string
 }
 
-func (m *mockDownloadClient) SetLocation(taskID, location string) error { return nil }
-func (m *mockDownloadClient) GetLocations() []types.Location            { return nil }
-func (m *mockDownloadClient) GetHashByMagnet(magnet string) (string, error) {
-	return "", nil
+func (m *mockDownloadClient) SetLocation(taskID, location string) error {
+	m.setLocationCalls++
+	m.lastSetLocation = location
+	return m.setLocationErr
 }
+
+func (m *mockDownloadClient) GetLocations() []types.Location { return m.locations }
+
+func (m *mockDownloadClient) GetHashByMagnet(magnet string) (string, error) {
+	return m.hash, m.hashErr
+}
+
 func (m *mockDownloadClient) GetDefaultLocation() string {
 	return m.defaultLocation
 }
@@ -540,4 +564,106 @@ func TestHealthNeverRanWithinGrace(t *testing.T) {
 			assert.Nil(t, resp.LastRunAt)
 		})
 	}
+}
+
+var knownLocations = []types.Location{
+	{ID: "/downloads/tv shows", Name: "TV Shows"},
+	{ID: "/downloads/magazines", Name: "Magazines"},
+}
+
+func callSetLocation(t *testing.T, creator *mockTaskCreator, dClient *mockDownloadClient, store *mockFileStore, location string) (*httptest.ResponseRecorder, SetFileLocationResponse) {
+	t.Helper()
+
+	payload, err := json.Marshal(SetFileLocationRequest{FileId: "6810475", Location: location})
+	require.NoError(t, err)
+
+	c := NewClient(&ClientCtx{Store: store, TaskCreator: creator, DownloadClient: dClient})
+	req := httptest.NewRequest(http.MethodPost, "/api/file-locations", bytes.NewReader(payload))
+	w := httptest.NewRecorder()
+	c.handleSetFileLocation(w, req)
+
+	var resp SetFileLocationResponse
+	if w.Code == http.StatusOK {
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	}
+
+	return w, resp
+}
+
+func trackedFile() *mockFileStore {
+	return &mockFileStore{existingFile: &tracker.FileMetadata{ID: "6810475", Magnet: "magnet:?xt=urn:btih:abc123"}}
+}
+
+// the weekly cleanup removes completed torrents from the client, so a missing torrent is
+// the normal case - it must not block recording where the next download goes
+func TestSetFileLocationPersistsWhenTorrentGone(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dClient := &mockDownloadClient{locations: knownLocations, hashErr: types.ErrTorrentNotFound}
+
+	w, resp := callSetLocation(t, creator, dClient, trackedFile(), "/downloads/magazines")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, resp.Moved)
+	assert.NotEmpty(t, resp.Reason)
+	assert.Equal(t, "/downloads/magazines", resp.Location)
+	assert.Equal(t, 1, creator.updateLocationCalls)
+	assert.Equal(t, "/downloads/magazines", creator.lastUpdatedLocation)
+	assert.Equal(t, 0, dClient.setLocationCalls)
+}
+
+func TestSetFileLocationMovesFilesWhenTorrentPresent(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dClient := &mockDownloadClient{locations: knownLocations, hash: "abc123"}
+
+	w, resp := callSetLocation(t, creator, dClient, trackedFile(), "/downloads/magazines")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, resp.Moved)
+	assert.Empty(t, resp.Reason)
+	assert.Equal(t, 1, creator.updateLocationCalls)
+	assert.Equal(t, 1, dClient.setLocationCalls)
+	assert.Equal(t, "/downloads/magazines", dClient.lastSetLocation)
+}
+
+func TestSetFileLocationPersistsWhenMoveFails(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dClient := &mockDownloadClient{locations: knownLocations, hash: "abc123", setLocationErr: errors.New("qbittorrent unreachable")}
+
+	w, resp := callSetLocation(t, creator, dClient, trackedFile(), "/downloads/magazines")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, resp.Moved)
+	assert.Contains(t, resp.Reason, "qbittorrent unreachable")
+	assert.Equal(t, 1, creator.updateLocationCalls)
+}
+
+func TestSetFileLocationRejectsUnknownLocation(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dClient := &mockDownloadClient{locations: knownLocations}
+
+	w, _ := callSetLocation(t, creator, dClient, trackedFile(), "/downloads/typo")
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, 0, creator.updateLocationCalls)
+}
+
+func TestSetFileLocationUnknownFile(t *testing.T) {
+	creator := &mockTaskCreator{}
+	dClient := &mockDownloadClient{locations: knownLocations}
+	store := &mockFileStore{getByIdErr: sql.ErrNoRows}
+
+	w, _ := callSetLocation(t, creator, dClient, store, "/downloads/magazines")
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, 0, creator.updateLocationCalls)
+}
+
+func TestSetFileLocationStoreFailureIsAnError(t *testing.T) {
+	creator := &mockTaskCreator{updateLocationErr: errors.New("db is down")}
+	dClient := &mockDownloadClient{locations: knownLocations, hash: "abc123"}
+
+	w, _ := callSetLocation(t, creator, dClient, trackedFile(), "/downloads/magazines")
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, 0, dClient.setLocationCalls)
 }

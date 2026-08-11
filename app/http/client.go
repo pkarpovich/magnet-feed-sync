@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -331,6 +332,15 @@ type SetFileLocationRequest struct {
 	Location string `json:"location"`
 }
 
+// SetFileLocationResponse reports the stored location and whether the already-downloaded
+// files were moved with it. A missing torrent is normal — the weekly cleanup removes
+// completed ones from the client — so it is reported, not treated as a failure.
+type SetFileLocationResponse struct {
+	Location string `json:"location"`
+	Moved    bool   `json:"moved"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/file-locations")
 	defer span.End()
@@ -345,8 +355,18 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !c.isKnownLocation(req.Location) {
+		http.Error(w, "unknown location", http.StatusBadRequest)
+		return
+	}
+
 	file, err := c.store.GetById(req.FileId)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+
 		slog.ErrorContext(ctx, "failed to get file by id", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -357,26 +377,49 @@ func (c *Client) handleSetFileLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := c.downloadClient.GetHashByMagnet(file.Magnet)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to get hash by magnet", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	err = c.downloadClient.SetLocation(hash, req.Location)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to set location", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	err = c.taskCreator.UpdateTaskLocation(req.FileId, req.Location)
-	if err != nil {
+	// the stored location decides where the next download goes, so it is recorded first
+	// and never held hostage by the optional move below
+	if err := c.taskCreator.UpdateTaskLocation(req.FileId, req.Location); err != nil {
 		slog.ErrorContext(ctx, "failed to update file location", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	resp := SetFileLocationResponse{Location: req.Location}
+	resp.Moved, resp.Reason = c.moveDownloadedFiles(ctx, file.Magnet, req.Location)
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.ErrorContext(ctx, "failed to encode response", "error", err)
+	}
+}
+
+func (c *Client) isKnownLocation(location string) bool {
+	for _, known := range c.downloadClient.GetLocations() {
+		if known.ID == location {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c *Client) moveDownloadedFiles(ctx context.Context, magnet, location string) (bool, string) {
+	hash, err := c.downloadClient.GetHashByMagnet(magnet)
+	if err != nil {
+		if errors.Is(err, types.ErrTorrentNotFound) {
+			return false, "torrent is no longer in the download client"
+		}
+
+		slog.ErrorContext(ctx, "failed to get hash by magnet", "error", err)
+		return false, err.Error()
+	}
+
+	if err := c.downloadClient.SetLocation(hash, location); err != nil {
+		slog.ErrorContext(ctx, "failed to set location", "error", err)
+		return false, err.Error()
+	}
+
+	return true, ""
 }
 
 const (

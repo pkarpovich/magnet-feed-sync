@@ -7,6 +7,12 @@ export type FileLocation = {
     name: string;
 };
 
+export type UpdateLocationResult = {
+    location: string;
+    moved: boolean;
+    reason?: string;
+};
+
 export const useFileLocations = () => {
     const [locations, setLocations] = useState<FileLocation[]>([]);
     const [loading, setLoading] = useState(true);
@@ -31,15 +37,26 @@ export const useFileLocations = () => {
         return () => controller.abort();
     }, []);
 
-    const onUpdateFileLocation = useCallback(async (fileId: string, newLocation: string) => {
-        await fetch(`${BaseUrl}/api/file-locations`, {
-            body: JSON.stringify({ fileId, location: newLocation }),
-            headers: {
-                "Content-Type": "application/json",
-            },
-            method: "POST",
-        });
-    }, []);
+    const onUpdateFileLocation = useCallback(
+        async (fileId: string, newLocation: string): Promise<UpdateLocationResult> => {
+            const response = await fetch(`${BaseUrl}/api/file-locations`, {
+                body: JSON.stringify({ fileId, location: newLocation }),
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                method: "POST",
+            });
+
+            if (!response.ok) {
+                const details = (await response.text()).trim();
+
+                throw new Error(details || `Request failed with status ${response.status}`);
+            }
+
+            return response.json();
+        },
+        [],
+    );
 
     return { error, loading, locations, onUpdateFileLocation };
 };
