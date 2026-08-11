@@ -433,26 +433,26 @@ tests and production reach their schema by the same path.
 - Modify: `app/database/client.go`
 - Modify: `go.mod`, `go.sum`
 
-- [ ] run the **Base precondition** check from Context; if the two 2026 migrations are absent, stop and
+- [x] run the **Base precondition** check from Context; if the two 2026 migrations are absent, stop and
       mark the plan `⚠️ blocked`
-- [ ] `go get github.com/rubenv/sql-migrate@v1.8.1` — pinned, because the API, dependency-graph and size
+- [x] `go get github.com/rubenv/sql-migrate@v1.8.1` — pinned, because the API, dependency-graph and size
       facts in Context are stated for that version
-- [ ] move every `*.sql` from `migrations/` into `app/migrations/` **keeping names byte-for-byte** — they
+- [x] move every `*.sql` from `migrations/` into `app/migrations/` **keeping names byte-for-byte** — they
       are the ids already stored in `gorp_migrations`
-- [ ] add `app/migrations/20240101000000-create-files.sql` with the SQL given verbatim in Technical
+- [x] add `app/migrations/20240101000000-create-files.sql` with the SQL given verbatim in Technical
       Details, including `rss_url`, excluding `last_comment`/`location`, and with `IF NOT EXISTS`
-- [ ] add `app/migrations/embed.go` with the `//go:embed *.sql` variable and
+- [x] add `app/migrations/embed.go` with the `//go:embed *.sql` variable and
       `Apply(db *sql.DB) (int, error)` as prescribed
-- [ ] add the `DB() *sql.DB` accessor to `database.Client`
-- [ ] point `dbconfig.yml` at `dir: app/migrations`
-- [ ] write a test applying to an **empty** temporary database and asserting `files` ends up with
+- [x] add the `DB() *sql.DB` accessor to `database.Client`
+- [x] point `dbconfig.yml` at `dir: app/migrations`
+- [x] write a test applying to an **empty** temporary database and asserting `files` ends up with
       `consecutive_failures`, `last_error`, `last_error_at`, `last_comment`, `location`, and **without**
       `rss_url`, and that `app_state` exists
-- [ ] write a test asserting a second `Apply` on the same database returns 0 applied
-- [ ] write the incident regression test using `migrate.ExecMax(..., 4)` as prescribed: apply the first
+- [x] write a test asserting a second `Apply` on the same database returns 0 applied
+- [x] write the incident regression test using `migrate.ExecMax(..., 4)` as prescribed: apply the first
       four, insert a row into `files`, apply everything, assert the three failure columns exist and the row
       survived
-- [ ] run tests — must pass before Task 2
+- [x] run tests — must pass before Task 2
 
 ### Task 2: The migrate binary
 

@@ -84,6 +84,10 @@ func openDB(filename string) (*sql.DB, error) {
 	return db, nil
 }
 
+func (c *Client) DB() *sql.DB {
+	return c.db
+}
+
 func (c *Client) Close() error {
 	return c.db.Close()
 }
