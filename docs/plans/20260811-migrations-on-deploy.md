@@ -544,17 +544,17 @@ tests and production reach their schema by the same path.
 
 ### Task 7: Verify the implementation
 
-- [ ] confirm the server binary never links the migration library:
+- [x] confirm the server binary never links the migration library:
       `go list -deps ./app | grep -q sql-migrate` **exits 1** (no match). Note `grep -c` would print `0`
       and also exit 1 — use `-q` and judge by exit status only
-- [ ] confirm `go list -deps ./cmd/migrate | grep -q sql-migrate` **exits 0**
-- [ ] confirm no existing migration was renamed: every `.sql` name under `app/migrations/` other than
+- [x] confirm `go list -deps ./cmd/migrate | grep -q sql-migrate` **exits 0**
+- [x] confirm no existing migration was renamed: every `.sql` name under `app/migrations/` other than
       `20240101000000-create-files.sql` also existed under `migrations/` at the base commit
       (`git show $(git merge-base HEAD origin/HEAD):migrations` vs `ls app/migrations`). Additional
       migrations introduced by unrelated work are allowed; renames of the existing ones are not
-- [ ] confirm the only new exported identifiers are the three pre-approved in Code-Quality Rules
-- [ ] run `go test ./... -race`, `go vet ./...`, `go build ./...`
-- [ ] confirm `gofmt -s -l .` prints nothing
+- [x] confirm the only new exported identifiers are the three pre-approved in Code-Quality Rules
+- [x] run `go test ./... -race`, `go vet ./...`, `go build ./...`
+- [x] confirm `gofmt -s -l .` prints nothing
 
 ### Task 8: Update documentation and close out
 
