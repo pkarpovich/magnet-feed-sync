@@ -835,36 +835,36 @@ adding a second one.
 - Create: `app/watch-store/repository.go`
 - Create: `app/watch-store/repository_test.go`
 
-- [ ] declare `Watch` in `app/watcher/source.go` exactly as in Technical Details — it is declared here,
+- [x] declare `Watch` in `app/watcher/source.go` exactly as in Technical Details — it is declared here,
       before the repository, because the repository returns it and the mandated import direction is
       watch-store → watcher (Task 2 adds `SearchResult` and `SearchSource` to the same file)
-- [ ] add the migration creating `watches` and `watch_seen` exactly as specified in Technical Details
+- [x] add the migration creating `watches` and `watch_seen` exactly as specified in Technical Details
       (`-- +migrate Up` / `-- +migrate Down` sections, matching the existing migration files) **into
       `app/migrations/`** — that directory is an embedded Go package, so the new file is picked up by the
       `//go:embed *.sql` in `app/migrations/embed.go` and applied by the migrate container automatically
-- [ ] create `app/watch-store/repository.go` with a `Repository` holding the existing `*database.Client`.
+- [x] create `app/watch-store/repository.go` with a `Repository` holding the existing `*database.Client`.
       **It must NOT create tables.** Migrations are the single source of schema; a constructor that also
       declared it is exactly the duplication that shipped a broken production schema. Instead mirror the
       current `task-store`: verify the schema and return a sentinel error when it is absent
-- [ ] implement the methods with the signatures in "Watch repository contract", plus `Create`, `GetAll`,
+- [x] implement the methods with the signatures in "Watch repository contract", plus `Create`, `GetAll`,
       `Update` (bumps `rev`), `Disable` and `MarkSeeded`
-- [ ] key `SeenKeys` on `source + "\x00" + externalID` — a bare-id set collides across sources
-- [ ] make `WatchesForCycle` filter on `disabled_at IS NULL` **only**, so expired rows still reach
+- [x] key `SeenKeys` on `source + "\x00" + externalID` — a bare-id set collides across sources
+- [x] make `WatchesForCycle` filter on `disabled_at IS NULL` **only**, so expired rows still reach
       `RunCycle` and can be disabled there
-- [ ] use **explicit `UPDATE` statements only** — `INSERT OR REPLACE` is forbidden here (see Context)
-- [ ] parse/serialize `queries` as a JSON array and `sources` as comma-separated text at the repository
+- [x] use **explicit `UPDATE` statements only** — `INSERT OR REPLACE` is forbidden here (see Context)
+- [x] parse/serialize `queries` as a JSON array and `sources` as comma-separated text at the repository
       boundary, so callers work with typed slices
-- [ ] add the DB test harness for this package, mirroring `newTestRepo` in
+- [x] add the DB test harness for this package, mirroring `newTestRepo` in
       `app/task-store/repository_test.go`: `t.Chdir(t.TempDir())`, `database.NewClient`, then
       **`migrations.Apply(db.DB())`** — tests reach their schema by the same path production does, so a
       migration that forgets a column fails the suite instead of only failing on deploy
-- [ ] write a test asserting the constructor returns the sentinel error on a database with no watch tables
-- [ ] write tests for round-tripping a watch, `rev` incrementing on `Update`, `WatchesForCycle` excluding
+- [x] write a test asserting the constructor returns the sentinel error on a database with no watch tables
+- [x] write tests for round-tripping a watch, `rev` incrementing on `Update`, `WatchesForCycle` excluding
       disabled rows but **including** expired ones, and `MarkSeen` being idempotent on a repeated insert
-- [ ] write a test asserting two results with the same external id from different sources are two distinct
+- [x] write a test asserting two results with the same external id from different sources are two distinct
       `SeenKeys` entries
-- [ ] write tests for error cases: unknown id, malformed stored JSON in `queries`
-- [ ] run tests — must pass before Task 2
+- [x] write tests for error cases: unknown id, malformed stored JSON in `queries`
+- [x] run tests — must pass before Task 2
 
 ### Task 2: SearchSource interface and the Jackett source
 

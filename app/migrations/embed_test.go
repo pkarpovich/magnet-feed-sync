@@ -57,6 +57,22 @@ func hasTable(t *testing.T, db *sql.DB, table string) bool {
 	return count > 0
 }
 
+// how many migrations the set holds. Derived rather than written out, so adding one does
+// not silently turn every count assertion below into a failing literal.
+func totalMigrations(t *testing.T) int {
+	t.Helper()
+
+	all, err := source().FindMigrations()
+	require.NoError(t, err)
+
+	return len(all)
+}
+
+// the migrations a database built by the old server already satisfies: everything up to
+// and including 20260810145500-add-app-state. Later migrations create their own tables and
+// can never be reflected by that schema.
+const legacyAdopted = 6
+
 func appliedIDs(t *testing.T, db *sql.DB) []string {
 	t.Helper()
 
@@ -147,7 +163,7 @@ func TestApplyCatchesUpWhenBaselineWasNeverRecorded(t *testing.T) {
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Equal(t, 3, applied)
+	assert.Equal(t, totalMigrations(t)-3, applied)
 
 	names := columns(t, db, "files")
 	for _, name := range []string{"consecutive_failures", "last_error", "last_error_at"} {
@@ -155,7 +171,7 @@ func TestApplyCatchesUpWhenBaselineWasNeverRecorded(t *testing.T) {
 	}
 	assert.True(t, hasTable(t, db, "app_state"))
 
-	assert.Len(t, appliedIDs(t, db), 6)
+	assert.Len(t, appliedIDs(t, db), totalMigrations(t))
 
 	var title string
 	err = db.QueryRow("SELECT name FROM files WHERE id = ?", "id-1").Scan(&title)
@@ -173,9 +189,9 @@ func TestApplyAdoptsDatabaseCreatedByTheOldServer(t *testing.T) {
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Equal(t, 0, applied)
+	assert.Equal(t, totalMigrations(t)-legacyAdopted, applied)
 
-	assert.Len(t, appliedIDs(t, db), 6)
+	assert.Len(t, appliedIDs(t, db), totalMigrations(t))
 
 	var title string
 	err = db.QueryRow("SELECT name FROM files WHERE id = ?", "id-1").Scan(&title)
@@ -198,10 +214,10 @@ func TestApplyAdoptsPartialLegacySchema(t *testing.T) {
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Equal(t, 1, applied)
+	assert.Equal(t, totalMigrations(t)-(legacyAdopted-1), applied)
 
 	assert.True(t, hasTable(t, db, "app_state"))
-	assert.Len(t, appliedIDs(t, db), 6)
+	assert.Len(t, appliedIDs(t, db), totalMigrations(t))
 }
 
 // the historical shape: rss_url still present and nothing after it. Adoption records only
@@ -224,7 +240,7 @@ func TestApplyAdoptsPreRssRemovalSchema(t *testing.T) {
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Equal(t, 5, applied)
+	assert.Equal(t, totalMigrations(t)-1, applied)
 
 	names := columns(t, db, "files")
 	assert.NotContains(t, names, "rss_url")
@@ -243,7 +259,7 @@ func TestAdoptionIsAtomic(t *testing.T) {
 	require.NoError(t, adoptUnmanagedSchema(db))
 
 	ids := appliedIDs(t, db)
-	require.Len(t, ids, 6)
+	require.Len(t, ids, legacyAdopted)
 
 	var recorded int
 	err := db.QueryRow("SELECT COUNT(*) FROM gorp_migrations").Scan(&recorded)
@@ -263,9 +279,9 @@ func TestApplyAdoptsDespiteEmptyMigrationTable(t *testing.T) {
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Equal(t, 0, applied)
+	assert.Equal(t, totalMigrations(t)-legacyAdopted, applied)
 
-	assert.Len(t, appliedIDs(t, db), 6)
+	assert.Len(t, appliedIDs(t, db), totalMigrations(t))
 
 	var title string
 	err = db.QueryRow("SELECT name FROM files WHERE id = ?", "id-1").Scan(&title)
@@ -283,7 +299,7 @@ func TestAdoptedRecordsAreReadableBySqlMigrate(t *testing.T) {
 
 	records, err := migrate.GetMigrationRecords(db, "sqlite3")
 	require.NoError(t, err)
-	require.Len(t, records, 6)
+	require.Len(t, records, legacyAdopted)
 	for _, record := range records {
 		assert.NotEmpty(t, record.Id)
 		assert.False(t, record.AppliedAt.IsZero())
