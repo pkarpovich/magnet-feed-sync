@@ -936,33 +936,33 @@ adding a second one.
 - Create: `app/watcher/engine.go`
 - Create: `app/watcher/engine_test.go`
 
-- [ ] implement `Engine` holding the source set and the watch store, with `Evaluate` and `RunCycle` as
+- [x] implement `Engine` holding the source set and the watch store, with `Evaluate` and `RunCycle` as
       prescribed in Technical Details
-- [ ] declare the consumer-side `publisher` interface here and ship a **no-op/fake implementation only**;
+- [x] declare the consumer-side `publisher` interface here and ship a **no-op/fake implementation only**;
       the real JetStream publisher is Task 5 and its wiring is Task 6
-- [ ] implement `Evaluate`: sequential per source and per query with per-source timeouts, error collection
+- [x] implement `Evaluate`: sequential per source and per query with per-source timeouts, error collection
       that never aborts the remaining sources, dedup by `(Source, ExternalID)`, regex filtering through the
       compiled-regex cache keyed on the regex source string, and the `New` diff against the seen set
-- [ ] make `Evaluate` skip the seen-set lookup entirely for an ad-hoc watch (empty `ID`) and report every
+- [x] make `Evaluate` skip the seen-set lookup entirely for an ad-hoc watch (empty `ID`) and report every
       matched item as new
-- [ ] implement `RunCycle` covering **effects 1 and 5 only** — the silent seed keyed on `seeded_at`, the
+- [x] implement `RunCycle` covering **effects 1 and 5 only** — the silent seed keyed on `seeded_at`, the
       "only seed when `Errs` is empty" rule, the skip-and-disable of expired watches, and the always-write
       of `last_run_at`/`last_status`. **Publish-then-mark (effects 2-4) is Task 6**; here `RunCycle` calls
       the fake publisher so the ordering can be tested, and Task 6 swaps in the real one
-- [ ] add a fake `SearchSource` in the test file whose per-call results and errors are scripted
-- [ ] write tests for the acceptance scenario using the **Acceptance watch** block verbatim: first cycle
+- [x] add a fake `SearchSource` in the test file whose per-call results and errors are scripted
+- [x] write tests for the acceptance scenario using the **Acceptance watch** block verbatim: first cycle
       seeds without publishing; a subsequent cycle with one new EN-shaped title yields exactly one item in
       `New`; a repeat cycle yields none
-- [ ] write tests for filtering using the literal must-match and must-exclude titles from the Acceptance
+- [x] write tests for filtering using the literal must-match and must-exclude titles from the Acceptance
       watch block, plus a case with both regexes empty passing everything
-- [ ] write tests for error cases: a failing source contributes an error and does not clear the delta of
+- [x] write tests for error cases: a failing source contributes an error and does not clear the delta of
       the other source; a first cycle with a source error does **not** set `seeded_at`; a clean first cycle
       that matches nothing **does** set it
-- [ ] write a test asserting filtered-out items are absent from the seen set afterwards
-- [ ] write a test asserting an ad-hoc watch with an empty `ID` reports all matched items as new
-- [ ] write a test asserting an expired watch is skipped without being searched and ends with `disabled_at`
+- [x] write a test asserting filtered-out items are absent from the seen set afterwards
+- [x] write a test asserting an ad-hoc watch with an empty `ID` reports all matched items as new
+- [x] write a test asserting an expired watch is skipped without being searched and ends with `disabled_at`
       set
-- [ ] run tests — must pass before Task 5
+- [x] run tests — must pass before Task 5
 
 ### Task 5: NATS publisher
 
