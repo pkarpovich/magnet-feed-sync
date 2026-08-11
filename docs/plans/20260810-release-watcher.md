@@ -1021,27 +1021,27 @@ adding a second one.
 - Modify: `app/config/config.go`
 - Modify: `app/config/config_test.go`
 
-- [ ] split the scheduler API into `AddJob(name, cronExpr string, cb func()) error` and `Start()`, so more
+- [x] split the scheduler API into `AddJob(name, cronExpr string, cb func()) error` and `Start()`, so more
       than one job can be registered; the existing files job becomes `AddJob("files", cfg.Cron, ...)`
-- [ ] register **every** job with gocron's singleton mode. This is correctness-critical and non-obvious: a
+- [x] register **every** job with gocron's singleton mode. This is correctness-critical and non-obvious: a
       watcher cycle is sequential over sources and queries with 120s/180s per-source timeouts, so it can
       easily outlast its tick — without singleton mode gocron starts an overlapping cycle that publishes
       twice and races the shared ext.to cookie/token state
-- [ ] add `WATCH_CRON` to config with `defaultWatchCron` as its default
-- [ ] construct the watch store, the two sources, the publisher and the engine in `main.go` and register
+- [x] add `WATCH_CRON` to config with `defaultWatchCron` as its default
+- [x] construct the watch store, the two sources, the publisher and the engine in `main.go` and register
       the watcher cycle as the second job, injecting concrete types into consumer-side interfaces
-- [ ] pass the existing `messagesForSend` channel into the engine (a field on its options struct) —
+- [x] pass the existing `messagesForSend` channel into the engine (a field on its options struct) —
       without it the Telegram mirror from Task 6 never fires, and a nil channel would make the
       non-blocking send succeed silently in tests while doing nothing in production
-- [ ] make the watcher callback log a cycle error and continue — only a **registration** error is fatal
+- [x] make the watcher callback log a cycle error and continue — only a **registration** error is fatal
       and goes to the existing scheduler error channel
-- [ ] make a missing Jackett api key or a missing solver disable the corresponding source with a startup
+- [x] make a missing Jackett api key or a missing solver disable the corresponding source with a startup
       warning instead of failing to start — the service must degrade, not die
-- [ ] write tests for registering two jobs, for singleton mode being set, and for an invalid cron
+- [x] write tests for registering two jobs, for singleton mode being set, and for an invalid cron
       expression surfacing as a registration error
-- [ ] write tests for the degraded-construction paths and name them exactly `TestDegradedNoJackettKey`,
+- [x] write tests for the degraded-construction paths and name them exactly `TestDegradedNoJackettKey`,
       `TestDegradedNoSolver`, `TestDegradedNoNATS` so Task 11 can require them by name
-- [ ] run tests — must pass before Task 8
+- [x] run tests — must pass before Task 8
 
 ### Task 8: Watch CRUD endpoints
 

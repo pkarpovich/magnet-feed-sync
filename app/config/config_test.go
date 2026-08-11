@@ -18,6 +18,18 @@ func TestInit_DefaultValues(t *testing.T) {
 	assert.Empty(t, cfg.LokiURL)
 	assert.Empty(t, cfg.FlaresolverrURL)
 	assert.Empty(t, cfg.NatsURL)
+	assert.Equal(t, "0 * * * *", cfg.Cron)
+	assert.Equal(t, defaultWatchCron, cfg.WatchCron)
+}
+
+func TestInit_WatchCronFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("WATCH_CRON", "*/30 * * * *")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "*/30 * * * *", cfg.WatchCron)
 }
 
 func TestInit_NatsFromEnv(t *testing.T) {

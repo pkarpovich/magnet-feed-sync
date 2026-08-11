@@ -45,7 +45,12 @@ type Config struct {
 	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
 	// NatsURL is where watch notifications go; empty disables publishing.
 	NatsURL string `env:"NATS_URL"`
+	// WatchCron schedules the watcher sweep; it defaults to defaultWatchCron.
+	WatchCron string `env:"WATCH_CRON"`
 }
+
+// defaultWatchCron is offset from the files job at `0 * * * *` so the two never start together.
+const defaultWatchCron = "20 * * * *"
 
 func Init() (*Config, error) {
 	err := godotenv.Load()
@@ -61,6 +66,10 @@ func Init() (*Config, error) {
 
 	if cfg.Jackett.PublicURL == "" {
 		cfg.Jackett.PublicURL = cfg.Jackett.URL
+	}
+
+	if cfg.WatchCron == "" {
+		cfg.WatchCron = defaultWatchCron
 	}
 
 	return &cfg, nil
