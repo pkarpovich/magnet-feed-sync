@@ -153,7 +153,7 @@ func TestPublisherSubjectAndMessageID(t *testing.T) {
 
 	o := RunOutcome{New: []SearchResult{
 		{Source: sourceJackett, ExternalID: "1883913", Title: ruRelease},
-		{Source: sourceExtto, ExternalID: "20151803", Title: enRelease},
+		{Source: SourceExtto, ExternalID: "20151803", Title: enRelease},
 		{Source: sourceJackett, ExternalID: "42", Title: enRelease},
 	}}
 
@@ -169,7 +169,7 @@ func TestPublisherMessageIDIsOrderIndependent(t *testing.T) {
 
 	results := []SearchResult{
 		{Source: sourceJackett, ExternalID: "1883913"},
-		{Source: sourceExtto, ExternalID: "20151803"},
+		{Source: SourceExtto, ExternalID: "20151803"},
 	}
 	reversed := []SearchResult{results[1], results[0]}
 

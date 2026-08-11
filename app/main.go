@@ -183,7 +183,7 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	}
 
-	httpClient := http.NewClient(&http.ClientCtx{
+	httpCtx := &http.ClientCtx{
 		Config:           cfg.Http,
 		Store:            store,
 		TaskCreator:      downloadTasksClient,
@@ -191,10 +191,18 @@ func run(cfg *config.Config) error {
 		Breaker:          breaker,
 		RunState:         store,
 		WatchStore:       watchRepo,
+		Engine:           engine,
 		StaleRunAfter:    staleRunAfter(cfg.Cron),
 		StartedAt:        time.Now(),
 		FailureThreshold: downloadTasks.FailureThreshold,
-	})
+	}
+	// a typed nil in the interface field would pass the handler's nil check and panic on the
+	// first magnet call, so a disabled ext.to source leaves the field unset
+	if sources.extto != nil {
+		httpCtx.Magnets = sources.extto
+	}
+
+	httpClient := http.NewClient(httpCtx)
 
 	go tgListener.SendMessagesForAdmins(ctx)
 	go httpClient.Start(ctx, done)

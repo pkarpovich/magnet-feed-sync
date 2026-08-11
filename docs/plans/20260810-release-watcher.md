@@ -1072,32 +1072,34 @@ adding a second one.
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
+- ➕ Modify: `app/watcher/source.go` (exports `SourceExtto`, so the http magnet branch and the ext.to
+  source cannot disagree on the name that selects it)
 
-- [ ] add the engine **and** the `magnetResolver` seam to the existing `ClientCtx` options struct as new
+- [x] add the engine **and** the `magnetResolver` seam to the existing `ClientCtx` options struct as new
       fields and pass both from `main.go` (the resolver is the concrete ext.to source, nil when disabled)
-- [ ] add `POST /api/watches/{id}/search` calling the engine's `Evaluate` with the stored watch, returning
+- [x] add `POST /api/watches/{id}/search` calling the engine's `Evaluate` with the stored watch, returning
       the full results with each item flagged as new or already-seen
-- [ ] emit each response item with exactly these keys: `source`, `id`, `title`, `page_url`,
+- [x] emit each response item with exactly these keys: `source`, `id`, `title`, `page_url`,
       `download_url`, `magnet`, `magnet_error`, `seeders`, `published_at`, `new`
-- [ ] resolve the magnet for ext.to items sequentially via `Magnet(ctx, item.ExternalID, item.Query)`,
+- [x] resolve the magnet for ext.to items sequentially via `Magnet(ctx, item.ExternalID, item.Query)`,
       reusing the warm token cache; on failure set `magnet_error` on that item, leave `magnet` empty, and
       do not fail the request
-- [ ] support `?raw=true` returning the pre-filter set
-- [ ] add `POST /api/search` taking queries, sources and optional regexes from the request body, building
+- [x] support `?raw=true` returning the pre-filter set
+- [x] add `POST /api/search` taking queries, sources and optional regexes from the request body, building
       an ad-hoc `Watch` with an empty `ID` and sharing the same `Evaluate` path
-- [ ] return 404 for an unknown or disabled watch id
-- [ ] write tests asserting the watch-search endpoint applies the stored regexes (the junk-heavy title set
+- [x] return 404 for an unknown or disabled watch id
+- [x] write tests asserting the watch-search endpoint applies the stored regexes (the junk-heavy title set
       from the Acceptance watch block collapses to the matching item) and that `?raw=true` returns the
       unfiltered set
-- [ ] write the equality test that backs the "cannot drift" claim, named `TestCronAndEndpointAgree`:
+- [x] write the equality test that backs the "cannot drift" claim, named `TestCronAndEndpointAgree`:
       pre-seed the watch so `RunCycle` takes the publish branch, run it with the fake publisher and capture
       `o.Matched` from the `Publish` call, then POST the endpoint against the same scripted source; project
       both sides to `[]struct{Source, ID, Title string}` in slice order and compare with `reflect.DeepEqual`
       (the endpoint returns JSON objects of a different shape, so the projection is the comparison)
-- [ ] write tests asserting items already in the seen set are flagged as not new
-- [ ] write tests for error cases: unknown watch id, a source error surfacing in the response, a per-item
+- [x] write tests asserting items already in the seen set are flagged as not new
+- [x] write tests for error cases: unknown watch id, a source error surfacing in the response, a per-item
       magnet failure not failing the request
-- [ ] run tests — must pass before Task 10
+- [x] run tests — must pass before Task 10
 
 ### Task 10: Health reporting for watches
 

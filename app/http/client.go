@@ -58,7 +58,21 @@ type watchStore interface {
 	Disable(id string) error
 	GetAll() ([]*watcher.Watch, error)
 	GetByID(id string) (*watcher.Watch, error)
+	WatchesForCycle() ([]*watcher.Watch, error)
 	SeenRows(watchID string) ([]watch_store.SeenRow, error)
+}
+
+// searchEngine is the consumer-side view of the watcher engine. Both search endpoints go
+// through the very Evaluate the cron cycle calls, which is what keeps what the agent can
+// reproduce identical to what woke it.
+type searchEngine interface {
+	Evaluate(ctx context.Context, w watcher.Watch) watcher.RunOutcome
+}
+
+// magnetResolver resolves the magnet of one ext.to row. It is a seam of its own because
+// Magnet is a method on the ext.to source and deliberately not part of SearchSource.
+type magnetResolver interface {
+	Magnet(ctx context.Context, torrentID, query string) (string, error)
 }
 
 type Client struct {
@@ -69,6 +83,8 @@ type Client struct {
 	breaker          BreakerSnapshotter
 	runState         RunStateReader
 	watches          watchStore
+	engine           searchEngine
+	magnets          magnetResolver
 	staleRunAfter    time.Duration
 	startedAt        time.Time
 	failureThreshold int
@@ -82,6 +98,8 @@ type ClientCtx struct {
 	Breaker          BreakerSnapshotter
 	RunState         RunStateReader
 	WatchStore       watchStore
+	Engine           searchEngine
+	Magnets          magnetResolver
 	StaleRunAfter    time.Duration
 	StartedAt        time.Time
 	FailureThreshold int
@@ -108,6 +126,8 @@ func NewClient(ctx *ClientCtx) *Client {
 		breaker:          ctx.Breaker,
 		runState:         ctx.RunState,
 		watches:          ctx.WatchStore,
+		engine:           ctx.Engine,
+		magnets:          ctx.Magnets,
 		staleRunAfter:    staleRunAfter,
 		startedAt:        ctx.StartedAt,
 		failureThreshold: threshold,
@@ -129,6 +149,8 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	mux.HandleFunc("GET /api/watches/{watchId}", c.handleWatch)
 	mux.HandleFunc("PATCH /api/watches/{watchId}", c.handleUpdateWatch)
 	mux.HandleFunc("DELETE /api/watches/{watchId}", c.handleRemoveWatch)
+	mux.HandleFunc("POST /api/watches/{watchId}/search", c.handleWatchSearch)
+	mux.HandleFunc("POST /api/search", c.handleSearch)
 	mux.HandleFunc("GET /api/health", c.healthHandler)
 	mux.HandleFunc("GET /", c.fileHandler)
 
@@ -693,6 +715,12 @@ func (c *Client) validateWatch(watch *watcher.Watch) error {
 		return fmt.Errorf("id must match %s", watchIDPatternSource)
 	}
 
+	return c.validateSearchParams(watch)
+}
+
+// validateSearchParams checks everything a search needs. It is separate from validateWatch
+// because an ad-hoc search has no id to validate and must not be rejected for missing one.
+func (c *Client) validateSearchParams(watch *watcher.Watch) error {
 	if len(watch.Queries) == 0 {
 		return errors.New("at least one non-empty query is required")
 	}
@@ -799,6 +827,193 @@ func trimmed(values []string) []string {
 	}
 
 	return kept
+}
+
+// magnetUnavailable is reported per item rather than as a request failure: an ext.to source
+// disabled at startup must still let the rest of a result set through.
+const magnetUnavailable = "extto magnet resolver is not configured"
+
+// searchResponse reports what the engine found. total counts the deduped pre-filter set and
+// matched the post-filter one, so a caller reading a short items list still learns how much
+// was thrown away. errors is non-empty when a source failed: the result set is then partial
+// and must not be read as "nothing new".
+type searchResponse struct {
+	WatchID string       `json:"watch_id"`
+	Total   int          `json:"total"`
+	Matched int          `json:"matched"`
+	Raw     bool         `json:"raw"`
+	Errors  []string     `json:"errors"`
+	Items   []searchItem `json:"items"`
+}
+
+type searchItem struct {
+	Source      string    `json:"source"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	PageURL     string    `json:"page_url"`
+	DownloadURL string    `json:"download_url"`
+	Magnet      string    `json:"magnet"`
+	MagnetError string    `json:"magnet_error"`
+	Seeders     int       `json:"seeders"`
+	PublishedAt time.Time `json:"published_at"`
+	New         bool      `json:"new"`
+}
+
+func (c *Client) handleWatchSearch(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/watches/{watchId}/search")
+	defer span.End()
+
+	if !c.watchStoreReady(w) || !c.engineReady(w) {
+		return
+	}
+
+	watch, ok := c.loadActiveWatch(ctx, w, r.PathValue("watchId"))
+	if !ok {
+		return
+	}
+
+	c.runSearch(ctx, w, r, *watch)
+}
+
+func (c *Client) handleSearch(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("http").Start(r.Context(), "POST /api/search")
+	defer span.End()
+
+	if !c.engineReady(w) {
+		return
+	}
+
+	req, ok := decodeWatchRequest(w, r)
+	if !ok {
+		return
+	}
+
+	// an ad-hoc watch has no id, which is what makes Evaluate skip the seen set and report
+	// everything it matched as new
+	watch := &watcher.Watch{}
+	c.applyWatchRequest(watch, req)
+
+	if err := c.validateSearchParams(watch); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	c.runSearch(ctx, w, r, *watch)
+}
+
+// runSearch is the one path both endpoints share, so the ad-hoc search and the watch
+// reproduction cannot answer differently for the same parameters.
+func (c *Client) runSearch(ctx context.Context, w http.ResponseWriter, r *http.Request, watch watcher.Watch) {
+	o := c.engine.Evaluate(ctx, watch)
+
+	// the pre-filter set is the only way to answer "why was I not woken by this"
+	raw := r.URL.Query().Get("raw") == "true"
+	results := o.Matched
+	if raw {
+		results = o.Raw
+	}
+
+	c.encodeJSON(ctx, w, http.StatusOK, searchResponse{
+		WatchID: watch.ID,
+		Total:   len(o.Raw),
+		Matched: len(o.Matched),
+		Raw:     raw,
+		Errors:  errorMessages(o.Errs),
+		Items:   c.searchItems(ctx, results, freshKeys(o.New)),
+	})
+}
+
+func (c *Client) searchItems(ctx context.Context, results []watcher.SearchResult, fresh map[string]struct{}) []searchItem {
+	items := make([]searchItem, 0, len(results))
+	for _, result := range results {
+		item := searchItem{
+			Source:      result.Source,
+			ID:          result.ExternalID,
+			Title:       result.Title,
+			PageURL:     result.PageURL,
+			DownloadURL: result.DownloadURL,
+			Seeders:     result.Seeders,
+			PublishedAt: result.PublishedAt,
+		}
+		_, item.New = fresh[result.SeenKey()]
+
+		// ext.to has no direct .torrent, so its magnet is fetched on demand — sequentially,
+		// because the signed call reuses the tokens of the search page just fetched
+		if result.Source == watcher.SourceExtto {
+			item.Magnet, item.MagnetError = c.resolveMagnet(ctx, result)
+		}
+
+		items = append(items, item)
+	}
+
+	return items
+}
+
+// resolveMagnet reports a failure on the item instead of failing the request: one dead row
+// must not hide the rest of a result set the agent still has to look at.
+func (c *Client) resolveMagnet(ctx context.Context, result watcher.SearchResult) (string, string) {
+	if c.magnets == nil {
+		return "", magnetUnavailable
+	}
+
+	magnet, err := c.magnets.Magnet(ctx, result.ExternalID, result.Query)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to resolve magnet", "source", result.Source, "id", result.ExternalID, "error", err)
+
+		return "", err.Error()
+	}
+
+	return magnet, ""
+}
+
+// loadActiveWatch answers 404 for a soft-deleted watch too. Watch carries no disabled flag,
+// so the active set comes from the loader the cron uses rather than from GetByID, which
+// happily returns a watch that was removed.
+func (c *Client) loadActiveWatch(ctx context.Context, w http.ResponseWriter, id string) (*watcher.Watch, bool) {
+	watches, err := c.watches.WatchesForCycle()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to load watches", "watch_id", id, "error", err)
+		http.Error(w, "failed to get watch", http.StatusInternalServerError)
+
+		return nil, false
+	}
+
+	for _, watch := range watches {
+		if watch.ID == id {
+			return watch, true
+		}
+	}
+
+	http.Error(w, "watch not found", http.StatusNotFound)
+
+	return nil, false
+}
+
+func (c *Client) engineReady(w http.ResponseWriter) bool {
+	if c.engine == nil {
+		http.Error(w, "search engine is not configured", http.StatusServiceUnavailable)
+		return false
+	}
+
+	return true
+}
+
+func freshKeys(results []watcher.SearchResult) map[string]struct{} {
+	keys := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		keys[result.SeenKey()] = struct{}{}
+	}
+
+	return keys
+}
+
+func errorMessages(errs []error) []string {
+	messages := make([]string, 0, len(errs))
+	for _, err := range errs {
+		messages = append(messages, err.Error())
+	}
+
+	return messages
 }
 
 const (

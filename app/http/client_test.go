@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -670,19 +673,29 @@ func TestSetFileLocationStoreFailureIsAnError(t *testing.T) {
 	assert.Equal(t, 0, dClient.setLocationCalls)
 }
 
+// mockWatchStore stands in for the repository on both seams at once: the http handlers and
+// the engine share one instance, which is what lets TestCronAndEndpointAgree run a cycle and
+// then an endpoint against the same state.
 type mockWatchStore struct {
 	watches   map[string]*watcher.Watch
 	order     []string
 	seen      []watch_store.SeenRow
+	marked    map[string]map[string]watcher.SearchResult
+	statuses  map[string]string
 	disabled  []string
 	createErr error
 	updateErr error
 	getAllErr error
 	seenErr   error
+	cycleErr  error
 }
 
 func newMockWatchStore(watches ...*watcher.Watch) *mockWatchStore {
-	store := &mockWatchStore{watches: make(map[string]*watcher.Watch, len(watches))}
+	store := &mockWatchStore{
+		watches:  make(map[string]*watcher.Watch, len(watches)),
+		marked:   make(map[string]map[string]watcher.SearchResult),
+		statuses: make(map[string]string),
+	}
 	for _, w := range watches {
 		store.watches[w.ID] = w
 		store.order = append(store.order, w.ID)
@@ -755,6 +768,60 @@ func (m *mockWatchStore) GetByID(id string) (*watcher.Watch, error) {
 
 func (m *mockWatchStore) SeenRows(watchID string) ([]watch_store.SeenRow, error) {
 	return m.seen, m.seenErr
+}
+
+// WatchesForCycle excludes soft-deleted rows, mirroring the repository: it is what the
+// search endpoints load through, so a disabled watch is a 404 there.
+func (m *mockWatchStore) WatchesForCycle() ([]*watcher.Watch, error) {
+	if m.cycleErr != nil {
+		return nil, m.cycleErr
+	}
+
+	watches := make([]*watcher.Watch, 0, len(m.order))
+	for _, id := range m.order {
+		if slices.Contains(m.disabled, id) {
+			continue
+		}
+
+		watches = append(watches, m.watches[id])
+	}
+
+	return watches, nil
+}
+
+func (m *mockWatchStore) SeenKeys(watchID string) (map[string]struct{}, error) {
+	keys := make(map[string]struct{}, len(m.marked[watchID]))
+	for key := range m.marked[watchID] {
+		keys[key] = struct{}{}
+	}
+
+	return keys, nil
+}
+
+func (m *mockWatchStore) MarkSeen(watchID string, results []watcher.SearchResult) error {
+	if m.marked[watchID] == nil {
+		m.marked[watchID] = make(map[string]watcher.SearchResult)
+	}
+	for _, result := range results {
+		m.marked[watchID][result.SeenKey()] = result
+	}
+
+	return nil
+}
+
+func (m *mockWatchStore) MarkSeeded(id string) error {
+	if w, ok := m.watches[id]; ok {
+		now := time.Now()
+		w.SeededAt = &now
+	}
+
+	return nil
+}
+
+func (m *mockWatchStore) RecordRun(watchID, status string) error {
+	m.statuses[watchID] = status
+
+	return nil
 }
 
 func acceptanceWatch() *watcher.Watch {
@@ -1091,6 +1158,491 @@ func TestWatchHandlersWithoutStore(t *testing.T) {
 			w := httptest.NewRecorder()
 
 			tt.handler(w, newWatchRequest(http.MethodPost, "/api/watches", "{}"))
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+		})
+	}
+}
+
+// scriptedSource answers every query with the same rows, so a test can assert on filtering
+// and on the delta without depending on which query produced what.
+type scriptedSource struct {
+	name    string
+	results []watcher.SearchResult
+	err     error
+	calls   int
+}
+
+func (s *scriptedSource) Name() string { return s.name }
+
+func (s *scriptedSource) Search(_ context.Context, query string) ([]watcher.SearchResult, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	results := make([]watcher.SearchResult, 0, len(s.results))
+	for _, result := range s.results {
+		result.Query = query
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+type mockPublisher struct {
+	published []watcher.RunOutcome
+}
+
+func (p *mockPublisher) Publish(_ context.Context, _ watcher.Watch, o watcher.RunOutcome) error {
+	p.published = append(p.published, o)
+
+	return nil
+}
+
+type mockMagnets struct {
+	magnets map[string]string
+	err     error
+	queries []string
+}
+
+func (m *mockMagnets) Magnet(_ context.Context, torrentID, query string) (string, error) {
+	m.queries = append(m.queries, query)
+	if m.err != nil {
+		return "", m.err
+	}
+
+	magnet, ok := m.magnets[torrentID]
+	if !ok {
+		return "", fmt.Errorf("no magnet for %s", torrentID)
+	}
+
+	return magnet, nil
+}
+
+// acceptanceTitles is the measured junk set from the plan's Acceptance watch block: one
+// EN-shaped release and the four titles the 226-result page was full of.
+var acceptanceTitles = []string{
+	"One.Night.Only.2026.1080p.WEB-DL.DDP5.1.H264-GROUP",
+	"Bee Gees One Night Only 1998 WEBRip 1080p x264 AAC ENG Lulloz",
+	"Def Leppard - One Night Only: Live At The Leadmill [2024, Classic Rock, Hard Rock, Blu-ray, 1080i]",
+	"RuPauls Drag Race S15E02 One Night Only Part 2 1080p AMZN WEB DL DDP2 0 H 264 FLUX TGx",
+	"One Night Only / Tian Liang Zhi Qian [2016, BDRemux 1080p] VO + DVO + Sub Rus, Eng + Original Chi",
+}
+
+func searchResults(source string, titles ...string) []watcher.SearchResult {
+	results := make([]watcher.SearchResult, 0, len(titles))
+	for i, title := range titles {
+		id := fmt.Sprintf("188391%d", i)
+		results = append(results, watcher.SearchResult{
+			Source:      source,
+			ExternalID:  id,
+			Title:       title,
+			PageURL:     "https://nnmclub.to/forum/viewtopic.php?t=" + id,
+			DownloadURL: "https://jackett.example.com/dl/nnm?file=" + id,
+			Seeders:     10 + i,
+			PublishedAt: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+		})
+	}
+
+	return results
+}
+
+func jackettWatch() *watcher.Watch {
+	w := acceptanceWatch()
+	w.Sources = []string{"jackett"}
+
+	return w
+}
+
+func newSearchEngine(store *mockWatchStore, source watcher.SearchSource, pub *mockPublisher) *watcher.Engine {
+	return watcher.NewEngine(watcher.EngineDeps{
+		Sources:   []watcher.SearchSource{source},
+		Store:     store,
+		Publisher: pub,
+	})
+}
+
+func newSearchClient(store watchStore, engine searchEngine, magnets magnetResolver) *Client {
+	return NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    &mockTaskCreator{},
+		DownloadClient: &mockDownloadClient{},
+		WatchStore:     store,
+		Engine:         engine,
+		Magnets:        magnets,
+	})
+}
+
+// searchByID builds a search request against one watch, including the path value the router
+// would have extracted.
+func searchByID(id, query string) *http.Request {
+	req := newWatchRequest(http.MethodPost, "/api/watches/"+id+"/search"+query, "")
+	req.SetPathValue("watchId", id)
+
+	return req
+}
+
+func decodeSearch(t *testing.T, w *httptest.ResponseRecorder) searchResponse {
+	t.Helper()
+
+	var resp searchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	return resp
+}
+
+func TestWatchSearchAppliesStoredRegexes(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles...)}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	assert.Equal(t, "one-night-only-en", resp.WatchID)
+	assert.Equal(t, 5, resp.Total)
+	assert.Equal(t, 1, resp.Matched)
+	assert.False(t, resp.Raw)
+	assert.Empty(t, resp.Errors)
+
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, acceptanceTitles[0], resp.Items[0].Title)
+	assert.Equal(t, "1883910", resp.Items[0].ID)
+	assert.Equal(t, "https://nnmclub.to/forum/viewtopic.php?t=1883910", resp.Items[0].PageURL)
+	assert.Equal(t, "https://jackett.example.com/dl/nnm?file=1883910", resp.Items[0].DownloadURL)
+	assert.Equal(t, 10, resp.Items[0].Seeders)
+	assert.True(t, resp.Items[0].New)
+	// the watch runs two queries against the one source it names
+	assert.Equal(t, 2, source.calls)
+}
+
+// the pre-filter set is the only way to answer "why was I woken with this junk" and "why was
+// I not woken", so it stays reachable
+func TestWatchSearchRawReturnsUnfiltered(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles...)}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", "?raw=true"))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	assert.True(t, resp.Raw)
+	assert.Equal(t, 5, resp.Total)
+	assert.Equal(t, 1, resp.Matched)
+	require.Len(t, resp.Items, 5)
+
+	assert.True(t, resp.Items[0].New)
+	for _, item := range resp.Items[1:] {
+		assert.False(t, item.New, item.Title)
+	}
+}
+
+// the key set is a contract with an agent in another repository, so it is asserted rather
+// than left to the struct tags
+func TestWatchSearchItemKeys(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles[0])}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	var decoded struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
+	require.Len(t, decoded.Items, 1)
+
+	keys := make([]string, 0, len(decoded.Items[0]))
+	for key := range decoded.Items[0] {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	assert.Equal(t, []string{
+		"download_url", "id", "magnet", "magnet_error", "new", "page_url", "published_at", "seeders", "source", "title",
+	}, keys)
+}
+
+func TestWatchSearchFlagsSeenItems(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	results := searchResults("jackett", acceptanceTitles...)
+	require.NoError(t, store.MarkSeen("one-night-only-en", results[:1]))
+
+	source := &scriptedSource{name: "jackett", results: results}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 1)
+	assert.False(t, resp.Items[0].New)
+}
+
+// TestCronAndEndpointAgree backs the claim that the reproduction endpoint cannot drift from
+// what woke the agent: both paths go through Evaluate over the same stored parameters.
+func TestCronAndEndpointAgree(t *testing.T) {
+	watch := jackettWatch()
+	seeded := time.Now().Add(-2 * time.Hour)
+	watch.SeededAt = &seeded
+
+	store := newMockWatchStore(watch)
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles...)}
+	pub := &mockPublisher{}
+	engine := newSearchEngine(store, source, pub)
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+	require.Len(t, pub.published, 1)
+
+	w := httptest.NewRecorder()
+	newSearchClient(store, engine, nil).handleWatchSearch(w, searchByID("one-night-only-en", ""))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	type projection struct {
+		Source string
+		ID     string
+		Title  string
+	}
+
+	fromCron := make([]projection, 0, len(pub.published[0].Matched))
+	for _, result := range pub.published[0].Matched {
+		fromCron = append(fromCron, projection{Source: result.Source, ID: result.ExternalID, Title: result.Title})
+	}
+
+	resp := decodeSearch(t, w)
+	fromEndpoint := make([]projection, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		fromEndpoint = append(fromEndpoint, projection{Source: item.Source, ID: item.ID, Title: item.Title})
+	}
+
+	require.NotEmpty(t, fromCron)
+	assert.True(t, reflect.DeepEqual(fromCron, fromEndpoint), "cron %+v endpoint %+v", fromCron, fromEndpoint)
+	// the cycle published and marked, so the same item is no longer new to the endpoint
+	require.Len(t, resp.Items, 1)
+	assert.False(t, resp.Items[0].New)
+}
+
+// a partial run is still answered — withholding what one working source found is the silent
+// failure this whole design exists to prevent
+func TestWatchSearchReportsSourceError(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	source := &scriptedSource{name: "jackett", err: errors.New("jackett returned 502")}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Errors, 1)
+	assert.Contains(t, resp.Errors[0], "jackett returned 502")
+	assert.Empty(t, resp.Items)
+	assert.Equal(t, 0, resp.Total)
+}
+
+func TestWatchSearchUnknownWatch(t *testing.T) {
+	store := newMockWatchStore()
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, &scriptedSource{name: "jackett"}, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("missing", ""))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// a soft-deleted watch is gone as far as the API is concerned, even though its row and its
+// seen set survive
+func TestWatchSearchDisabledWatch(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	require.NoError(t, store.Disable("one-night-only-en"))
+
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles...)}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, 0, source.calls)
+}
+
+func TestWatchSearchStoreFailure(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	store.cycleErr = errors.New("db is down")
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, &scriptedSource{name: "jackett"}, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func exttoWatch() *watcher.Watch {
+	return &watcher.Watch{
+		ID:      "extto-only",
+		Queries: []string{"One Night Only 2026"},
+		Sources: []string{watcher.SourceExtto},
+		Rev:     1,
+	}
+}
+
+func TestWatchSearchResolvesExttoMagnets(t *testing.T) {
+	store := newMockWatchStore(exttoWatch())
+	results := searchResults(watcher.SourceExtto, "One.Night.Only.2026.1080p.WEB-DL", "Dune.Prophecy.S01.2160p")
+	source := &scriptedSource{name: watcher.SourceExtto, results: results}
+	magnets := &mockMagnets{magnets: map[string]string{"1883910": "magnet:?xt=urn:btih:abc123"}}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), magnets).
+		handleWatchSearch(w, searchByID("extto-only", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 2)
+	assert.Equal(t, "magnet:?xt=urn:btih:abc123", resp.Items[0].Magnet)
+	assert.Empty(t, resp.Items[0].MagnetError)
+
+	// a per-item failure is reported on the item, never as a failed request
+	assert.Empty(t, resp.Items[1].Magnet)
+	assert.Contains(t, resp.Items[1].MagnetError, "no magnet for 1883911")
+
+	// the signature needs the tokens of the query that produced the row
+	assert.Equal(t, []string{"One Night Only 2026", "One Night Only 2026"}, magnets.queries)
+}
+
+func TestWatchSearchWithoutMagnetResolver(t *testing.T) {
+	store := newMockWatchStore(exttoWatch())
+	source := &scriptedSource{name: watcher.SourceExtto, results: searchResults(watcher.SourceExtto, "One.Night.Only.2026.1080p.WEB-DL")}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleWatchSearch(w, searchByID("extto-only", ""))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 1)
+	assert.Empty(t, resp.Items[0].Magnet)
+	assert.Equal(t, magnetUnavailable, resp.Items[0].MagnetError)
+}
+
+// a jackett row carries a usable download url, so no magnet is fetched for it — the keys are
+// still present and empty
+func TestWatchSearchSkipsMagnetForJackett(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles[0])}
+	magnets := &mockMagnets{magnets: map[string]string{"1883910": "magnet:?xt=urn:btih:abc123"}}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), magnets).
+		handleWatchSearch(w, searchByID("one-night-only-en", ""))
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 1)
+	assert.Empty(t, resp.Items[0].Magnet)
+	assert.Empty(t, resp.Items[0].MagnetError)
+	assert.Empty(t, magnets.queries)
+}
+
+// an ad-hoc search has no id and therefore no seen set: everything it matched is new
+func TestAdHocSearch(t *testing.T) {
+	store := newMockWatchStore(jackettWatch())
+	require.NoError(t, store.MarkSeen("one-night-only-en", searchResults("jackett", acceptanceTitles[0])))
+
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles...)}
+	w := httptest.NewRecorder()
+
+	body := `{"queries":["One Night Only 2026"],"sources":["jackett"],
+		"include_regex":"(?i)one[ ._-]night[ ._-]only.*2026","exclude_regex":"(?i)bee gees"}`
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleSearch(w, newWatchRequest(http.MethodPost, "/api/search", body))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	assert.Empty(t, resp.WatchID)
+	assert.Equal(t, 5, resp.Total)
+	assert.Equal(t, 1, resp.Matched)
+	require.Len(t, resp.Items, 1)
+	assert.True(t, resp.Items[0].New)
+	assert.Equal(t, 1, source.calls)
+}
+
+func TestAdHocSearchDefaultsSources(t *testing.T) {
+	store := newMockWatchStore()
+	source := &scriptedSource{name: "jackett", results: searchResults("jackett", acceptanceTitles[0])}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+		handleSearch(w, newWatchRequest(http.MethodPost, "/api/search", `{"queries":["One Night Only 2026"]}`))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// the unconfigured ext.to source of the default set reports an error rather than silence
+	resp := decodeSearch(t, w)
+	assert.Equal(t, 1, resp.Total)
+	require.Len(t, resp.Errors, 1)
+	assert.Contains(t, resp.Errors[0], "unknown source")
+}
+
+func TestAdHocSearchValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		contains string
+	}{
+		{name: "no queries", body: `{"queries":[]}`, contains: "non-empty query"},
+		{name: "invalid include regex", body: `{"queries":["x"],"include_regex":"(unclosed"}`, contains: "invalid include_regex"},
+		{name: "invalid exclude regex", body: `{"queries":["x"],"exclude_regex":"["}`, contains: "invalid exclude_regex"},
+		{name: "unknown source", body: `{"queries":["x"],"sources":["rutracker"]}`, contains: `unknown source "rutracker"`},
+		{name: "invalid body", body: "not json", contains: "invalid request body"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockWatchStore()
+			source := &scriptedSource{name: "jackett"}
+			w := httptest.NewRecorder()
+
+			newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), nil).
+				handleSearch(w, newWatchRequest(http.MethodPost, "/api/search", tt.body))
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), tt.contains)
+			assert.Equal(t, 0, source.calls)
+		})
+	}
+}
+
+// the routes are registered unconditionally, so an unconfigured engine must answer rather
+// than panic
+func TestSearchHandlersWithoutEngine(t *testing.T) {
+	c := newSearchClient(newMockWatchStore(jackettWatch()), nil, nil)
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		request *http.Request
+	}{
+		{"watch search", c.handleWatchSearch, searchByID("one-night-only-en", "")},
+		{"ad-hoc search", c.handleSearch, newWatchRequest(http.MethodPost, "/api/search", `{"queries":["x"]}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+
+			tt.handler(w, tt.request)
 
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 		})

@@ -40,11 +40,16 @@ type SearchSource interface {
 	Search(ctx context.Context, query string) ([]SearchResult, error)
 }
 
+// SourceExtto names the ext.to source. It is exported because the http layer resolves
+// magnets for exactly its rows — a magnet call against a jackett id would be nonsense — and
+// a second spelling of the name there could silently disagree with this one.
+const SourceExtto = "extto"
+
 // KnownSources lists every source name a watch may reference. It is deliberately static
 // rather than derived from the running source set: a source disabled at startup (no api
 // key, no solver) must not make an existing watch unsaveable.
 func KnownSources() []string {
-	return []string{sourceJackett, sourceExtto}
+	return []string{sourceJackett, SourceExtto}
 }
 
 const seenKeySeparator = "\x00"

@@ -103,7 +103,7 @@ func TestExttoSearchParsesRows(t *testing.T) {
 	assert.Empty(t, request.URL.Query().Get("with_adult"))
 
 	first := results[0]
-	assert.Equal(t, sourceExtto, first.Source)
+	assert.Equal(t, SourceExtto, first.Source)
 	assert.Equal(t, "20151803", first.ExternalID)
 	assert.Equal(t, "Dune.Prophecy.S01.2160p.UHD...-MTeam", first.Title)
 	assert.Equal(t, source.baseURL+"/dune-prophecy-s01-2160p-uhd-eur-blu-ray-hevc-hdr10-truehd-7-1-mteam-20151803/", first.PageURL)

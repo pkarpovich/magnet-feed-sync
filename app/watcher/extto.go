@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	sourceExtto        = "extto"
 	exttoBaseURL       = "https://search.extto.com"
 	exttoBrowsePath    = "/browse/"
 	exttoMagnetPath    = "/ajax/getSearchMagnet.php"
@@ -78,7 +77,7 @@ func NewExttoSource(o ExttoOptions) *ExttoSource {
 }
 
 func (s *ExttoSource) Name() string {
-	return sourceExtto
+	return SourceExtto
 }
 
 func (s *ExttoSource) Search(ctx context.Context, query string) ([]SearchResult, error) {
@@ -387,7 +386,7 @@ func (s *ExttoSource) rowResult(row *goquery.Selection, query string) (SearchRes
 	}
 
 	return SearchResult{
-		Source:     sourceExtto,
+		Source:     SourceExtto,
 		ExternalID: externalID,
 		// the query terms come back wrapped in highlight tags, so only the text is the title
 		Title:       strings.TrimSpace(link.Text()),

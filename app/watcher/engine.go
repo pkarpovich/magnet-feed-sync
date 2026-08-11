@@ -406,7 +406,7 @@ func sourceTimeout(name string) time.Duration {
 	switch name {
 	case sourceJackett:
 		return jackettSearchTimeout
-	case sourceExtto:
+	case SourceExtto:
 		return exttoSearchTimeout
 	default:
 		return defaultSearchTimeout
