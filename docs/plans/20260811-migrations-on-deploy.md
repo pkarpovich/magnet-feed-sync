@@ -516,16 +516,17 @@ tests and production reach their schema by the same path.
 - Modify: `compose.yaml`
 - Modify: `compose.override.yml`
 
-- [ ] add the one-shot `migrate` service to `compose.yaml` exactly as prescribed: new image,
+- [x] add the one-shot `migrate` service to `compose.yaml` exactly as prescribed: new image,
       `restart: "no"`, only the `.db` volume, no environment, no networks, no traefik labels
-- [ ] add `depends_on` with `condition: service_completed_successfully` to `magnet-feed-sync`
-- [ ] add the `migrate` override to `compose.override.yml` with **both** `build.target: migrate-final` and
+- [x] add `depends_on` with `condition: service_completed_successfully` to `magnet-feed-sync`
+- [x] add the `migrate` override to `compose.override.yml` with **both** `build.target: migrate-final` and
       `image: magnet-feed-sync-migrate:local`, mirroring the app service — without the image override a
       local build stamps itself onto the registry tag
-- [ ] **if `docker info` succeeds:**
+- [x] **if `docker info` succeeds:**
       `docker compose config --format json | jq -e '.services["magnet-feed-sync"].depends_on.migrate.condition == "service_completed_successfully"'`
       exits 0. `variable is not set` warnings on stderr are expected, because `.env` is not committed
-- [ ] **if `docker info` fails:** confirm instead that `compose.yaml` contains
+      (docker unavailable — skipped)
+- [x] **if `docker info` fails:** confirm instead that `compose.yaml` contains
       `service_completed_successfully` and a `migrate:` service with `restart: "no"`
 
 ### Task 6: Release pipeline builds both images

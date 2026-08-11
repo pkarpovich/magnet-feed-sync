@@ -1,8 +1,18 @@
 services:
+  migrate:
+    container_name: magnet-feed-sync-migrate
+    image: git.pkarpovich.space/pkarpovich/magnet-feed-sync-migrate:latest
+    restart: "no"
+    volumes:
+      - .db:/.db
+
   magnet-feed-sync:
     container_name: magnet-feed-sync
     image: git.pkarpovich.space/pkarpovich/magnet-feed-sync:latest
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
       QBITTORRENT_URL: ${QBITTORRENT_URL}
       QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME}
