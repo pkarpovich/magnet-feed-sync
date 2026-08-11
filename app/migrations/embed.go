@@ -16,7 +16,6 @@ func source() migrate.EmbedFileSystemMigrationSource {
 	return migrate.EmbedFileSystemMigrationSource{FileSystem: files, Root: "."}
 }
 
-// Apply runs every pending migration and returns how many were applied.
 func Apply(db *sql.DB) (int, error) {
 	if err := adoptUnmanagedSchema(db); err != nil {
 		return 0, err
@@ -30,11 +29,9 @@ func Apply(db *sql.DB) (int, error) {
 	return applied, nil
 }
 
-// A database the app built for itself with `CREATE TABLE IF NOT EXISTS` — every checkout
-// that ran the server before this change — has the modern shape and no history at all.
-// Replaying the set there dies on `DROP COLUMN rss_url`, and because the baseline is
-// recorded first the failure is permanent. Record the ids the live schema already
-// reflects instead, so only the genuinely pending ones run.
+// A database the old server built for itself has the modern shape and no history, so
+// replaying the set there dies on `DROP COLUMN rss_url` — permanently, because the
+// baseline is recorded first. Record the ids the live schema already reflects instead.
 func adoptUnmanagedSchema(db *sql.DB) error {
 	bootstrapped, err := tableExists(db, "files")
 	if err != nil {
@@ -60,11 +57,9 @@ func adoptUnmanagedSchema(db *sql.DB) error {
 	return recordAdopted(db, skip)
 }
 
-// writes the adopted prefix in one transaction. `migrate.SkipMax` commits per record and
-// creates the table before the first one, so an interrupt anywhere in the middle — a
-// killed container, a deploy timeout — leaves history that is neither absent nor complete.
-// Adoption is then skipped for good and the leftovers replay into the very `DROP COLUMN
-// rss_url` failure this exists to avoid. All-or-nothing is the only safe shape.
+// one transaction, not `migrate.SkipMax`: that commits per record, so an interrupt leaves
+// history neither absent nor complete — adoption never fires again and the leftovers
+// replay into the `DROP COLUMN rss_url` failure this exists to avoid.
 func recordAdopted(db *sql.DB, count int) error {
 	all, err := source().FindMigrations()
 	if err != nil {
@@ -121,9 +116,8 @@ func hasMigrationHistory(db *sql.DB) (bool, error) {
 	return count > 0, nil
 }
 
-// how many migrations, counted from the oldest, the live schema already satisfies. The
-// app's own `CREATE TABLE` only ever grew, so what it produced is always a prefix of the
-// migration set — the loop stops at the first unsatisfied one rather than skipping past it.
+// how many migrations, from the oldest, the live schema already satisfies. The old
+// `CREATE TABLE` only ever grew, so its result is always a prefix of the set.
 func alreadyReflected(db *sql.DB) (int, error) {
 	columns, err := fileColumns(db)
 	if err != nil {
