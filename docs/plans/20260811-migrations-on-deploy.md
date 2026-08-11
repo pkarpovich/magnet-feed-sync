@@ -534,12 +534,12 @@ tests and production reach their schema by the same path.
 **Files:**
 - Modify: `.gitea/workflows/release.yml`
 
-- [ ] add `target: final` to the **existing** build-push step — without it the workflow builds whatever
+- [x] add `target: final` to the **existing** build-push step — without it the workflow builds whatever
       stage happens to be last, which is how the migrate image would end up published under the app's tags
-- [ ] add a second build-push step after it with `target: migrate-final` and the tags and cache refs given
+- [x] add a second build-push step after it with `target: migrate-final` and the tags and cache refs given
       verbatim in Technical Details
-- [ ] keep the updater webhook and the Telegram notification as the final two steps, in that order
-- [ ] confirm `grep -c 'id: version' .gitea/workflows/release.yml` prints 1 and
+- [x] keep the updater webhook and the Telegram notification as the final two steps, in that order
+- [x] confirm `grep -c 'id: version' .gitea/workflows/release.yml` prints 1 and
       `grep -c 'target:' .gitea/workflows/release.yml` prints 2
 
 ### Task 7: Verify the implementation
