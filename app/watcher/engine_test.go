@@ -456,6 +456,112 @@ func TestRunCycleFailedPublishKeepsTheDelta(t *testing.T) {
 	assert.Equal(t, "", store.statuses[w.ID])
 }
 
+func TestRunCyclePublishesThenMarksExactlyThePublishedItems(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	w.SeededAt = &seeded
+	store := newFakeStore(w)
+	require.NoError(t, store.MarkSeen(w.ID, []SearchResult{{Source: "jackett", ExternalID: "1", Title: ruRelease}}))
+
+	pub := &fakePublisher{}
+	messages := make(chan string, 1)
+	source := sourceWith("jackett", ruRelease, enRelease, "Bee Gees One Night Only 1998 WEBRip")
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{source},
+		Store:     store,
+		Publisher: pub,
+		Messages:  messages,
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	require.Len(t, pub.published, 1)
+	require.Len(t, pub.published[0].New, 1)
+	assert.Equal(t, enRelease, pub.published[0].New[0].Title)
+	assert.ElementsMatch(t, []string{ruRelease, enRelease}, store.seenTitles(w.ID))
+	assert.Equal(t, "", store.statuses[w.ID])
+}
+
+func TestRunCycleMirrorsPublishedHitsToTelegram(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	w.SeededAt = &seeded
+	store := newFakeStore(w)
+	messages := make(chan string, 1)
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     store,
+		Publisher: &fakePublisher{},
+		Messages:  messages,
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	select {
+	case msg := <-messages:
+		assert.Contains(t, msg, `one\-night\-only\-en`, "reserved chars must be escaped for MarkdownV2")
+		assert.Contains(t, msg, "jackett")
+		assert.Contains(t, msg, `One\.Night\.Only\.2026`)
+	default:
+		t.Fatal("no admin message was sent for a published hit")
+	}
+}
+
+func TestRunCycleSendsNoTelegramMessageWhenPublishFails(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	w.SeededAt = &seeded
+	messages := make(chan string, 1)
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     newFakeStore(w),
+		Publisher: &fakePublisher{err: errors.New("no responders")},
+		Messages:  messages,
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Empty(t, messages)
+}
+
+func TestRunCycleDoesNotBlockOnAnUnreadMessageChannel(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	w.SeededAt = &seeded
+	store := newFakeStore(w)
+	pub := &fakePublisher{}
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     store,
+		Publisher: pub,
+		// unbuffered and nobody is reading, exactly like main.go's channel with a stalled consumer
+		Messages: make(chan string),
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.RunCycle(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cycle blocked on the admin message channel")
+	}
+
+	require.Len(t, pub.published, 1)
+	assert.Equal(t, []string{enRelease}, store.seenTitles(w.ID))
+}
+
 func TestRunCycleSkipsAndDisablesAnExpiredWatch(t *testing.T) {
 	expires := time.Now().Add(-time.Minute)
 	w := acceptanceWatch()

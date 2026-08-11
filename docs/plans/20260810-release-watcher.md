@@ -1001,16 +1001,16 @@ adding a second one.
 - Modify: `app/watcher/engine.go`
 - Modify: `app/watcher/engine_test.go`
 
-- [ ] wire the publisher into `RunCycle` with the prescribed ordering: publish first, mark seen only after
+- [x] wire the publisher into `RunCycle` with the prescribed ordering: publish first, mark seen only after
       a successful publish, and leave the seen set untouched when publishing fails
-- [ ] send a short human-readable summary of each published hit to the admin message channel using a
+- [x] send a short human-readable summary of each published hit to the admin message channel using a
       **non-blocking** send that drops with a warning when the channel is not ready
-- [ ] record `last_run_at` and `last_status` for every cycle, clean or not
-- [ ] write a test asserting that a failing publish leaves the seen set unchanged and the item is
+- [x] record `last_run_at` and `last_status` for every cycle, clean or not
+- [x] write a test asserting that a failing publish leaves the seen set unchanged and the item is
       re-published on the next cycle
-- [ ] write a test asserting a successful publish marks exactly the published items as seen
-- [ ] write a test asserting the cycle completes when nobody is reading the message channel (no deadlock)
-- [ ] run tests — must pass before Task 7
+- [x] write a test asserting a successful publish marks exactly the published items as seen
+- [x] write a test asserting the cycle completes when nobody is reading the message channel (no deadlock)
+- [x] run tests — must pass before Task 7
 
 ### Task 7: Second cron job and composition-root wiring
 

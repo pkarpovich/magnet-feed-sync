@@ -9,11 +9,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	tbapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 const (
 	defaultSearchTimeout = 120 * time.Second
 	maxStatusLength      = 300
+	maxMessageItems      = 10
 )
 
 // RunOutcome is what one evaluation of a watch found: everything the sources returned after
@@ -47,6 +50,7 @@ type EngineDeps struct {
 	Sources   []SearchSource
 	Store     watchStore
 	Publisher publisher
+	Messages  chan<- string
 }
 
 // Engine is the single place a watch is evaluated, so the cron cycle and the reproduction
@@ -55,6 +59,7 @@ type Engine struct {
 	sources   []SearchSource
 	store     watchStore
 	publisher publisher
+	messages  chan<- string
 
 	mu      sync.Mutex
 	regexes map[string]*regexp.Regexp
@@ -70,6 +75,7 @@ func NewEngine(d EngineDeps) *Engine {
 		sources:   d.Sources,
 		store:     d.Store,
 		publisher: pub,
+		messages:  d.Messages,
 		regexes:   make(map[string]*regexp.Regexp),
 	}
 }
@@ -304,11 +310,58 @@ func (e *Engine) applyEffects(ctx context.Context, w Watch, o RunOutcome) string
 		return joinStatus(status, err.Error())
 	}
 
+	e.notify(ctx, w, o.New)
+
 	if err := e.store.MarkSeen(w.ID, o.New); err != nil {
 		return joinStatus(status, err.Error())
 	}
 
 	return status
+}
+
+// notify mirrors every published hit to the admin channel. An event task fires once and
+// completes, so a missed re-arm on the agent side makes the watch publish to nobody — and
+// that silence reads exactly like "no releases". The telegram copy makes it visible.
+//
+// The send is non-blocking on purpose: messagesForSend is unbuffered, so waiting on a
+// stalled reader would wedge the whole cron behind it.
+func (e *Engine) notify(ctx context.Context, w Watch, results []SearchResult) {
+	if len(results) == 0 {
+		return
+	}
+
+	select {
+	case e.messages <- watchHitMessage(w, results):
+	default:
+		slog.WarnContext(ctx, "dropped watch notification, admin channel is not ready",
+			"watch_id", w.ID, "new", len(results))
+	}
+}
+
+func watchHitMessage(w Watch, results []SearchResult) string {
+	lines := make([]string, 0, maxMessageItems+2)
+	lines = append(lines, fmt.Sprintf("🔔 Watch %s found %d new release(s):", w.ID, len(results)))
+
+	shown := results
+	if len(shown) > maxMessageItems {
+		shown = shown[:maxMessageItems]
+	}
+	for _, result := range shown {
+		lines = append(lines, fmt.Sprintf("%s: %s", result.Source, result.Title))
+	}
+	if len(results) > len(shown) {
+		lines = append(lines, fmt.Sprintf("and %d more", len(results)-len(shown)))
+	}
+
+	return escapeMarkdown(strings.Join(lines, "\n\n"))
+}
+
+// escapeMarkdown makes plain text safe for the MarkdownV2 parse mode every admin message is
+// sent with (see events.NewMarkdownMessage) — telegram rejects the whole message when a
+// reserved char such as '(' or '-' is left unescaped. '\' is doubled by hand first, because
+// tbapi.EscapeText leaves it alone.
+func escapeMarkdown(text string) string {
+	return tbapi.EscapeText(tbapi.ModeMarkdownV2, strings.ReplaceAll(text, "\\", "\\\\"))
 }
 
 // seed records the current world silently: a fresh watch must not wake the agent with
