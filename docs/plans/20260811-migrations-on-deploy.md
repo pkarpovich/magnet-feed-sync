@@ -496,17 +496,18 @@ tests and production reach their schema by the same path.
 **Files:**
 - Modify: `Dockerfile`
 
-- [ ] add the migrate build RUN to the existing `build` stage exactly as given in Technical Details,
+- [x] add the migrate build RUN to the existing `build` stage exactly as given in Technical Details,
       including `GOARCH=$TARGETARCH`, the cache and bind mounts, and `-ldflags="-s -w"`
-- [ ] add the `migrate-final` stage exactly as given, **placed before the existing `final` stage** so that
+- [x] add the `migrate-final` stage exactly as given, **placed before the existing `final` stage** so that
       `final` remains the last stage in the file
-- [ ] leave the `final` stage byte-identical — verify with `git diff -- Dockerfile` that no line inside the
+- [x] leave the `final` stage byte-identical — verify with `git diff -- Dockerfile` that no line inside the
       `FROM alpine:latest AS final` block changed
-- [ ] confirm `grep -c 'AS migrate-final' Dockerfile` prints 1
-- [ ] **if `docker info` succeeds:** `docker build --target migrate-final -t mfs-migrate:check .` then
+- [x] confirm `grep -c 'AS migrate-final' Dockerfile` prints 1
+- [x] **if `docker info` succeeds:** `docker build --target migrate-final -t mfs-migrate:check .` then
       `docker image inspect mfs-migrate:check --format '{{.Size}}'` prints a value below 20000000; also
       `docker build -t mfs-app:check .` (no `--target`) and confirm its entrypoint is `/bin/server`
-- [ ] **if `docker info` fails:** record "docker unavailable — skipped" in the progress log and treat the
+      (docker unavailable — skipped)
+- [x] **if `docker info` fails:** record "docker unavailable — skipped" in the progress log and treat the
       two Docker items as satisfied; the `git diff` and `grep` checks above are the binding ones
 
 ### Task 5: Compose wiring
