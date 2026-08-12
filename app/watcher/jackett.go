@@ -1,0 +1,267 @@
+package watcher
+
+import (
+	"context"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"magnet-feed-sync/app/tracker/providers"
+)
+
+const (
+	sourceJackett        = "jackett"
+	jackettSearchPath    = "/api/v2.0/indexers/all/results/torznab/api"
+	jackettSearchTimeout = 120 * time.Second
+)
+
+// a misbehaving indexer must not be able to drive the process to OOM
+const maxSearchResponseSize = 10 * 1024 * 1024
+
+type JackettOptions struct {
+	BaseURL   string
+	PublicURL string
+	APIKey    string
+}
+
+type jackettSource struct {
+	baseURL   string
+	publicURL *url.URL
+	apiKey    string
+	client    *http.Client
+}
+
+func NewJackettSource(o JackettOptions) *jackettSource {
+	public := o.PublicURL
+	if public == "" {
+		public = o.BaseURL
+	}
+
+	parsedPublic, err := url.Parse(normalizeJackettBase(public))
+	if err != nil {
+		parsedPublic = nil
+	}
+
+	return &jackettSource{
+		baseURL:   normalizeJackettBase(o.BaseURL),
+		publicURL: parsedPublic,
+		apiKey:    o.APIKey,
+		client:    &http.Client{Timeout: jackettSearchTimeout},
+	}
+}
+
+func normalizeJackettBase(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(raw, "/")
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	if idx := strings.Index(u.Path, "/api/v2.0/"); idx >= 0 {
+		u.Path = u.Path[:idx]
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+
+	return u.String()
+}
+
+func (s *jackettSource) Name() string {
+	return sourceJackett
+}
+
+func (s *jackettSource) Search(ctx context.Context, query string) ([]SearchResult, error) {
+	if s.baseURL == "" {
+		return nil, errors.New("search jackett: base url is not configured")
+	}
+	if s.apiKey == "" {
+		return nil, errors.New("search jackett: api key is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, jackettSearchTimeout)
+	defer cancel()
+
+	body, err := s.fetch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.parse(body, query)
+}
+
+func (s *jackettSource) fetch(ctx context.Context, query string) ([]byte, error) {
+	params := url.Values{}
+	params.Set("apikey", s.apiKey)
+	params.Set("t", "search")
+	params.Set("q", query)
+	endpoint := s.baseURL + jackettSearchPath + "?" + params.Encode()
+
+	// the *url.Error message embeds the endpoint, api key included, and reaches loki
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("search jackett: %w", providers.WithoutURL(err))
+	}
+
+	res, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("search jackett: %w", providers.WithoutURL(err))
+	}
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			slog.Warn("failed to close jackett response body", "error", err)
+		}
+	}()
+
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxSearchResponseSize))
+	if err != nil {
+		return nil, fmt.Errorf("search jackett: read response: %w", err)
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("search jackett: unexpected status %d", res.StatusCode)
+	}
+
+	return body, nil
+}
+
+func (s *jackettSource) parse(body []byte, query string) ([]SearchResult, error) {
+	var rss torznabRSS
+	if err := xml.Unmarshal(body, &rss); err != nil {
+		return nil, fmt.Errorf("search jackett: parse response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(rss.Channel.Items))
+	for _, item := range rss.Channel.Items {
+		pageURL := s.pageURL(item)
+		externalID := s.externalID(item, pageURL)
+		if externalID == "" {
+			slog.Warn("skipping jackett item without an identity", "title", item.Title, "query", query)
+			continue
+		}
+
+		results = append(results, SearchResult{
+			Source:      sourceJackett,
+			ExternalID:  externalID,
+			Title:       item.Title,
+			PageURL:     pageURL,
+			DownloadURL: s.downloadURL(item),
+			Query:       query,
+			Seeders:     s.seeders(item),
+			PublishedAt: s.publishedAt(item),
+		})
+	}
+
+	return results, nil
+}
+
+func (s *jackettSource) pageURL(item torznabItem) string {
+	if strings.HasPrefix(item.Comments, "http") {
+		return item.Comments
+	}
+	if strings.HasPrefix(item.GUID, "http") {
+		return item.GUID
+	}
+
+	return ""
+}
+
+// `t=` is the topic id on rutracker and nnm alike, so the bare parameter collides across
+// indexers and would bury the second release as already announced
+func (s *jackettSource) externalID(item torznabItem, pageURL string) string {
+	if pageURL != "" {
+		if u, err := url.Parse(pageURL); err == nil {
+			if t := u.Query().Get("t"); t != "" && u.Host != "" {
+				return u.Host + "/" + t
+			}
+		}
+	}
+
+	return item.GUID
+}
+
+func (s *jackettSource) downloadURL(item torznabItem) string {
+	raw := item.Link
+	if raw == "" {
+		raw = item.Enclosure.URL
+	}
+	if raw == "" || s.publicURL == nil || s.publicURL.Host == "" {
+		return raw
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.Scheme = s.publicURL.Scheme
+	u.Host = s.publicURL.Host
+
+	return u.String()
+}
+
+func (s *jackettSource) seeders(item torznabItem) int {
+	for _, attr := range item.Attrs {
+		if attr.Name != "seeders" {
+			continue
+		}
+		seeders, err := strconv.Atoi(strings.TrimSpace(attr.Value))
+		if err != nil {
+			return 0
+		}
+
+		return seeders
+	}
+
+	return 0
+}
+
+func (s *jackettSource) publishedAt(item torznabItem) time.Time {
+	if item.PubDate == "" {
+		return time.Time{}
+	}
+
+	parsed, err := time.Parse(time.RFC1123Z, item.PubDate)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC1123, item.PubDate)
+		if err != nil {
+			return time.Time{}
+		}
+	}
+
+	return parsed
+}
+
+type torznabRSS struct {
+	XMLName xml.Name       `xml:"rss"`
+	Channel torznabChannel `xml:"channel"`
+}
+
+type torznabChannel struct {
+	Items []torznabItem `xml:"item"`
+}
+
+type torznabItem struct {
+	Title     string           `xml:"title"`
+	GUID      string           `xml:"guid"`
+	Comments  string           `xml:"comments"`
+	Link      string           `xml:"link"`
+	PubDate   string           `xml:"pubDate"`
+	Enclosure torznabEnclosure `xml:"enclosure"`
+	// encoding/xml matches the namespace URL, not the prefix: `torznab:attr` matches nothing
+	Attrs []torznabAttr `xml:"http://torznab.com/schemas/2015/feed attr"`
+}
+
+type torznabEnclosure struct {
+	URL string `xml:"url,attr"`
+}
+
+type torznabAttr struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+}

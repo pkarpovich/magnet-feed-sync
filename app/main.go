@@ -24,6 +24,8 @@ import (
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
+	watchStore "magnet-feed-sync/app/watch-store"
+	"magnet-feed-sync/app/watcher"
 )
 
 func main() {
@@ -70,10 +72,13 @@ func run(cfg *config.Config) error {
 
 	directFetcher := providers.NewDirectFetcher()
 
+	var pageSolver watchSolver
+
 	rutrackerFetcher := providers.NewBlockedFetcher()
 	if cfg.FlaresolverrURL != "" {
 		solver := providers.NewSolverFetcher(cfg.FlaresolverrURL)
 		rutrackerFetcher = solver
+		pageSolver = solver
 		slog.Info("rutracker provider uses flaresolverr", "url", redactURL(cfg.FlaresolverrURL))
 
 		// run() cancels ctx before deferred functions run, so the session teardown
@@ -110,8 +115,24 @@ func run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create task store: %w", err)
 	}
+	watchRepo, err := watchStore.NewRepository(db)
+	if err != nil {
+		return fmt.Errorf("failed to create watch store: %w", err)
+	}
 
 	messagesForSend := make(chan string)
+
+	sources := watcherSources(cfg, pageSolver)
+
+	publisher := watcher.NewPublisher(watcher.PublisherOptions{URL: cfg.NatsURL})
+	defer publisher.Close()
+
+	engine := watcher.NewEngine(watcher.EngineDeps{
+		Sources:   sources.list,
+		Store:     watchRepo,
+		Publisher: publisher,
+		Messages:  messagesForSend,
+	})
 
 	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
 		Tracker:         t,
@@ -122,17 +143,20 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	})
 
-	s, err := schedular.NewService(cfg)
+	s, err := schedular.NewService()
 	if err != nil {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
 
-	schedulerErr := make(chan error, 1)
-	go func() {
-		if err := s.Start(func() { downloadTasksClient.CheckForUpdates(ctx) }); err != nil {
-			schedulerErr <- err
-		}
-	}()
+	// AddJob returns its error and Start is non-blocking, so registration stays on the
+	// startup path: a bad cron expression is a boot failure, not a background surprise
+	if err := s.AddJob("files", cfg.Cron, func() { downloadTasksClient.CheckForUpdates(ctx) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
+	}
+	if err := s.AddJob("watcher", cfg.WatchCron, func() { runWatchCycle(ctx, engine) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
+	}
+	s.Start()
 
 	tbAPI, err := tbapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
@@ -147,17 +171,27 @@ func run(cfg *config.Config) error {
 		MessagesForSend: messagesForSend,
 	}
 
-	httpClient := http.NewClient(&http.ClientCtx{
+	httpCtx := &http.ClientCtx{
 		Config:           cfg.Http,
 		Store:            store,
 		TaskCreator:      downloadTasksClient,
 		DownloadClient:   dClient,
 		Breaker:          breaker,
 		RunState:         store,
+		WatchStore:       watchRepo,
+		Engine:           engine,
 		StaleRunAfter:    staleRunAfter(cfg.Cron),
+		StaleWatchAfter:  staleRunAfter(cfg.WatchCron),
 		StartedAt:        time.Now(),
 		FailureThreshold: downloadTasks.FailureThreshold,
-	})
+	}
+	// a typed nil in the interface field would pass the handler's nil check and panic on the
+	// first magnet call, so a disabled ext.to source leaves the field unset
+	if sources.extto != nil {
+		httpCtx.Magnets = sources.extto
+	}
+
+	httpClient := http.NewClient(httpCtx)
 
 	go tgListener.SendMessagesForAdmins(ctx)
 	go httpClient.Start(ctx, done)
@@ -172,12 +206,7 @@ func run(cfg *config.Config) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	var runErr error
-	select {
-	case <-sigChan:
-	case err := <-schedulerErr:
-		runErr = fmt.Errorf("scheduler failed: %w", err)
-	}
+	<-sigChan
 
 	cancel()
 
@@ -188,7 +217,59 @@ func run(cfg *config.Config) error {
 		slog.Info("application shutdown timed out")
 	}
 
-	return runErr
+	return nil
+}
+
+// watchSolver is the consumer-side view of the flaresolverr client the ext.to source needs.
+// The concrete solver type is unexported, so the composition root names it through this.
+type watchSolver interface {
+	Solve(ctx context.Context, url string) (*providers.SolvedPage, error)
+}
+
+// watchSourceSet keeps the concrete ext.to source next to the source list: the search
+// endpoints resolve magnets through it, and that is a method the SearchSource interface
+// deliberately does not carry.
+type watchSourceSet struct {
+	list  []watcher.SearchSource
+	extto *watcher.ExttoSource
+}
+
+// watcherSources builds the sources every watch is run against. A missing Jackett api key or
+// an unconfigured solver disables that one source with a startup warning — the service must
+// degrade, not refuse to start.
+func watcherSources(cfg *config.Config, solver watchSolver) watchSourceSet {
+	var set watchSourceSet
+
+	if cfg.Jackett.URL != "" && cfg.Jackett.APIKey != "" {
+		set.list = append(set.list, watcher.NewJackettSource(watcher.JackettOptions{
+			BaseURL:   cfg.Jackett.URL,
+			PublicURL: cfg.Jackett.PublicURL,
+			APIKey:    cfg.Jackett.APIKey,
+		}))
+		slog.Info("jackett watch source enabled", "url", redactURL(cfg.Jackett.URL))
+	} else {
+		slog.Warn("jackett watch source is disabled",
+			"url_configured", cfg.Jackett.URL != "", "api_key_configured", cfg.Jackett.APIKey != "")
+	}
+
+	if solver == nil {
+		slog.Warn("extto watch source is disabled, flaresolverr url is not configured")
+
+		return set
+	}
+
+	set.extto = watcher.NewExttoSource(watcher.ExttoOptions{Solver: solver})
+	set.list = append(set.list, set.extto)
+
+	return set
+}
+
+// runWatchCycle keeps a failed cycle off the fatal path: only a registration error may stop
+// the service, while a cycle error is logged and retried on the next tick.
+func runWatchCycle(ctx context.Context, engine *watcher.Engine) {
+	if err := engine.RunCycle(ctx); err != nil {
+		slog.ErrorContext(ctx, "watcher cycle failed", "error", err)
+	}
 }
 
 const (

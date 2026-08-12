@@ -1,43 +1,43 @@
 package schedular
 
 import (
-	"github.com/go-co-op/gocron/v2"
+	"fmt"
 	"log/slog"
-	"magnet-feed-sync/app/config"
+
+	"github.com/go-co-op/gocron/v2"
 )
 
 type Service struct {
 	scheduler gocron.Scheduler
-	cfg       *config.Config
 }
 
-func NewService(cfg *config.Config) (*Service, error) {
+func NewService() (*Service, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
 	}
 
-	return &Service{
-		scheduler: s,
-		cfg:       cfg,
-	}, nil
+	return &Service{scheduler: s}, nil
 }
 
-func (s *Service) Start(cb func()) error {
+// singleton mode: both sweeps can outlive their interval, and an overlapping watcher run
+// would publish twice and race the shared ext.to cookie
+func (s *Service) AddJob(name, cronExpr string, cb func()) error {
 	j, err := s.scheduler.NewJob(
-		gocron.CronJob(s.cfg.Cron, false),
+		gocron.CronJob(cronExpr, false),
 		gocron.NewTask(cb),
-		// a sweep can outlive its interval (a cold flaresolverr solve is ~74s per task);
-		// overlapping runs would double-probe the breaker and race on the run state
+		gocron.WithName(name),
 		gocron.WithSingletonMode(gocron.LimitModeReschedule),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("create job %s: %w", name, err)
 	}
 
-	slog.Info("job created", "job_id", j.ID())
-
-	s.scheduler.Start()
+	slog.Info("job created", "job", name, "job_id", j.ID())
 
 	return nil
+}
+
+func (s *Service) Start() {
+	s.scheduler.Start()
 }

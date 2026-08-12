@@ -28,8 +28,24 @@ type solverRequest struct {
 }
 
 type solverSolution struct {
-	Status   int    `json:"status"`
-	Response string `json:"response"`
+	Status    int            `json:"status"`
+	Response  string         `json:"response"`
+	Cookies   []solverCookie `json:"cookies"`
+	UserAgent string         `json:"userAgent"`
+}
+
+// net/http.Cookie cannot be unmarshalled directly: Expires is a time.Time, the solver sends unix
+type solverCookie struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain"`
+	Path   string `json:"path"`
+}
+
+type SolvedPage struct {
+	Body      []byte
+	Cookies   []*http.Cookie
+	UserAgent string
 }
 
 type solverResponse struct {
@@ -81,6 +97,28 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	}
 	defer f.release()
 
+	page, err := f.request(ctx, pageURL)
+	if err != nil {
+		return nil, err
+	}
+
+	if bytes.Contains(page.Body, []byte(challengeMarker)) {
+		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+	}
+
+	return page.Body, nil
+}
+
+func (f *solverFetcher) Solve(ctx context.Context, pageURL string) (*SolvedPage, error) {
+	if err := f.acquire(ctx); err != nil {
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("wait for solver: %w", err)}
+	}
+	defer f.release()
+
+	return f.request(ctx, pageURL)
+}
+
+func (f *solverFetcher) request(ctx context.Context, pageURL string) (*SolvedPage, error) {
 	if err := f.ensureSession(ctx); err != nil {
 		return nil, err
 	}
@@ -117,12 +155,20 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 		}
 	}
 
-	body := []byte(resp.Solution.Response)
-	if bytes.Contains(body, []byte(challengeMarker)) {
-		return nil, &ProviderError{Kind: KindBlocked, Err: errors.New("cloudflare challenge")}
+	return &SolvedPage{
+		Body:      []byte(resp.Solution.Response),
+		Cookies:   solvedCookies(resp.Solution.Cookies),
+		UserAgent: resp.Solution.UserAgent,
+	}, nil
+}
+
+func solvedCookies(cookies []solverCookie) []*http.Cookie {
+	out := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		out = append(out, &http.Cookie{Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path})
 	}
 
-	return body, nil
+	return out
 }
 
 // Close destroys the FlareSolverr session so the remote browser is released. It gives
@@ -166,9 +212,10 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("encode solver request: %w", err)}
 	}
 
+	// the *url.Error message embeds the solver endpoint, userinfo included, and reaches loki
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.baseURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build solver request: %w", err)}
+		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build solver request: %w", WithoutURL(err))}
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -176,7 +223,7 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 	// nothing about the tracker, so they must stay transient and leave the breaker closed
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("call solver: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("call solver: %w", WithoutURL(err))}
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {

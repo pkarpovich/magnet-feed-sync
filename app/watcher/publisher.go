@@ -1,0 +1,198 @@
+package watcher
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+const (
+	subjectPrefix      = "tuclaw.releases.found."
+	maxPayloadItems    = 10
+	maxPayloadBytes    = 8192
+	natsPublishTimeout = 10 * time.Second
+	natsDialTimeout    = 5 * time.Second
+)
+
+var errPublisherDisabled = errors.New("publish: nats is not configured")
+
+type natsMessage struct {
+	Subject string
+	MsgID   string
+	Payload []byte
+}
+
+type jetStream interface {
+	publish(ctx context.Context, m natsMessage) error
+}
+
+type PublisherOptions struct {
+	URL string
+}
+
+type Publisher struct {
+	stream jetStream
+	conn   *nats.Conn
+	now    func() time.Time
+}
+
+var _ publisher = (*Publisher)(nil)
+
+// a failed connect is never fatal: the container would crash-loop on every NATS restart
+func NewPublisher(o PublisherOptions) *Publisher {
+	p := &Publisher{now: time.Now}
+
+	if o.URL == "" {
+		slog.Warn("NATS_URL is empty, watch notifications are disabled")
+
+		return p
+	}
+
+	conn, err := nats.Connect(o.URL,
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.Timeout(natsDialTimeout),
+	)
+	if err != nil {
+		slog.Error("failed to connect to nats, watch notifications are disabled", "error", err)
+
+		return p
+	}
+	p.conn = conn
+
+	js, err := jetstream.New(conn)
+	if err != nil {
+		slog.Error("failed to create jetstream context, watch notifications are disabled", "error", err)
+
+		return p
+	}
+	p.stream = jetStreamAdapter{js: js}
+
+	return p
+}
+
+func (p *Publisher) Close() {
+	if p.conn != nil {
+		p.conn.Close()
+	}
+}
+
+func (p *Publisher) Publish(ctx context.Context, w Watch, o RunOutcome) error {
+	if p.stream == nil {
+		return errPublisherDisabled
+	}
+
+	body, err := p.payload(w, o)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, natsPublishTimeout)
+	defer cancel()
+
+	msg := natsMessage{
+		Subject: subjectPrefix + w.ID,
+		MsgID:   messageID(w, o.New),
+		Payload: body,
+	}
+
+	if err := p.stream.publish(ctx, msg); err != nil {
+		return fmt.Errorf("publish watch %s: %w", w.ID, err)
+	}
+
+	return nil
+}
+
+type payload struct {
+	WatchID  string        `json:"watch_id"`
+	WatchRev int           `json:"watch_rev"`
+	FoundAt  string        `json:"found_at"`
+	Total    int           `json:"total"`
+	Matched  int           `json:"matched"`
+	NewTotal int           `json:"new_total"`
+	New      []payloadItem `json:"new"`
+}
+
+type payloadItem struct {
+	Source string `json:"source"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+}
+
+// identity and delta only: search parameters here would drift from what the engine evaluated
+func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
+	items := make([]payloadItem, 0, len(o.New))
+	for _, result := range o.New {
+		items = append(items, payloadItem{
+			Source: result.Source,
+			ID:     result.ExternalID,
+			Title:  result.Title,
+		})
+	}
+	if len(items) > maxPayloadItems {
+		items = items[:maxPayloadItems]
+	}
+
+	body := payload{
+		WatchID:  w.ID,
+		WatchRev: w.Rev,
+		FoundAt:  p.now().UTC().Format(time.RFC3339),
+		Total:    len(o.Raw),
+		Matched:  len(o.Matched),
+		NewTotal: len(o.New),
+		New:      items,
+	}
+
+	for {
+		marshalled, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal payload of watch %s: %w", w.ID, err)
+		}
+
+		if len(marshalled) <= maxPayloadBytes {
+			return marshalled, nil
+		}
+
+		if len(body.New) == 0 {
+			return nil, fmt.Errorf("payload of watch %s exceeds %d bytes", w.ID, maxPayloadBytes)
+		}
+
+		body.New = body.New[:len(body.New)-1]
+	}
+}
+
+// digests the whole sorted key set, not its maximum: a retry that added a lower-sorting item
+// would otherwise be acked as a duplicate and that item marked seen without ever being sent
+func messageID(w Watch, results []SearchResult) string {
+	keys := make([]string, 0, len(results))
+	for _, result := range results {
+		keys = append(keys, result.SeenKey())
+	}
+	sort.Strings(keys)
+
+	digest := sha256.Sum256([]byte(strings.Join(keys, "\n")))
+
+	return w.ID + ":" + hex.EncodeToString(digest[:])
+}
+
+type jetStreamAdapter struct {
+	js jetstream.JetStream
+}
+
+func (a jetStreamAdapter) publish(ctx context.Context, m natsMessage) error {
+	if _, err := a.js.Publish(ctx, m.Subject, m.Payload, jetstream.WithMsgID(m.MsgID)); err != nil {
+		return err
+	}
+
+	return nil
+}

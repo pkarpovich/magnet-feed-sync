@@ -60,10 +60,44 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   `GET /api/health` reports real state (`ok` / `degraded` / `unhealthy` + 503), derived from per-task
   failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string. Both
   halves of the run state matter: a stale `last_run_at` is `unhealthy`, `last_run_ok = false` is
-  `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything)
-- **schedular/**: Cron job scheduling via gocron, in singleton mode — a sweep can outrun its interval,
-  and overlapping runs would double-probe the breaker and race on the run state
+  `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything).
+  It also serves the watch CRUD routes (`/api/watches`), the two search entry points
+  (`POST /api/watches/{id}/search` reproduces a stored watch, `POST /api/search` is ad-hoc), and the
+  `watches` object on `/api/health`
+- **schedular/**: Cron job scheduling via gocron. `AddJob(name, cronExpr, cb)` registers one job and
+  `Start()` runs them all; there are two — the files sweep on `CRON` and the watcher sweep on
+  `WATCH_CRON`. Every job runs in singleton mode — a sweep can outrun its interval, and overlapping runs
+  would double-probe the breaker, race the run state, and (for the watcher) publish twice while racing
+  the shared ext.to cookie/token state
 - **task-store/**: SQLite repository pattern for task persistence
+- **watcher/**: the release watcher — `SearchSource` implementations for Jackett (torznab search over all
+  indexers) and ext.to (Cloudflare-fenced HTML plus a signed magnet POST), the `Engine` that merges,
+  filters and diffs, and the JetStream publisher. `Evaluate` is side-effect free and is what both the
+  cron and the search endpoints call, so the two cannot drift; `RunCycle` applies the effects.
+  The Jackett external id is `<page host>/<t>`, not the bare `t=`: the torznab endpoint aggregates every
+  indexer at once and `t` is the topic id on RuTracker and NNM alike, so an un-namespaced id collides
+  across them and buries the second release as already announced. Both sources wrap their transport
+  errors in `providers.WithoutURL` and cap the body at `maxSearchResponseSize` — the jackett endpoint
+  carries the api key in its query string, the solver endpoint (reached through ext.to's cookie refresh)
+  carries whatever userinfo `FLARESOLVERR_URL` holds, and a `*url.Error` reaches `last_status`, the
+  unauthenticated search responses and loki verbatim. A search that fails stops that source's remaining
+  queries — a source that just refused us will refuse them too, and on ext.to each attempt holds the
+  single solver slot for up to 180s — but what its earlier queries returned is kept, since discarding it
+  would withhold a release that was genuinely found. ext.to's page tokens are stored together with the
+  session (cookie + User-Agent) that fetched them, and the signed magnet POST is sent under *that* session:
+  the cookie is process-wide state the cron and the http handlers share, so a refresh landing between the
+  search and the POST would otherwise pair this query's page/csrf tokens with a different session, which
+  ext.to refuses
+- **watch-store/**: SQLite repository for `watches` / `watch_seen`, verifying its schema the same way
+  `task-store` does — table existence first, then the expected **columns** (`requiredColumns`), because a
+  table check passes a table whose columns a half-applied migration never added. `Disable` / `Revive` are
+  a pair: nothing else writes `disabled_at`, and without `Revive` a soft-deleted id could never be
+  re-created, since the row still exists and a create is a conflict. `Revive` clears the run lifecycle
+  (`seeded_at`, `last_run_at`, `last_status`) along with the soft delete — a re-create is a *create*, so it
+  seeds silently again (`Update` names the request's columns only and would leave a re-created watch
+  publishing whatever its new queries or wider regex match) and does not report the dead watch's status as
+  its own on `/api/health`. `watch_seen` is deliberately untouched, which is what keeps that seed from
+  being a replay
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
@@ -100,8 +134,14 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   and `ErrSchemaNotInitialised`
 - `database.Client.DB()` exposes the raw `*sql.DB`. It exists only so `migrations.Apply` can run on the
   connection the client opened; everything else goes through the retry-wrapped `Exec` / `Query` / `QueryRow`
-- Two tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`) and
-  `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep)
+- Tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`),
+  `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep), `watches` (saved
+  hunts: queries, sources, both regexes, `rev`, `seeded_at`, run state) and `watch_seen` (one row per
+  announced release, primary key `(watch_id, source, external_id)`)
+- `watch_seen` is a **table, not a JSON column** on `watches`: dedup is a point insert with
+  conflict-ignore instead of read-modify-write, growth is bounded per release rather than per watch, and
+  the `INSERT OR REPLACE` column-reset trap is structurally impossible. `watch-store` uses explicit
+  `UPDATE`s for the same reason
 - The schema is declared **once**, in the migrations. `NewRepository` creates nothing; it *verifies* and
   returns `ErrSchemaNotInitialised` when the check fails. The check is on **columns**, not table existence —
   the incident this replaced had `files` present and the three failure columns missing, which a table check
@@ -183,6 +223,36 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
 - Every admin message goes out with `ParseMode: MarkdownV2` (`events.NewMarkdownMessage`), and Telegram
   rejects a whole message over one unescaped reserved char. Plain-text alerts are escaped with
   `escapeMarkdown`; `MetadataToMsg` wraps its JSON in a code fence and escapes only backticks/backslashes
+- Watcher cycle ordering — a watch whose `seeded_at` is NULL records everything it matched **without
+  publishing** (a fresh watch would otherwise wake the agent with releases it already has); the matched
+  rows are written either way, but `seeded_at` itself is set only when nothing *failed*, because seeding
+  from a partially failed run buries whatever the dead source never reported. An
+  `unavailableSourceError` — a source the watch names that this process does not run, no api key or no
+  solver — is deliberately **not** a failure for that rule (`hasSearchFailure`): it never comes back on
+  its own, and holding the seed for it leaves the watch unseeded, and therefore permanently silent, for
+  the whole life of the deployment. It is still reported in `last_status`.
+  Afterwards the order is **publish first, mark seen second** — a crash between the two costs one
+  duplicate wake, the reverse loses the release permanently and silently. A non-empty `Errs` never
+  suppresses a publish; it lands in `last_status`, which is what health and the operator read. Items
+  filtered out by the regexes are never written to `watch_seen`, so loosening a regex resurfaces them
+- The watcher never downloads anything. It notifies; the agent verifies (indexers only index the title,
+  and the title lies) and decides. Every published hit is also mirrored to the admin Telegram channel
+  with a **non-blocking** send — `messagesForSend` is unbuffered, so a blocking send would wedge the cron
+  behind a stalled reader, and the mirror is what makes a missed re-arm on the agent side visible
+- NATS publishing is JetStream with a message id of `<watch_id>:<sha256 of the sorted SeenKeys of New>`, so
+  a duplicate publish from the publish-then-mark ordering is collapsed by the stream's dedup window. The id
+  digests the **whole** set, not its maximum: after an acked publish whose `MarkSeen` failed, the retry
+  carries the same releases plus whatever the cycle found since, and a maximum-only key is unchanged by an
+  added item that sorts lower — JetStream would ack the retry as a duplicate while the cycle marks the
+  whole set seen, losing that item permanently and silently. The
+  `TUCLAW` stream is owned by the tuclaw daemon — this service connects and publishes only, never creates
+  or reconfigures a stream. A failed connect is logged and the service starts anyway (a fatal connect
+  would crash-loop the container on every NATS restart); while disconnected `Publish` errors, so nothing
+  is marked seen and the release is retried next cycle. An empty `NATS_URL` disables publishing the same
+  way — a would-be publish is an error, never a silent success
+- Degrade, not die — a missing `JACKETT_API_KEY` or an unconfigured FlareSolverr disables that source with
+  a startup warning instead of failing the boot; a watcher cycle error is logged and the sweep continues,
+  and only a job *registration* error is fatal
 - Retry mechanism for database operations
 - Structured logging via `log/slog` with global default logger (`slog.SetDefault`) — use `slog.ErrorContext(ctx, ...)` in HTTP handlers for trace_id correlation
 - OpenTelemetry tracing via global `otel.Tracer()` provider with noop fallback when endpoint not configured
@@ -203,8 +273,12 @@ Environment variables (see compose.yaml):
 - `HTTP_PORT`: Web server port (default 8080)
 - `DRY_MODE`: Testing mode flag
 - `CRON`: update-sweep schedule, standard 5-field expression (default `0 * * * *`). `main.go` also derives the health staleness window from it (twice the longest gap among the next `staleRunSamples` firings, so a clustered schedule such as `0 9,10 * * *` is not judged by its 1h gap; `staleRunFallback` 2h + a WARN log when it cannot be parsed)
+- `WATCH_CRON`: watcher-sweep schedule, standard 5-field expression (default `20 * * * *` — offset from the files job at `0 * * * *` so the two never start together). `main.go` derives the watch health staleness window from it with the same `staleRunAfter` helper the files sweep uses (2× the longest gap among the next firings; 2h fallback + WARN when unparseable)
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
-- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` and the service still starts
+- `JACKETT_API_KEY`: Jackett api key for the watcher's torznab search. `JACKETT_URL` carries no key, so without this the Jackett watch source is disabled with a startup warning
+- `JACKETT_PUBLIC_URL`: public Jackett base used to rewrite the scheme+host of a search result's download link (defaults to `JACKETT_URL`). Jackett emits its own *internal* base there, which would resolve nowhere at download time
+- `NATS_URL`: JetStream endpoint for watch notifications, e.g. `nats://nats:4222`. **Empty disables publishing** (warned once at startup); the service still starts and still runs cycles
+- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` **and the ext.to watch source is disabled** (it refreshes its cookie through the same solver); the service still starts
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP HTTP endpoint for trace export (optional, tracing disabled when empty)
 - `LOKI_URL`: Grafana Loki base URL for centralized logging (optional, logs go to stdout only when empty). The code appends `/loki/api/v1/push` automatically

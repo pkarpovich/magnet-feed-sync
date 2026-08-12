@@ -25,7 +25,9 @@ type HttpConfig struct {
 }
 
 type JackettConfig struct {
-	URL string `env:"JACKETT_URL"`
+	URL       string `env:"JACKETT_URL"`
+	APIKey    string `env:"JACKETT_API_KEY"`
+	PublicURL string `env:"JACKETT_PUBLIC_URL"`
 }
 
 type Config struct {
@@ -39,7 +41,11 @@ type Config struct {
 	OtelEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	LokiURL         string `env:"LOKI_URL"`
 	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
+	NatsURL         string `env:"NATS_URL"`
+	WatchCron       string `env:"WATCH_CRON"`
 }
+
+const defaultWatchCron = "20 * * * *"
 
 func Init() (*Config, error) {
 	err := godotenv.Load()
@@ -51,6 +57,14 @@ func Init() (*Config, error) {
 	err = cleanenv.ReadEnv(&cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if cfg.Jackett.PublicURL == "" {
+		cfg.Jackett.PublicURL = cfg.Jackett.URL
+	}
+
+	if cfg.WatchCron == "" {
+		cfg.WatchCron = defaultWatchCron
 	}
 
 	return &cfg, nil

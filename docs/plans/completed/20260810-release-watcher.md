@@ -694,6 +694,11 @@ Payload shape (identity and delta only — **never the search parameters**, see 
   publish-then-mark ordering is collapsed by the stream's dedup window instead of waking the agent twice.
   The rule must be order-independent and deterministic — "the newest item" would not be, since
   `PublishedAt` is the zero time for any ext.to row whose `Age` cell carries no `title` attribute.
+  **Superseded during review:** the key is the sha256 of the *sorted set* of `SeenKey()`s, which is
+  order-independent and deterministic just the same. The maximum alone is not enough: when a publish is
+  acked but `MarkSeen` fails, the retry carries the same releases plus whatever the cycle found since, and
+  an added item that sorts below the maximum leaves the id unchanged — JetStream acks the retry as a
+  duplicate while the cycle marks the whole set seen, which loses that release permanently and silently.
 - **Connect must not be fatal.** Dial with retry-on-failed-connect and unlimited reconnects and a short
   dial timeout, log a failed initial connect and **start anyway**; while disconnected, `Publish` returns an
   error, so nothing is marked seen and the release is retried next cycle. A hard failure here would put the
@@ -835,36 +840,36 @@ adding a second one.
 - Create: `app/watch-store/repository.go`
 - Create: `app/watch-store/repository_test.go`
 
-- [ ] declare `Watch` in `app/watcher/source.go` exactly as in Technical Details — it is declared here,
+- [x] declare `Watch` in `app/watcher/source.go` exactly as in Technical Details — it is declared here,
       before the repository, because the repository returns it and the mandated import direction is
       watch-store → watcher (Task 2 adds `SearchResult` and `SearchSource` to the same file)
-- [ ] add the migration creating `watches` and `watch_seen` exactly as specified in Technical Details
+- [x] add the migration creating `watches` and `watch_seen` exactly as specified in Technical Details
       (`-- +migrate Up` / `-- +migrate Down` sections, matching the existing migration files) **into
       `app/migrations/`** — that directory is an embedded Go package, so the new file is picked up by the
       `//go:embed *.sql` in `app/migrations/embed.go` and applied by the migrate container automatically
-- [ ] create `app/watch-store/repository.go` with a `Repository` holding the existing `*database.Client`.
+- [x] create `app/watch-store/repository.go` with a `Repository` holding the existing `*database.Client`.
       **It must NOT create tables.** Migrations are the single source of schema; a constructor that also
       declared it is exactly the duplication that shipped a broken production schema. Instead mirror the
       current `task-store`: verify the schema and return a sentinel error when it is absent
-- [ ] implement the methods with the signatures in "Watch repository contract", plus `Create`, `GetAll`,
+- [x] implement the methods with the signatures in "Watch repository contract", plus `Create`, `GetAll`,
       `Update` (bumps `rev`), `Disable` and `MarkSeeded`
-- [ ] key `SeenKeys` on `source + "\x00" + externalID` — a bare-id set collides across sources
-- [ ] make `WatchesForCycle` filter on `disabled_at IS NULL` **only**, so expired rows still reach
+- [x] key `SeenKeys` on `source + "\x00" + externalID` — a bare-id set collides across sources
+- [x] make `WatchesForCycle` filter on `disabled_at IS NULL` **only**, so expired rows still reach
       `RunCycle` and can be disabled there
-- [ ] use **explicit `UPDATE` statements only** — `INSERT OR REPLACE` is forbidden here (see Context)
-- [ ] parse/serialize `queries` as a JSON array and `sources` as comma-separated text at the repository
+- [x] use **explicit `UPDATE` statements only** — `INSERT OR REPLACE` is forbidden here (see Context)
+- [x] parse/serialize `queries` as a JSON array and `sources` as comma-separated text at the repository
       boundary, so callers work with typed slices
-- [ ] add the DB test harness for this package, mirroring `newTestRepo` in
+- [x] add the DB test harness for this package, mirroring `newTestRepo` in
       `app/task-store/repository_test.go`: `t.Chdir(t.TempDir())`, `database.NewClient`, then
       **`migrations.Apply(db.DB())`** — tests reach their schema by the same path production does, so a
       migration that forgets a column fails the suite instead of only failing on deploy
-- [ ] write a test asserting the constructor returns the sentinel error on a database with no watch tables
-- [ ] write tests for round-tripping a watch, `rev` incrementing on `Update`, `WatchesForCycle` excluding
+- [x] write a test asserting the constructor returns the sentinel error on a database with no watch tables
+- [x] write tests for round-tripping a watch, `rev` incrementing on `Update`, `WatchesForCycle` excluding
       disabled rows but **including** expired ones, and `MarkSeen` being idempotent on a repeated insert
-- [ ] write a test asserting two results with the same external id from different sources are two distinct
+- [x] write a test asserting two results with the same external id from different sources are two distinct
       `SeenKeys` entries
-- [ ] write tests for error cases: unknown id, malformed stored JSON in `queries`
-- [ ] run tests — must pass before Task 2
+- [x] write tests for error cases: unknown id, malformed stored JSON in `queries`
+- [x] run tests — must pass before Task 2
 
 ### Task 2: SearchSource interface and the Jackett source
 
@@ -875,24 +880,26 @@ adding a second one.
 - Modify: `app/config/config.go`
 - Modify: `app/config/config_test.go`
 
-- [ ] add `SearchResult` (including `Query`) and `SearchSource` to `app/watcher/source.go` exactly as
+- [x] add `SearchResult` (including `Query`) and `SearchSource` to `app/watcher/source.go` exactly as
       prescribed in Technical Details (`Watch` is already there from Task 1)
-- [ ] add `JACKETT_API_KEY` and `JACKETT_PUBLIC_URL` to `JackettConfig` (the latter defaulting to the
+- [x] add `JACKETT_API_KEY` and `JACKETT_PUBLIC_URL` to `JackettConfig` (the latter defaulting to the
       existing URL when empty) and extend the config test
-- [ ] implement the Jackett source using the exact request template in Technical Details
+- [x] implement the Jackett source using the exact request template in Technical Details
       (`jackettSearchPath`, `apikey`, `t=search`, `q`; no `cat`, no `limit`), map **all** `<item>`
       elements, apply the field mapping rules, and set `Query` on every result
-- [ ] extend the torznab structs to parse `torznab:attr` with the **namespace-URL** struct tag so
+- [x] extend the torznab structs to parse `torznab:attr` with the **namespace-URL** struct tag so
       `Seeders` is populated (see the trap in Technical Details)
-- [ ] rewrite the scheme+host of `DownloadURL` to the configured public base, preserving path and query
-- [ ] treat a non-2xx response or unparseable XML as an error, never as an empty result set
-- [ ] write tests against an `httptest` server with a torznab fixture containing several items, asserting
+- [x] rewrite the scheme+host of `DownloadURL` to the configured public base, preserving path and query
+- [x] treat a non-2xx response or unparseable XML as an error, never as an empty result set
+- [x] write tests against an `httptest` server with a torznab fixture containing several items, asserting
       the count, `PageURL` from `<comments>`, seeders from `torznab:attr`, and the external id from `t=`
-- [ ] write a test whose `httptest` handler asserts on `r.URL.Path` and the full query string, so a wrong
+- [x] write a test whose `httptest` handler asserts on `r.URL.Path` and the full query string, so a wrong
       endpoint or a missing `t=search` fails the test rather than only production
-- [ ] write a test asserting the internal host in `<link>` is rewritten to the public base
-- [ ] write tests for error cases: non-2xx, malformed XML, item with neither `<comments>` nor `<guid>`
-- [ ] run tests — must pass before Task 3
+- [x] write a test asserting the internal host in `<link>` is rewritten to the public base
+- [x] write tests for error cases: non-2xx, malformed XML, item with neither `<comments>` nor `<guid>`
+      (the last is skipped with a warn rather than failing the whole search, so one broken row cannot
+      kill a 226-result page)
+- [x] run tests — must pass before Task 3
 
 ### Task 3: ext.to source — search and signed magnet
 
@@ -902,31 +909,31 @@ adding a second one.
 - Create: `app/watcher/testdata/extto_browse.html`
 - Modify: the solver implementation under `app/tracker/providers/` (adds the `Solve` method)
 
-- [ ] add `Cookies` and `UserAgent` to the existing `solverSolution` struct — it currently parses only
+- [x] add `Cookies` and `UserAgent` to the existing `solverSolution` struct — it currently parses only
       `Status` and `Response`, so FlareSolverr's cookie and UA are discarded and `Solve` would have
       nothing to return
-- [ ] add `SolvedPage` and the `Solve(ctx, url) (*SolvedPage, error)` method to the existing solver in
+- [x] add `SolvedPage` and the `Solve(ctx, url) (*SolvedPage, error)` method to the existing solver in
       `app/tracker/providers` as specified in "Solver seam"; leave `Fetcher` and all its callers unchanged
-- [ ] implement the ext.to source holding cookie, User-Agent and both page tokens behind a mutex, calling
+- [x] implement the ext.to source holding cookie, User-Agent and both page tokens behind a mutex, calling
       the consumer-side solver interface only on cookie refresh and using its own `*http.Client` otherwise
-- [ ] implement `Search` as the `/browse/` GET in the wire-protocol section, sending the exact headers
+- [x] implement `Search` as the `/browse/` GET in the wire-protocol section, sending the exact headers
       listed there, parsing rows with the given field mapping, setting `Query`, and caching both tokens
-- [ ] detect a challenge by the two body markers, refresh the cookie once and retry the GET; a second
+- [x] detect a challenge by the two body markers, refresh the cookie once and retry the GET; a second
       challenge is an error and a signed POST is never auto-retried
-- [ ] implement `Magnet` with the signed POST: hex sha256 of `id|ts|searchPageToken`, `sessid` = the csrf
+- [x] implement `Magnet` with the signed POST: hex sha256 of `id|ts|searchPageToken`, `sessid` = the csrf
       token, `hash` and `name` present but empty; performing a search first when no fresh tokens are held,
       and treating a false/missing `success` or an empty `url` as an error
-- [ ] create `testdata/extto_browse.html` by copying the verbatim row markup from the wire-protocol
+- [x] create `testdata/extto_browse.html` by copying the verbatim row markup from the wire-protocol
       section, repeated three times with different ids, titles and seed counts — **do not invent markup**
-- [ ] write tests for row parsing against the fixture: id from `data-id`, title with highlight `<span>`
+- [x] write tests for row parsing against the fixture: id from `data-id`, title with highlight `<span>`
       tags stripped, page URL, seeders matched by the `Seeds` label, `PublishedAt` from the `Age` cell's
       `title` attribute
-- [ ] write a test asserting the signature against the golden vector in the wire-protocol section
+- [x] write a test asserting the signature against the golden vector in the wire-protocol section
       (assert the literal 64-hex string; do not recompute the expectation) and that the form carries all
       six fields
-- [ ] write tests for error cases: challenge twice, HTML with no matching rows, magnet response with
+- [x] write tests for error cases: challenge twice, HTML with no matching rows, magnet response with
       `success:false`, solver unconfigured
-- [ ] run tests — must pass before Task 4
+- [x] run tests — must pass before Task 4
 
 ### Task 4: Watcher engine — merge, filter, delta
 
@@ -934,33 +941,33 @@ adding a second one.
 - Create: `app/watcher/engine.go`
 - Create: `app/watcher/engine_test.go`
 
-- [ ] implement `Engine` holding the source set and the watch store, with `Evaluate` and `RunCycle` as
+- [x] implement `Engine` holding the source set and the watch store, with `Evaluate` and `RunCycle` as
       prescribed in Technical Details
-- [ ] declare the consumer-side `publisher` interface here and ship a **no-op/fake implementation only**;
+- [x] declare the consumer-side `publisher` interface here and ship a **no-op/fake implementation only**;
       the real JetStream publisher is Task 5 and its wiring is Task 6
-- [ ] implement `Evaluate`: sequential per source and per query with per-source timeouts, error collection
+- [x] implement `Evaluate`: sequential per source and per query with per-source timeouts, error collection
       that never aborts the remaining sources, dedup by `(Source, ExternalID)`, regex filtering through the
       compiled-regex cache keyed on the regex source string, and the `New` diff against the seen set
-- [ ] make `Evaluate` skip the seen-set lookup entirely for an ad-hoc watch (empty `ID`) and report every
+- [x] make `Evaluate` skip the seen-set lookup entirely for an ad-hoc watch (empty `ID`) and report every
       matched item as new
-- [ ] implement `RunCycle` covering **effects 1 and 5 only** — the silent seed keyed on `seeded_at`, the
+- [x] implement `RunCycle` covering **effects 1 and 5 only** — the silent seed keyed on `seeded_at`, the
       "only seed when `Errs` is empty" rule, the skip-and-disable of expired watches, and the always-write
       of `last_run_at`/`last_status`. **Publish-then-mark (effects 2-4) is Task 6**; here `RunCycle` calls
       the fake publisher so the ordering can be tested, and Task 6 swaps in the real one
-- [ ] add a fake `SearchSource` in the test file whose per-call results and errors are scripted
-- [ ] write tests for the acceptance scenario using the **Acceptance watch** block verbatim: first cycle
+- [x] add a fake `SearchSource` in the test file whose per-call results and errors are scripted
+- [x] write tests for the acceptance scenario using the **Acceptance watch** block verbatim: first cycle
       seeds without publishing; a subsequent cycle with one new EN-shaped title yields exactly one item in
       `New`; a repeat cycle yields none
-- [ ] write tests for filtering using the literal must-match and must-exclude titles from the Acceptance
+- [x] write tests for filtering using the literal must-match and must-exclude titles from the Acceptance
       watch block, plus a case with both regexes empty passing everything
-- [ ] write tests for error cases: a failing source contributes an error and does not clear the delta of
+- [x] write tests for error cases: a failing source contributes an error and does not clear the delta of
       the other source; a first cycle with a source error does **not** set `seeded_at`; a clean first cycle
       that matches nothing **does** set it
-- [ ] write a test asserting filtered-out items are absent from the seen set afterwards
-- [ ] write a test asserting an ad-hoc watch with an empty `ID` reports all matched items as new
-- [ ] write a test asserting an expired watch is skipped without being searched and ends with `disabled_at`
+- [x] write a test asserting filtered-out items are absent from the seen set afterwards
+- [x] write a test asserting an ad-hoc watch with an empty `ID` reports all matched items as new
+- [x] write a test asserting an expired watch is skipped without being searched and ends with `disabled_at`
       set
-- [ ] run tests — must pass before Task 5
+- [x] run tests — must pass before Task 5
 
 ### Task 5: NATS publisher
 
@@ -971,27 +978,27 @@ adding a second one.
 - Modify: `app/config/config_test.go`
 - Modify: `go.mod`, `go.sum`
 
-- [ ] add the NATS client dependency (`go get github.com/nats-io/nats.go`) and add `NATS_URL` to config
-- [ ] implement the concrete JetStream publisher satisfying the `publisher` interface from Task 4, with
+- [x] add the NATS client dependency (`go get github.com/nats-io/nats.go`) and add `NATS_URL` to config
+- [x] implement the concrete JetStream publisher satisfying the `publisher` interface from Task 4, with
       payload construction living inside the publisher
-- [ ] connect with retry-on-failed-connect, unlimited reconnects and a short dial timeout; a failed initial
+- [x] connect with retry-on-failed-connect, unlimited reconnects and a short dial timeout; a failed initial
       connect is logged and the service starts anyway (see Technical Details — a fatal connect would
       crash-loop the container whenever NATS restarts)
-- [ ] build the payload exactly as prescribed, capping `new` at `maxPayloadItems` and re-trimming after
+- [x] build the payload exactly as prescribed, capping `new` at `maxPayloadItems` and re-trimming after
       marshalling to respect `maxPayloadBytes`, always reporting `total` (post-dedup, pre-filter) and
       `matched`, with `found_at` as RFC3339 UTC
-- [ ] publish to `subjectPrefix + watch.ID` under `natsPublishTimeout`, set the message id to
+- [x] publish to `subjectPrefix + watch.ID` under `natsPublishTimeout`, set the message id to
       `<watch_id>:<newest external id>` for stream-side dedup, and require the ack before returning
       success; **never create or reconfigure a stream**
-- [ ] make an empty `NATS_URL` disable publishing: warn once at startup and return an error from the
+- [x] make an empty `NATS_URL` disable publishing: warn once at startup and return an error from the
       publish call so the engine does not mark anything seen
-- [ ] write tests for payload construction: field values, item cap, byte cap trimming, `total`/`matched`
+- [x] write tests for payload construction: field values, item cap, byte cap trimming, `total`/`matched`
       preserved when items are dropped, `found_at` format
-- [ ] write tests for subject and message-id construction from the watch id
-- [ ] write tests for error cases: publish failure surfaces as an error; disabled publisher returns an
+- [x] write tests for subject and message-id construction from the watch id
+- [x] write tests for error cases: publish failure surfaces as an error; disabled publisher returns an
       error rather than silently succeeding; a construction-time connect failure does not return a fatal
       error from the constructor
-- [ ] run tests — must pass before Task 6
+- [x] run tests — must pass before Task 6
 
 ### Task 6: Effects wiring — publish-then-mark and the Telegram mirror
 
@@ -999,16 +1006,16 @@ adding a second one.
 - Modify: `app/watcher/engine.go`
 - Modify: `app/watcher/engine_test.go`
 
-- [ ] wire the publisher into `RunCycle` with the prescribed ordering: publish first, mark seen only after
+- [x] wire the publisher into `RunCycle` with the prescribed ordering: publish first, mark seen only after
       a successful publish, and leave the seen set untouched when publishing fails
-- [ ] send a short human-readable summary of each published hit to the admin message channel using a
+- [x] send a short human-readable summary of each published hit to the admin message channel using a
       **non-blocking** send that drops with a warning when the channel is not ready
-- [ ] record `last_run_at` and `last_status` for every cycle, clean or not
-- [ ] write a test asserting that a failing publish leaves the seen set unchanged and the item is
+- [x] record `last_run_at` and `last_status` for every cycle, clean or not
+- [x] write a test asserting that a failing publish leaves the seen set unchanged and the item is
       re-published on the next cycle
-- [ ] write a test asserting a successful publish marks exactly the published items as seen
-- [ ] write a test asserting the cycle completes when nobody is reading the message channel (no deadlock)
-- [ ] run tests — must pass before Task 7
+- [x] write a test asserting a successful publish marks exactly the published items as seen
+- [x] write a test asserting the cycle completes when nobody is reading the message channel (no deadlock)
+- [x] run tests — must pass before Task 7
 
 ### Task 7: Second cron job and composition-root wiring
 
@@ -1019,27 +1026,27 @@ adding a second one.
 - Modify: `app/config/config.go`
 - Modify: `app/config/config_test.go`
 
-- [ ] split the scheduler API into `AddJob(name, cronExpr string, cb func()) error` and `Start()`, so more
+- [x] split the scheduler API into `AddJob(name, cronExpr string, cb func()) error` and `Start()`, so more
       than one job can be registered; the existing files job becomes `AddJob("files", cfg.Cron, ...)`
-- [ ] register **every** job with gocron's singleton mode. This is correctness-critical and non-obvious: a
+- [x] register **every** job with gocron's singleton mode. This is correctness-critical and non-obvious: a
       watcher cycle is sequential over sources and queries with 120s/180s per-source timeouts, so it can
       easily outlast its tick — without singleton mode gocron starts an overlapping cycle that publishes
       twice and races the shared ext.to cookie/token state
-- [ ] add `WATCH_CRON` to config with `defaultWatchCron` as its default
-- [ ] construct the watch store, the two sources, the publisher and the engine in `main.go` and register
+- [x] add `WATCH_CRON` to config with `defaultWatchCron` as its default
+- [x] construct the watch store, the two sources, the publisher and the engine in `main.go` and register
       the watcher cycle as the second job, injecting concrete types into consumer-side interfaces
-- [ ] pass the existing `messagesForSend` channel into the engine (a field on its options struct) —
+- [x] pass the existing `messagesForSend` channel into the engine (a field on its options struct) —
       without it the Telegram mirror from Task 6 never fires, and a nil channel would make the
       non-blocking send succeed silently in tests while doing nothing in production
-- [ ] make the watcher callback log a cycle error and continue — only a **registration** error is fatal
+- [x] make the watcher callback log a cycle error and continue — only a **registration** error is fatal
       and goes to the existing scheduler error channel
-- [ ] make a missing Jackett api key or a missing solver disable the corresponding source with a startup
+- [x] make a missing Jackett api key or a missing solver disable the corresponding source with a startup
       warning instead of failing to start — the service must degrade, not die
-- [ ] write tests for registering two jobs, for singleton mode being set, and for an invalid cron
+- [x] write tests for registering two jobs, for singleton mode being set, and for an invalid cron
       expression surfacing as a registration error
-- [ ] write tests for the degraded-construction paths and name them exactly `TestDegradedNoJackettKey`,
+- [x] write tests for the degraded-construction paths and name them exactly `TestDegradedNoJackettKey`,
       `TestDegradedNoSolver`, `TestDegradedNoNATS` so Task 11 can require them by name
-- [ ] run tests — must pass before Task 8
+- [x] run tests — must pass before Task 8
 
 ### Task 8: Watch CRUD endpoints
 
@@ -1047,20 +1054,22 @@ adding a second one.
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
+- ➕ Modify: `app/watcher/source.go` (adds `KnownSources()`, so the http validation and the engine cannot
+  disagree on which source names exist)
 
-- [ ] add the watch store to the existing `ClientCtx` options struct as a new field (do **not** add
+- [x] add the watch store to the existing `ClientCtx` options struct as a new field (do **not** add
       positional parameters) and pass it from `main.go`
-- [ ] add the five CRUD routes from the API table, defining a consumer-side watch-store interface in the
+- [x] add the five CRUD routes from the API table, defining a consumer-side watch-store interface in the
       http package with only the methods these handlers call
-- [ ] validate on create and update: id against `watchIDPattern`, at least one non-empty query, both
+- [x] validate on create and update: id against `watchIDPattern`, at least one non-empty query, both
       regexes compiling, known source names only; return 400 with a specific message per failure and 409
       on a duplicate id
-- [ ] make `GET /api/watches/{id}` include the watch's seen rows so a silent seed is inspectable
-- [ ] make `DELETE` a soft delete setting `disabled_at`
-- [ ] write tests for create success and for each validation failure (bad id charset, no queries, invalid
+- [x] make `GET /api/watches/{id}` include the watch's seen rows so a silent seed is inspectable
+- [x] make `DELETE` a soft delete setting `disabled_at`
+- [x] write tests for create success and for each validation failure (bad id charset, no queries, invalid
       regex, unknown source, duplicate id)
-- [ ] write tests for list, get-with-seen-rows, update bumping `rev`, and soft delete
-- [ ] run tests — must pass before Task 9
+- [x] write tests for list, get-with-seen-rows, update bumping `rev`, and soft delete
+- [x] run tests — must pass before Task 9
 
 ### Task 9: Search endpoints
 
@@ -1068,32 +1077,34 @@ adding a second one.
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
+- ➕ Modify: `app/watcher/source.go` (exports `SourceExtto`, so the http magnet branch and the ext.to
+  source cannot disagree on the name that selects it)
 
-- [ ] add the engine **and** the `magnetResolver` seam to the existing `ClientCtx` options struct as new
+- [x] add the engine **and** the `magnetResolver` seam to the existing `ClientCtx` options struct as new
       fields and pass both from `main.go` (the resolver is the concrete ext.to source, nil when disabled)
-- [ ] add `POST /api/watches/{id}/search` calling the engine's `Evaluate` with the stored watch, returning
+- [x] add `POST /api/watches/{id}/search` calling the engine's `Evaluate` with the stored watch, returning
       the full results with each item flagged as new or already-seen
-- [ ] emit each response item with exactly these keys: `source`, `id`, `title`, `page_url`,
+- [x] emit each response item with exactly these keys: `source`, `id`, `title`, `page_url`,
       `download_url`, `magnet`, `magnet_error`, `seeders`, `published_at`, `new`
-- [ ] resolve the magnet for ext.to items sequentially via `Magnet(ctx, item.ExternalID, item.Query)`,
+- [x] resolve the magnet for ext.to items sequentially via `Magnet(ctx, item.ExternalID, item.Query)`,
       reusing the warm token cache; on failure set `magnet_error` on that item, leave `magnet` empty, and
       do not fail the request
-- [ ] support `?raw=true` returning the pre-filter set
-- [ ] add `POST /api/search` taking queries, sources and optional regexes from the request body, building
+- [x] support `?raw=true` returning the pre-filter set
+- [x] add `POST /api/search` taking queries, sources and optional regexes from the request body, building
       an ad-hoc `Watch` with an empty `ID` and sharing the same `Evaluate` path
-- [ ] return 404 for an unknown or disabled watch id
-- [ ] write tests asserting the watch-search endpoint applies the stored regexes (the junk-heavy title set
+- [x] return 404 for an unknown or disabled watch id
+- [x] write tests asserting the watch-search endpoint applies the stored regexes (the junk-heavy title set
       from the Acceptance watch block collapses to the matching item) and that `?raw=true` returns the
       unfiltered set
-- [ ] write the equality test that backs the "cannot drift" claim, named `TestCronAndEndpointAgree`:
+- [x] write the equality test that backs the "cannot drift" claim, named `TestCronAndEndpointAgree`:
       pre-seed the watch so `RunCycle` takes the publish branch, run it with the fake publisher and capture
       `o.Matched` from the `Publish` call, then POST the endpoint against the same scripted source; project
       both sides to `[]struct{Source, ID, Title string}` in slice order and compare with `reflect.DeepEqual`
       (the endpoint returns JSON objects of a different shape, so the projection is the comparison)
-- [ ] write tests asserting items already in the seen set are flagged as not new
-- [ ] write tests for error cases: unknown watch id, a source error surfacing in the response, a per-item
+- [x] write tests asserting items already in the seen set are flagged as not new
+- [x] write tests for error cases: unknown watch id, a source error surfacing in the response, a per-item
       magnet failure not failing the request
-- [ ] run tests — must pass before Task 10
+- [x] run tests — must pass before Task 10
 
 ### Task 10: Health reporting for watches
 
@@ -1102,42 +1113,52 @@ adding a second one.
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] add the `watches` object to the health payload: active count, oldest `last_run_at` (excluding NULLs),
+- [x] add the `watches` object to the health payload: active count, oldest `last_run_at` (excluding NULLs),
       count of watches with a non-empty `last_status`
-- [ ] compute the staleness threshold **in `main.go`** with `cron.ParseStandard(cfg.WatchCron)` and
+- [x] compute the staleness threshold **in `main.go`** with `cron.ParseStandard(cfg.WatchCron)` and
       `2 * (sched.Next(sched.Next(now)) - sched.Next(now))`, falling back to `staleWatchFallback` with a
-      WARN log on a parse error, and pass it in through `ClientCtx`
-- [ ] contribute `degraded` for a stale cycle, for any active watch with a non-empty `last_status`, and for
+      WARN log on a parse error, and pass it in through `ClientCtx` — done by reusing the existing
+      `staleRunAfter(cronExpr)` helper (same `cron.ParseStandard`, same 2× gap rule generalised over
+      `staleRunSamples` firings, same 2h fallback + WARN as `staleWatchFallback`) rather than adding a
+      second copy of it
+- [x] contribute `degraded` for a stale cycle, for any active watch with a non-empty `last_status`, and for
       an active watch with `last_run_at IS NULL` once the process has been up longer than the threshold
-- [ ] ensure the watcher check can only move `ok` to `degraded` and never lowers an existing
+- [x] ensure the watcher check can only move `ok` to `degraded` and never lowers an existing
       `degraded`/`unhealthy`
-- [ ] make zero watches report `ok`
-- [ ] write tests for: `ok` with no watches, `ok` with fresh watches, `degraded` on a stale cycle,
+- [x] make zero watches report `ok`
+- [x] write tests for: `ok` with no watches, `ok` with fresh watches, `degraded` on a stale cycle,
       `degraded` on a watch carrying an error status
-- [ ] write a test asserting a freshly created watch with `last_run_at IS NULL` reports `ok` before the
+- [x] write a test asserting a freshly created watch with `last_run_at IS NULL` reports `ok` before the
       threshold elapses and `degraded` after
-- [ ] write a test asserting the watcher check leaves an `unhealthy` status untouched
-- [ ] run tests — must pass before Task 11
+- [x] write a test asserting the watcher check leaves an `unhealthy` status untouched
+- [x] run tests — must pass before Task 11
 
 ### Task 11: Verify acceptance criteria
 
-- [ ] verify the acceptance scenario at test level against the **Acceptance watch** block verbatim: it
+- [x] verify the acceptance scenario at test level against the **Acceptance watch** block verbatim: it
       seeds silently on its first cycle, publishes exactly once when a title from the must-match list
       appears, publishes nothing on a repeat, leaves every title from the must-exclude list unpublished,
-      and leaves `last_status` non-empty when a source fails
-- [ ] confirm no test reaches the network:
+      and leaves `last_status` non-empty when a source fails — added `TestAcceptanceScenario` in
+      `app/watcher/engine_test.go`, which runs the watch with **both** queries and **both** sources rather
+      than the trimmed watches the per-effect tests use
+- [x] confirm no test reaches the network:
       `grep -rnE 'http\.Get|http\.Post|net\.Dial|http\.DefaultClient' app/ --include="*_test.go"` prints
-      nothing outside `httptest` usage
-- [ ] confirm the degraded-startup paths actually ran, by name — `go test ./app/... -run
+      nothing outside `httptest` usage — the grep matches nothing at all
+- [x] confirm the degraded-startup paths actually ran, by name — `go test ./app/... -run
       'TestDegradedNoJackettKey|TestDegradedNoSolver|TestDegradedNoNATS' -v` reports three `=== RUN` lines
       and passes. A bare `-run Degraded` would exit 0 even if the tests were never written, so require the
       count. Do **not** attempt to boot the binary: `main.go` also needs Telegram, DB and qBittorrent
-      settings unrelated to this plan
-- [ ] run the deferred export-discipline check described in Code-Quality Rules over every exported
-      top-level type/func/var added by Tasks 1-10
-- [ ] run the full suite: `go test ./... -race`
-- [ ] run `go vet ./...` and `go build ./...`
-- [ ] confirm `gofmt -s -l .` prints nothing
+      settings unrelated to this plan — three `=== RUN` lines, all PASS
+- [x] run the deferred export-discipline check described in Code-Quality Rules over every exported
+      top-level type/func/var added by Tasks 1-10 — one failure found and fixed: `watcher.JackettSource`
+      was exported with no out-of-package caller and is now `jackettSource` (matching the lowercase
+      `exttoSource` that Technical Details prescribes); `NewJackettSource` stays exported for `main.go`.
+      `watcher.ExttoSource` is named as a field in `main.go` and `watch_store.Repository` is prescribed
+      verbatim in the "Watch repository contract" block, so both stay. Note `app/watch-store` is imported
+      as `watchStore` in `main.go`, so the check must match `watch_?[Ss]tore\.`
+- [x] run the full suite: `go test ./... -race`
+- [x] run `go vet ./...` and `go build ./...`
+- [x] confirm `gofmt -s -l .` prints nothing
 
 ### Task 12: Update documentation and close out
 
@@ -1146,15 +1167,15 @@ adding a second one.
 - Modify: `README.md`
 - Modify: `compose.yaml`
 
-- [ ] update `CLAUDE.md`: the new `watcher` and `watch-store` packages, the second cron job, the new env
+- [x] update `CLAUDE.md`: the new `watcher` and `watch-store` packages, the second cron job, the new env
       vars, and the watch endpoints
-- [ ] update `README.md`: add the watch endpoints to its HTTP API section and
+- [x] update `README.md`: add the watch endpoints to its HTTP API section and
       `JACKETT_API_KEY` / `JACKETT_PUBLIC_URL` / `NATS_URL` / `WATCH_CRON` to its configuration section
-- [ ] document the idempotency non-guarantee in `README.md` in these words: an id present in a NATS
+- [x] document the idempotency non-guarantee in `README.md` in these words: an id present in a NATS
       payload's `new` list but absent from `POST /api/watches/{id}/search` means the release was taken
       down, and is not an error
-- [ ] update `compose.yaml` with the new environment variables
-- [ ] move this plan to `docs/plans/completed/`
+- [x] update `compose.yaml` with the new environment variables
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
