@@ -426,3 +426,36 @@ func TestExttoNilSourceReportsInsteadOfPanicking(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "flaresolverr is not configured")
 }
+
+// the browse page issues its own PHPSESSID and the tokens on it belong to that session; a
+// magnet posted under the solver's original cookie is refused with "Invalid session"
+func TestExttoMagnetCarriesTheSessionCookieThePageSet(t *testing.T) {
+	var magnetCookie string
+	source, _ := exttoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == exttoMagnetPath {
+			magnetCookie = r.Header.Get("Cookie")
+			_, _ = w.Write([]byte(`{"success":true,"url":"magnet:?xt=urn:btih:abc"}`))
+
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{Name: "PHPSESSID", Value: "rotated-by-the-page"})
+		_, _ = w.Write([]byte(browseFixture(t)))
+	})
+
+	magnet, err := source.Magnet(context.Background(), "20151803", "Dune")
+	require.NoError(t, err)
+	assert.Equal(t, "magnet:?xt=urn:btih:abc", magnet)
+
+	assert.Contains(t, magnetCookie, "PHPSESSID=rotated-by-the-page")
+	assert.Contains(t, magnetCookie, "cf_clearance=abc", "the solver's clearance must survive the merge")
+}
+
+func TestExttoSessionMergeReplacesSameNamedCookie(t *testing.T) {
+	session := exttoSession{cookie: "cf_clearance=abc; PHPSESSID=old", userAgent: "ua"}
+
+	merged := session.merge([]*http.Cookie{{Name: "PHPSESSID", Value: "new"}})
+
+	assert.Equal(t, "cf_clearance=abc; PHPSESSID=new", merged.cookie)
+	assert.Equal(t, "ua", merged.userAgent)
+}
