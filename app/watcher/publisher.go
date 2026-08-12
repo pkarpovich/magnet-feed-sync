@@ -2,10 +2,14 @@ package watcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -187,19 +191,26 @@ func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
 	}
 }
 
-// messageID is the stream-side dedup key for the deliberate publish-then-mark ordering. The
-// lexicographic maximum is order-independent and always present, unlike the newest item:
-// PublishedAt is the zero time for any ext.to row whose Age cell carries no title attribute.
+// messageID is the stream-side dedup key for the deliberate publish-then-mark ordering. It
+// digests the *whole* sorted key set, so it is order-independent and always present — unlike
+// "the newest item", since PublishedAt is the zero time for any ext.to row whose Age cell
+// carries no title attribute.
+//
+// The set matters, not just its maximum: when a publish is acked but MarkSeen fails, the
+// retry re-publishes the same releases plus whatever the cycle found since. A key derived
+// from the maximum alone is unchanged by an added item that sorts lower, so JetStream would
+// ack the retry as a duplicate while the cycle marks the whole set seen — losing that item
+// permanently and silently, which is exactly what publish-then-mark exists to prevent.
 func messageID(w Watch, results []SearchResult) string {
-	var key string
+	keys := make([]string, 0, len(results))
 	for _, result := range results {
-		candidate := result.Source + ":" + result.ExternalID
-		if candidate > key {
-			key = candidate
-		}
+		keys = append(keys, result.SeenKey())
 	}
+	sort.Strings(keys)
 
-	return w.ID + ":" + key
+	digest := sha256.Sum256([]byte(strings.Join(keys, "\n")))
+
+	return w.ID + ":" + hex.EncodeToString(digest[:])
 }
 
 type jetStreamAdapter struct {

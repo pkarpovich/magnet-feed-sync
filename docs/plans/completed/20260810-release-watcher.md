@@ -694,6 +694,11 @@ Payload shape (identity and delta only — **never the search parameters**, see 
   publish-then-mark ordering is collapsed by the stream's dedup window instead of waking the agent twice.
   The rule must be order-independent and deterministic — "the newest item" would not be, since
   `PublishedAt` is the zero time for any ext.to row whose `Age` cell carries no `title` attribute.
+  **Superseded during review:** the key is the sha256 of the *sorted set* of `SeenKey()`s, which is
+  order-independent and deterministic just the same. The maximum alone is not enough: when a publish is
+  acked but `MarkSeen` fails, the retry carries the same releases plus whatever the cycle found since, and
+  an added item that sorts below the maximum leaves the id unchanged — JetStream acks the retry as a
+  duplicate while the cycle marks the whole set seen, which loses that release permanently and silently.
 - **Connect must not be fatal.** Dial with retry-on-failed-connect and unlimited reconnects and a short
   dial timeout, log a failed initial connect and **start anyway**; while disconnected, `Publish` returns an
   error, so nothing is marked seen and the release is retried next cycle. A hard failure here would put the

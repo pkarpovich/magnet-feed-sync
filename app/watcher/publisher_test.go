@@ -2,8 +2,11 @@ package watcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -164,7 +167,40 @@ func TestPublisherSubjectAndMessageID(t *testing.T) {
 	require.NoError(t, p.Publish(context.Background(), Watch{ID: "one-night-only-en"}, o))
 
 	assert.Equal(t, "tuclaw.releases.found.one-night-only-en", stream.messages[0].Subject)
-	assert.Equal(t, "one-night-only-en:jackett:42", stream.messages[0].MsgID)
+	assert.Equal(t, "one-night-only-en:"+expectedMessageDigest(o.New), stream.messages[0].MsgID)
+}
+
+// expectedMessageDigest recomputes the id the way the payload contract states it — over the
+// sorted set of seen keys — rather than by calling messageID, which would assert the
+// implementation against itself.
+func expectedMessageDigest(results []SearchResult) string {
+	keys := make([]string, 0, len(results))
+	for _, result := range results {
+		keys = append(keys, result.SeenKey())
+	}
+	sort.Strings(keys)
+
+	digest := sha256.Sum256([]byte(strings.Join(keys, "\n")))
+
+	return hex.EncodeToString(digest[:])
+}
+
+// a retry of the publish-then-mark ordering that picked up an extra release must not collapse
+// into the previous message id, however that release sorts: JetStream would ack it as a
+// duplicate and the cycle would mark it seen without anyone ever being told.
+func TestPublisherMessageIDCoversEveryNewItem(t *testing.T) {
+	first := &fakeStream{}
+	second := &fakeStream{}
+
+	published := []SearchResult{{Source: sourceJackett, ExternalID: "42"}}
+	// "1883913" sorts below "42", which is what a maximum-only key could not see
+	retried := []SearchResult{published[0], {Source: sourceJackett, ExternalID: "1883913"}}
+
+	w := Watch{ID: "w"}
+	require.NoError(t, testPublisher(first).Publish(context.Background(), w, RunOutcome{New: published}))
+	require.NoError(t, testPublisher(second).Publish(context.Background(), w, RunOutcome{New: retried}))
+
+	assert.NotEqual(t, first.messages[0].MsgID, second.messages[0].MsgID)
 }
 
 func TestPublisherMessageIDIsOrderIndependent(t *testing.T) {

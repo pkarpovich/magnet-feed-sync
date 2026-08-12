@@ -54,12 +54,15 @@ type ExttoSource struct {
 	solver  solver
 	client  *http.Client
 
-	mu         sync.Mutex
-	cookie     string
-	userAgent  string
-	pageToken  string
-	csrfToken  string
-	tokenQuery string
+	mu        sync.Mutex
+	cookie    string
+	userAgent string
+	pageToken string
+	csrfToken string
+	// tokenQuery and tokenSession say which query's page the tokens came from and under which
+	// cookie it was fetched — the signed magnet POST has to reproduce both
+	tokenQuery   string
+	tokenSession exttoSession
 }
 
 // NewExttoSource builds an ext.to source. It never dials anything at construction time.
@@ -88,12 +91,12 @@ func (s *ExttoSource) Search(ctx context.Context, query string) ([]SearchResult,
 	ctx, cancel := context.WithTimeout(ctx, exttoSearchTimeout)
 	defer cancel()
 
-	body, err := s.browse(ctx, query)
+	body, session, err := s.browse(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.parse(body, query)
+	return s.parse(body, query, session)
 }
 
 // Magnet resolves the magnet link of one row. query is required because the signature is
@@ -124,7 +127,10 @@ func (s *ExttoSource) Magnet(ctx context.Context, torrentID, query string) (stri
 	form.Set("hmac", s.sign(torrentID, ts, tokens.page))
 	form.Set("sessid", tokens.csrf)
 
-	body, err := s.postForm(ctx, s.baseURL+exttoMagnetPath, form)
+	// the POST is sent under the very cookie the tokens were minted for, not under whatever
+	// the shared state holds now: a concurrent refresh between the two would otherwise pair
+	// this query's page and csrf tokens with a different session, which ext.to refuses
+	body, err := s.postForm(ctx, s.baseURL+exttoMagnetPath, form, tokens.session)
 	if err != nil {
 		return "", err
 	}
@@ -149,36 +155,38 @@ func (s *ExttoSource) sign(torrentID, ts, pageToken string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func (s *ExttoSource) browse(ctx context.Context, query string) ([]byte, error) {
+// browse returns the search page together with the session it was fetched under, so the
+// tokens that page carries can be stored next to the cookie they belong to.
+func (s *ExttoSource) browse(ctx context.Context, query string) ([]byte, exttoSession, error) {
 	if s.session().cookie == "" {
 		if err := s.refreshCookie(ctx); err != nil {
-			return nil, err
+			return nil, exttoSession{}, err
 		}
 	}
 
 	endpoint := s.searchURL(query)
-	body, err := s.get(ctx, endpoint)
+	body, session, err := s.get(ctx, endpoint)
 	if err != nil {
-		return nil, err
+		return nil, exttoSession{}, err
 	}
 	if !isExttoChallenge(body) {
-		return body, nil
+		return body, session, nil
 	}
 
 	// only a GET may be replayed after a refresh; a signed POST carries tokens of its own
 	// and has to be re-issued by its caller
 	if err := s.refreshCookie(ctx); err != nil {
-		return nil, err
+		return nil, exttoSession{}, err
 	}
-	body, err = s.get(ctx, endpoint)
+	body, session, err = s.get(ctx, endpoint)
 	if err != nil {
-		return nil, err
+		return nil, exttoSession{}, err
 	}
 	if isExttoChallenge(body) {
-		return nil, errors.New("search extto: cloudflare challenge survived a cookie refresh")
+		return nil, exttoSession{}, errors.New("search extto: cloudflare challenge survived a cookie refresh")
 	}
 
-	return body, nil
+	return body, session, nil
 }
 
 func (s *ExttoSource) searchURL(query string) string {
@@ -190,28 +198,30 @@ func (s *ExttoSource) searchURL(query string) string {
 	return s.baseURL + exttoBrowsePath + "?" + params.Encode()
 }
 
-func (s *ExttoSource) get(ctx context.Context, endpoint string) ([]byte, error) {
-	req, err := s.newRequest(ctx, http.MethodGet, endpoint, nil)
+func (s *ExttoSource) get(ctx context.Context, endpoint string) ([]byte, exttoSession, error) {
+	session := s.session()
+
+	req, err := s.newRequest(ctx, http.MethodGet, endpoint, nil, session)
 	if err != nil {
-		return nil, err
+		return nil, exttoSession{}, err
 	}
 
 	body, status, err := s.do(req)
 	if err != nil {
-		return nil, err
+		return nil, exttoSession{}, err
 	}
 
 	// a challenge answers with a status of its own, and the caller handles it by refreshing
 	// the cookie, so it must reach them as a body rather than as a status error
 	if (status < 200 || status >= 300) && !isExttoChallenge(body) {
-		return nil, fmt.Errorf("search extto: unexpected status %d", status)
+		return nil, exttoSession{}, fmt.Errorf("search extto: unexpected status %d", status)
 	}
 
-	return body, nil
+	return body, session, nil
 }
 
-func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, error) {
-	req, err := s.newRequest(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Values, session exttoSession) ([]byte, error) {
+	req, err := s.newRequest(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()), session)
 	if err != nil {
 		return nil, err
 	}
@@ -230,13 +240,17 @@ func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Va
 	return body, nil
 }
 
-func (s *ExttoSource) newRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
+// newRequest takes the session rather than reading it, so a caller that has to stay on one
+// session for several steps — the signed magnet POST — cannot be handed a refreshed one
+// halfway through.
+func (s *ExttoSource) newRequest(
+	ctx context.Context, method, endpoint string, body io.Reader, session exttoSession,
+) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("build extto request: %w", err)
 	}
 
-	session := s.session()
 	req.Header.Set("User-Agent", session.userAgent)
 	req.Header.Set("Cookie", session.cookie)
 	req.Header.Set("Accept", "*/*")
@@ -305,9 +319,13 @@ func (s *ExttoSource) session() exttoSession {
 	return exttoSession{cookie: s.cookie, userAgent: s.userAgent}
 }
 
+// exttoTokens carries the session the tokens were minted under alongside them: the hmac is
+// built from the page token and the csrf token goes out as sessid, and ext.to checks both
+// against the cookie that fetched the page.
 type exttoTokens struct {
-	page string
-	csrf string
+	page    string
+	csrf    string
+	session exttoSession
 }
 
 // tokensFor returns the tokens of query's search page, running the search itself when the
@@ -348,10 +366,10 @@ func (s *ExttoSource) heldTokens(query string) (exttoTokens, bool, bool) {
 		return exttoTokens{}, false, searched
 	}
 
-	return exttoTokens{page: s.pageToken, csrf: s.csrfToken}, true, true
+	return exttoTokens{page: s.pageToken, csrf: s.csrfToken, session: s.tokenSession}, true, true
 }
 
-func (s *ExttoSource) storeTokens(doc *goquery.Document, query string) {
+func (s *ExttoSource) storeTokens(doc *goquery.Document, query string, session exttoSession) {
 	page := ""
 	if match := searchPageTokenPattern.FindStringSubmatch(doc.Text()); len(match) == 2 {
 		page = match[1]
@@ -363,14 +381,15 @@ func (s *ExttoSource) storeTokens(doc *goquery.Document, query string) {
 	s.pageToken = page
 	s.csrfToken = csrf
 	s.tokenQuery = query
+	s.tokenSession = session
 }
 
-func (s *ExttoSource) parse(body []byte, query string) ([]SearchResult, error) {
+func (s *ExttoSource) parse(body []byte, query string, session exttoSession) ([]SearchResult, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("search extto: parse response: %w", err)
 	}
-	s.storeTokens(doc, query)
+	s.storeTokens(doc, query, session)
 
 	var results []SearchResult
 	doc.Find("tbody tr").Each(func(_ int, row *goquery.Selection) {

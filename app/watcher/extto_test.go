@@ -306,6 +306,44 @@ func TestExttoMagnetReusesWarmTokens(t *testing.T) {
 	assert.Equal(t, 1, searches, "the tokens of the preceding search must be reused")
 }
 
+// the cookie is process-wide state the cron cycle and the http handlers share, so a refresh
+// can land between the search that minted the tokens and the signed post that uses them. The
+// post has to go out under the session those tokens belong to — pairing this query's page and
+// csrf tokens with a different session is a refusal.
+func TestExttoMagnetPostsUnderTheSessionItsTokensCameFrom(t *testing.T) {
+	fixture := browseFixture(t)
+	var mu sync.Mutex
+	var header http.Header
+	source, solver := exttoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == exttoMagnetPath {
+			mu.Lock()
+			header = r.Header.Clone()
+			mu.Unlock()
+			_, err := w.Write([]byte(`{"success":true,"url":"magnet:?xt=urn:btih:deadbeef"}`))
+			require.NoError(t, err)
+			return
+		}
+		_, err := w.Write([]byte(fixture))
+		require.NoError(t, err)
+	})
+
+	_, err := source.Search(context.Background(), "One Night Only")
+	require.NoError(t, err)
+
+	// what a concurrent cycle would do between the two calls
+	solver.cookies = []*http.Cookie{{Name: "cf_clearance", Value: "zzz"}}
+	solver.userAgent = "Mozilla/5.0 (X11; Linux x86_64) Refreshed"
+	require.NoError(t, source.refreshCookie(context.Background()))
+
+	_, err = source.Magnet(context.Background(), "20151803", "One Night Only")
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, "cf_clearance=abc; extto_sess=42", header.Get("Cookie"))
+	assert.Equal(t, "Mozilla/5.0 (X11; Linux x86_64) FlareSolverr", header.Get("User-Agent"))
+}
+
 func TestExttoMagnetRefused(t *testing.T) {
 	fixture := browseFixture(t)
 	source, _ := exttoServer(t, func(w http.ResponseWriter, r *http.Request) {

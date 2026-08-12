@@ -83,12 +83,21 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   unauthenticated search responses and loki verbatim. A search that fails stops that source's remaining
   queries — a source that just refused us will refuse them too, and on ext.to each attempt holds the
   single solver slot for up to 180s — but what its earlier queries returned is kept, since discarding it
-  would withhold a release that was genuinely found
+  would withhold a release that was genuinely found. ext.to's page tokens are stored together with the
+  session (cookie + User-Agent) that fetched them, and the signed magnet POST is sent under *that* session:
+  the cookie is process-wide state the cron and the http handlers share, so a refresh landing between the
+  search and the POST would otherwise pair this query's page/csrf tokens with a different session, which
+  ext.to refuses
 - **watch-store/**: SQLite repository for `watches` / `watch_seen`, verifying its schema the same way
   `task-store` does — table existence first, then the expected **columns** (`requiredColumns`), because a
-  table check passes a table whose columns a half-applied migration never added. `Disable` / `Enable` are
-  a pair: nothing else writes `disabled_at`, and without `Enable` a soft-deleted id could never be
-  re-created, since the row still exists and a create is a conflict
+  table check passes a table whose columns a half-applied migration never added. `Disable` / `Revive` are
+  a pair: nothing else writes `disabled_at`, and without `Revive` a soft-deleted id could never be
+  re-created, since the row still exists and a create is a conflict. `Revive` clears the run lifecycle
+  (`seeded_at`, `last_run_at`, `last_status`) along with the soft delete — a re-create is a *create*, so it
+  seeds silently again (`Update` names the request's columns only and would leave a re-created watch
+  publishing whatever its new queries or wider regex match) and does not report the dead watch's status as
+  its own on `/api/health`. `watch_seen` is deliberately untouched, which is what keeps that seed from
+  being a replay
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
@@ -230,8 +239,12 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   and the title lies) and decides. Every published hit is also mirrored to the admin Telegram channel
   with a **non-blocking** send — `messagesForSend` is unbuffered, so a blocking send would wedge the cron
   behind a stalled reader, and the mirror is what makes a missed re-arm on the agent side visible
-- NATS publishing is JetStream with a message id of `<watch_id>:<max Source:ExternalID over New>`, so a
-  duplicate publish from the publish-then-mark ordering is collapsed by the stream's dedup window. The
+- NATS publishing is JetStream with a message id of `<watch_id>:<sha256 of the sorted SeenKeys of New>`, so
+  a duplicate publish from the publish-then-mark ordering is collapsed by the stream's dedup window. The id
+  digests the **whole** set, not its maximum: after an acked publish whose `MarkSeen` failed, the retry
+  carries the same releases plus whatever the cycle found since, and a maximum-only key is unchanged by an
+  added item that sorts lower — JetStream would ack the retry as a duplicate while the cycle marks the
+  whole set seen, losing that item permanently and silently. The
   `TUCLAW` stream is owned by the tuclaw daemon — this service connects and publishes only, never creates
   or reconfigures a stream. A failed connect is logged and the service starts anyway (a fatal connect
   would crash-loop the container on every NATS restart); while disconnected `Publish` errors, so nothing

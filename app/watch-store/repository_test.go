@@ -94,7 +94,7 @@ func TestNewRepositoryWithoutAColumn(t *testing.T) {
 
 // a soft delete that nothing can clear retires the id for good: the row still exists, so a
 // re-create is a conflict forever
-func TestEnableClearsTheSoftDelete(t *testing.T) {
+func TestReviveClearsTheSoftDelete(t *testing.T) {
 	repo := newTestRepo(t)
 	w := testWatch()
 	require.NoError(t, repo.Create(w))
@@ -104,7 +104,7 @@ func TestEnableClearsTheSoftDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, disabled.DisabledAt)
 
-	require.NoError(t, repo.Enable(w.ID))
+	require.NoError(t, repo.Revive(w.ID))
 
 	enabled, err := repo.GetByID(w.ID)
 	require.NoError(t, err)
@@ -115,10 +115,37 @@ func TestEnableClearsTheSoftDelete(t *testing.T) {
 	require.Len(t, forCycle, 1)
 }
 
-func TestEnableUnknownWatch(t *testing.T) {
+// a re-created id is a create: it must seed silently rather than publish what already existed,
+// and it must not carry the dead watch's run state into /api/health. The announcements it
+// already made survive, which is what keeps the silent seed from being a replay.
+func TestReviveResetsTheRunLifecycleAndKeepsSeenRows(t *testing.T) {
+	repo := newTestRepo(t)
+	w := testWatch()
+	require.NoError(t, repo.Create(w))
+	require.NoError(t, repo.MarkSeen(w.ID, []watcher.SearchResult{
+		{Source: "jackett", ExternalID: "1883913", Title: "One.Night.Only.2026.1080p"},
+	}))
+	require.NoError(t, repo.MarkSeeded(w.ID))
+	require.NoError(t, repo.RecordRun(w.ID, `jackett "One Night Only 2026": 502`))
+	require.NoError(t, repo.Disable(w.ID))
+
+	require.NoError(t, repo.Revive(w.ID))
+
+	revived, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	assert.Nil(t, revived.SeededAt)
+	assert.Nil(t, revived.LastRunAt)
+	assert.Empty(t, revived.LastStatus)
+
+	seen, err := repo.SeenKeys(w.ID)
+	require.NoError(t, err)
+	assert.Len(t, seen, 1)
+}
+
+func TestReviveUnknownWatch(t *testing.T) {
 	repo := newTestRepo(t)
 
-	require.ErrorIs(t, repo.Enable("nowhere"), ErrNotFound)
+	require.ErrorIs(t, repo.Revive("nowhere"), ErrNotFound)
 }
 
 // every production watch is created without an expiry, and testWatch always sets one

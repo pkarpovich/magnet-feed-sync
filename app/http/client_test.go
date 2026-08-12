@@ -841,7 +841,7 @@ type mockWatchStore struct {
 	marked    map[string]map[string]watcher.SearchResult
 	statuses  map[string]string
 	disabled  []string
-	enabled   []string
+	revived   []string
 	createErr error
 	updateErr error
 	getAllErr error
@@ -886,8 +886,14 @@ func (m *mockWatchStore) Update(w *watcher.Watch) error {
 		return fmt.Errorf("watch %s: %w", w.ID, watch_store.ErrNotFound)
 	}
 
+	// the repository's UPDATE names the request's columns only, so the run lifecycle survives
+	// it — the mock has to carry it over or a revive would look reset by accident
 	stored := *w
 	stored.Rev = current.Rev + 1
+	stored.SeededAt = current.SeededAt
+	stored.DisabledAt = current.DisabledAt
+	stored.LastRunAt = current.LastRunAt
+	stored.LastStatus = current.LastStatus
 	m.watches[w.ID] = &stored
 
 	return nil
@@ -906,14 +912,17 @@ func (m *mockWatchStore) Disable(id string) error {
 	return nil
 }
 
-func (m *mockWatchStore) Enable(id string) error {
+func (m *mockWatchStore) Revive(id string) error {
 	w, ok := m.watches[id]
 	if !ok {
 		return fmt.Errorf("watch %s: %w", id, watch_store.ErrNotFound)
 	}
 
 	w.DisabledAt = nil
-	m.enabled = append(m.enabled, id)
+	w.SeededAt = nil
+	w.LastRunAt = nil
+	w.LastStatus = ""
+	m.revived = append(m.revived, id)
 
 	return nil
 }
@@ -1827,6 +1836,11 @@ func TestSearchHandlersWithoutEngine(t *testing.T) {
 // id for good — the operator could never re-create the watch they just removed
 func TestCreateWatchRevivesASoftDeletedID(t *testing.T) {
 	store := newMockWatchStore(acceptanceWatch())
+	// what the dead watch left behind: a seed, a run and the error status that run recorded
+	seeded := time.Now().Add(-72 * time.Hour)
+	store.watches["one-night-only-en"].SeededAt = &seeded
+	store.watches["one-night-only-en"].LastRunAt = &seeded
+	store.watches["one-night-only-en"].LastStatus = `jackett "One Night Only 2026": 502`
 	require.NoError(t, store.Disable("one-night-only-en"))
 
 	w := httptest.NewRecorder()
@@ -1838,7 +1852,12 @@ func TestCreateWatchRevivesASoftDeletedID(t *testing.T) {
 	resp := decodeWatch(t, w)
 	assert.Nil(t, resp.DisabledAt)
 	assert.Equal(t, []string{"One Night Only 2026"}, resp.Queries)
-	assert.Equal(t, []string{"one-night-only-en"}, store.enabled)
+	// a re-create is a create: it seeds silently again, and /api/health must not read the
+	// dead watch's status and stale run as this one's
+	assert.Nil(t, resp.SeededAt)
+	assert.Nil(t, resp.LastRunAt)
+	assert.Empty(t, resp.LastStatus)
+	assert.Equal(t, []string{"one-night-only-en"}, store.revived)
 	assert.Len(t, store.order, 1, "the revived watch is the same row, not a second one")
 
 	// and the cron picks it up again

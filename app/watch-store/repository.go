@@ -146,13 +146,28 @@ func (r *Repository) Disable(id string) error {
 	return r.requireAffected(res, id)
 }
 
-// Enable clears the soft delete. Without it a removed or expired id is retired for good:
-// the row still exists, so a re-create is a conflict, and nothing else ever writes the
-// column back to NULL.
-func (r *Repository) Enable(id string) error {
-	res, err := r.db.Exec(`UPDATE watches SET disabled_at = NULL WHERE id = ?`, id)
+// Revive re-creates a soft-deleted watch. Without it a removed or expired id is retired for
+// good: the row still exists, so a re-create is a conflict, and nothing else ever writes
+// disabled_at back to NULL.
+//
+// It clears the run lifecycle along with the soft delete, so a re-created id starts where a
+// freshly created one does: unseeded, so the next cycle records the current world silently
+// instead of waking the agent with releases that already existed when the watch was
+// (re-)created — the request may well carry different queries or a wider include regex, and
+// those matches are in nobody's watch_seen — and without the dead watch's last_run_at and
+// last_status, which /api/health would otherwise report as degraded and stale until the next
+// cycle overwrote them.
+//
+// watch_seen is deliberately untouched: it is what keeps the revived watch from re-announcing
+// what it already announced.
+func (r *Repository) Revive(id string) error {
+	res, err := r.db.Exec(`
+		UPDATE watches
+		SET disabled_at = NULL, seeded_at = NULL, last_run_at = NULL, last_status = ''
+		WHERE id = ?
+	`, id)
 	if err != nil {
-		return fmt.Errorf("enable watch: %w", err)
+		return fmt.Errorf("revive watch: %w", err)
 	}
 
 	return r.requireAffected(res, id)

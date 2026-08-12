@@ -56,7 +56,7 @@ type watchStore interface {
 	Create(w *watcher.Watch) error
 	Update(w *watcher.Watch) error
 	Disable(id string) error
-	Enable(id string) error
+	Revive(id string) error
 	GetAll() ([]*watcher.Watch, error)
 	GetByID(id string) (*watcher.Watch, error)
 	WatchesForCycle() ([]*watcher.Watch, error)
@@ -566,7 +566,9 @@ func (c *Client) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 	c.writeWatch(ctx, w, watch.ID, http.StatusCreated)
 }
 
-// reviveWatch overwrites a soft-deleted row with the request and clears the soft delete.
+// reviveWatch overwrites a soft-deleted row with the request, then clears the soft delete and
+// the run lifecycle: this is a create, so the revived watch must seed silently and must not
+// inherit the dead one's last status.
 func (c *Client) reviveWatch(ctx context.Context, w http.ResponseWriter, watch *watcher.Watch) bool {
 	if err := c.watches.Update(watch); err != nil {
 		slog.ErrorContext(ctx, "failed to update disabled watch", "watch_id", watch.ID, "error", err)
@@ -575,8 +577,8 @@ func (c *Client) reviveWatch(ctx context.Context, w http.ResponseWriter, watch *
 		return false
 	}
 
-	if err := c.watches.Enable(watch.ID); err != nil {
-		slog.ErrorContext(ctx, "failed to enable watch", "watch_id", watch.ID, "error", err)
+	if err := c.watches.Revive(watch.ID); err != nil {
+		slog.ErrorContext(ctx, "failed to revive watch", "watch_id", watch.ID, "error", err)
 		http.Error(w, "failed to create watch", http.StatusInternalServerError)
 
 		return false
