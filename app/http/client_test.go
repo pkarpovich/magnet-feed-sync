@@ -571,6 +571,165 @@ func TestHealthNeverRanWithinGrace(t *testing.T) {
 	}
 }
 
+func watchWithRun(id string, lastRunAt *time.Time, status string) *watcher.Watch {
+	return &watcher.Watch{
+		ID:         id,
+		Queries:    []string{"One Night Only 2026"},
+		Sources:    []string{"jackett"},
+		Rev:        1,
+		LastRunAt:  lastRunAt,
+		LastStatus: status,
+	}
+}
+
+func ago(d time.Duration) *time.Time {
+	at := time.Now().Add(-d)
+
+	return &at
+}
+
+// watchHealthCtx keeps the files half of health unconditionally ok, so any status the
+// watcher tests observe can only have come from the watches themselves.
+func watchHealthCtx(store watchStore, startedAt time.Time) *ClientCtx {
+	return &ClientCtx{
+		Store:            &mockFileStore{},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		WatchStore:       store,
+		StaleRunAfter:    2 * time.Hour,
+		StaleWatchAfter:  2 * time.Hour,
+		StartedAt:        startedAt,
+		FailureThreshold: 3,
+	}
+}
+
+func TestHealthWatchesOKWhenNone(t *testing.T) {
+	w, resp := callHealth(t, watchHealthCtx(newMockWatchStore(), time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 0, resp.Watches.Active)
+	assert.Equal(t, 0, resp.Watches.WithErrors)
+	assert.Nil(t, resp.Watches.OldestRunAt)
+}
+
+func TestHealthWatchesOKWhenFresh(t *testing.T) {
+	oldest := ago(40 * time.Minute)
+	store := newMockWatchStore(
+		watchWithRun("recent", ago(5*time.Minute), ""),
+		watchWithRun("older", oldest, ""),
+	)
+
+	w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 2, resp.Watches.Active)
+	assert.Equal(t, 0, resp.Watches.WithErrors)
+	require.NotNil(t, resp.Watches.OldestRunAt)
+	assert.WithinDuration(t, *oldest, *resp.Watches.OldestRunAt, time.Second)
+}
+
+func TestHealthWatchesDegradedWhenStale(t *testing.T) {
+	store := newMockWatchStore(
+		watchWithRun("recent", ago(5*time.Minute), ""),
+		watchWithRun("stale", ago(3*time.Hour), ""),
+	)
+
+	w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 2, resp.Watches.Active)
+}
+
+func TestHealthWatchesDegradedOnErrorStatus(t *testing.T) {
+	store := newMockWatchStore(
+		watchWithRun("clean", ago(5*time.Minute), ""),
+		watchWithRun("broken", ago(5*time.Minute), "jackett: search failed"),
+	)
+
+	w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 1, resp.Watches.WithErrors)
+}
+
+// a watch created through the API seconds ago has no last_run_at yet, and reporting the
+// service degraded before its first tick could possibly have run would be a false alarm
+func TestHealthWatchesNeverRanWithinGrace(t *testing.T) {
+	tests := []struct {
+		name       string
+		startedAt  time.Time
+		wantStatus string
+	}{
+		{name: "within grace", startedAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok"},
+		{name: "past grace", startedAt: time.Now().Add(-3 * time.Hour), wantStatus: "degraded"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newMockWatchStore(watchWithRun("fresh", nil, ""))
+
+			w, resp := callHealth(t, watchHealthCtx(store, tt.startedAt))
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, tt.wantStatus, resp.Status)
+			require.NotNil(t, resp.Watches)
+			assert.Equal(t, 1, resp.Watches.Active)
+			assert.Nil(t, resp.Watches.OldestRunAt)
+		})
+	}
+}
+
+// disabled and expired watches are nobody's problem: a soft-deleted or elapsed watch left in
+// an error state would otherwise pin the service to degraded forever
+func TestHealthWatchesIgnoreExpiredAndDisabled(t *testing.T) {
+	expired := watchWithRun("expired", ago(3*time.Hour), "jackett: search failed")
+	expired.ExpiresAt = ago(time.Minute)
+	store := newMockWatchStore(expired, watchWithRun("removed", ago(3*time.Hour), "boom"))
+	require.NoError(t, store.Disable("removed"))
+
+	w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 0, resp.Watches.Active)
+	assert.Equal(t, 0, resp.Watches.WithErrors)
+}
+
+// the watcher check may only raise ok to degraded; a tripped breaker stays unhealthy
+func TestHealthWatchesDoNotLowerUnhealthy(t *testing.T) {
+	ctx := watchHealthCtx(newMockWatchStore(watchWithRun("broken", ago(5*time.Minute), "boom")), time.Now().Add(-5*time.Hour))
+	ctx.Breaker = &mockBreaker{states: map[string]tracker.State{"rutracker": {Tripped: true}}}
+
+	w, resp := callHealth(t, ctx)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, "unhealthy", resp.Status)
+	require.NotNil(t, resp.Watches)
+	assert.Equal(t, 1, resp.Watches.WithErrors)
+}
+
+// a watch store that cannot be read is a real fault, but it must not take the whole health
+// endpoint down with it
+func TestHealthWatchesStoreErrorDegrades(t *testing.T) {
+	store := newMockWatchStore()
+	store.cycleErr = errors.New("db is down")
+
+	w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+	assert.Nil(t, resp.Watches)
+}
+
 var knownLocations = []types.Location{
 	{ID: "/downloads/tv shows", Name: "TV Shows"},
 	{ID: "/downloads/magazines", Name: "Magazines"},

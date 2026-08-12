@@ -20,6 +20,8 @@ func TestStaleRunAfter(t *testing.T) {
 		want time.Duration
 	}{
 		{name: "hourly", cron: "0 * * * *", want: 2 * time.Hour},
+		// the watcher job runs on the same helper, offset by 20 minutes from the files job
+		{name: "default watch cron", cron: "20 * * * *", want: 2 * time.Hour},
 		{name: "every 15 minutes", cron: "*/15 * * * *", want: 30 * time.Minute},
 		// the first gap is 1h but the schedule is silent for 23h, so a window built from the
 		// first gap alone would report 503 for most of the day

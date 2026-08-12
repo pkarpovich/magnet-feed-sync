@@ -86,6 +86,7 @@ type Client struct {
 	engine           searchEngine
 	magnets          magnetResolver
 	staleRunAfter    time.Duration
+	staleWatchAfter  time.Duration
 	startedAt        time.Time
 	failureThreshold int
 }
@@ -101,6 +102,7 @@ type ClientCtx struct {
 	Engine           searchEngine
 	Magnets          magnetResolver
 	StaleRunAfter    time.Duration
+	StaleWatchAfter  time.Duration
 	StartedAt        time.Time
 	FailureThreshold int
 }
@@ -118,6 +120,11 @@ func NewClient(ctx *ClientCtx) *Client {
 		staleRunAfter = defaultStaleRunAfter
 	}
 
+	staleWatchAfter := ctx.StaleWatchAfter
+	if staleWatchAfter <= 0 {
+		staleWatchAfter = defaultStaleRunAfter
+	}
+
 	return &Client{
 		config:           ctx.Config,
 		store:            ctx.Store,
@@ -129,6 +136,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		engine:           ctx.Engine,
 		magnets:          ctx.Magnets,
 		staleRunAfter:    staleRunAfter,
+		staleWatchAfter:  staleWatchAfter,
 		startedAt:        ctx.StartedAt,
 		failureThreshold: threshold,
 	}
@@ -1033,6 +1041,13 @@ type healthResponse struct {
 	Failing   int               `json:"failing"`
 	LastRunAt *time.Time        `json:"last_run_at,omitempty"`
 	Providers map[string]string `json:"providers"`
+	Watches   *watchesHealth    `json:"watches,omitempty"`
+}
+
+type watchesHealth struct {
+	Active      int        `json:"active"`
+	OldestRunAt *time.Time `json:"oldest_run_at,omitempty"`
+	WithErrors  int        `json:"with_errors"`
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -1055,17 +1070,21 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 	providerStates, anyBlocked := c.providerStates()
 	run := c.lastRun(ctx)
+	watches, watchesDegraded := c.watchHealth(ctx)
 
 	resp := healthResponse{
 		Status:    statusOk,
 		Tracked:   len(files),
 		Failing:   failing,
 		Providers: providerStates,
+		Watches:   watches,
 	}
 	if run.present {
 		resp.LastRunAt = &run.at
 	}
 
+	// the watcher check appears in the degraded arm only, so it can never lower an
+	// unhealthy verdict the files sweep or the breaker already reached
 	code := http.StatusOK
 	switch {
 	case anyBlocked || c.runIsStale(run):
@@ -1073,7 +1092,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		code = http.StatusServiceUnavailable
 	// a sweep that could not read the task list refreshed last_run_at without checking
 	// anything, so staleness alone would report it as healthy
-	case failing > 0 || (run.present && !run.ok):
+	case failing > 0 || (run.present && !run.ok) || watchesDegraded:
 		resp.Status = statusDegraded
 	}
 
@@ -1102,6 +1121,63 @@ func (c *Client) providerStates() (map[string]string, bool) {
 	}
 
 	return states, anyBlocked
+}
+
+// watchHealth summarises the active watches and reports whether they degrade the service.
+// It never returns an unhealthy verdict: a watcher that is behind still leaves the download
+// path working.
+func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
+	if c.watches == nil {
+		return nil, false
+	}
+
+	// WatchesForCycle drops the soft-deleted rows only, so expiry is filtered here
+	watches, err := c.watches.WatchesForCycle()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to load watches for health", "error", err)
+
+		return nil, true
+	}
+
+	now := time.Now()
+	health := &watchesHealth{}
+	neverRan := false
+	for _, watch := range watches {
+		if watch.ExpiresAt != nil && !watch.ExpiresAt.After(now) {
+			continue
+		}
+
+		health.Active++
+		if watch.LastStatus != "" {
+			health.WithErrors++
+		}
+		// a watch created seconds ago has no timestamp yet; counting it as the oldest run
+		// would report the service degraded before its first tick could possibly have run
+		if watch.LastRunAt == nil {
+			neverRan = true
+
+			continue
+		}
+		if health.OldestRunAt == nil || watch.LastRunAt.Before(*health.OldestRunAt) {
+			at := *watch.LastRunAt
+			health.OldestRunAt = &at
+		}
+	}
+
+	return health, c.watchesAreDegraded(health, neverRan)
+}
+
+func (c *Client) watchesAreDegraded(health *watchesHealth, neverRan bool) bool {
+	if health.WithErrors > 0 {
+		return true
+	}
+
+	if health.OldestRunAt != nil && time.Since(*health.OldestRunAt) > c.staleWatchAfter {
+		return true
+	}
+
+	// before the grace period elapses a watch that has never run is expected, not a fault
+	return neverRan && !c.startedAt.IsZero() && time.Since(c.startedAt) > c.staleWatchAfter
 }
 
 type runInfo struct {

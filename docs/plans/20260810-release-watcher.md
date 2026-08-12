@@ -1108,22 +1108,25 @@ adding a second one.
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] add the `watches` object to the health payload: active count, oldest `last_run_at` (excluding NULLs),
+- [x] add the `watches` object to the health payload: active count, oldest `last_run_at` (excluding NULLs),
       count of watches with a non-empty `last_status`
-- [ ] compute the staleness threshold **in `main.go`** with `cron.ParseStandard(cfg.WatchCron)` and
+- [x] compute the staleness threshold **in `main.go`** with `cron.ParseStandard(cfg.WatchCron)` and
       `2 * (sched.Next(sched.Next(now)) - sched.Next(now))`, falling back to `staleWatchFallback` with a
-      WARN log on a parse error, and pass it in through `ClientCtx`
-- [ ] contribute `degraded` for a stale cycle, for any active watch with a non-empty `last_status`, and for
+      WARN log on a parse error, and pass it in through `ClientCtx` — done by reusing the existing
+      `staleRunAfter(cronExpr)` helper (same `cron.ParseStandard`, same 2× gap rule generalised over
+      `staleRunSamples` firings, same 2h fallback + WARN as `staleWatchFallback`) rather than adding a
+      second copy of it
+- [x] contribute `degraded` for a stale cycle, for any active watch with a non-empty `last_status`, and for
       an active watch with `last_run_at IS NULL` once the process has been up longer than the threshold
-- [ ] ensure the watcher check can only move `ok` to `degraded` and never lowers an existing
+- [x] ensure the watcher check can only move `ok` to `degraded` and never lowers an existing
       `degraded`/`unhealthy`
-- [ ] make zero watches report `ok`
-- [ ] write tests for: `ok` with no watches, `ok` with fresh watches, `degraded` on a stale cycle,
+- [x] make zero watches report `ok`
+- [x] write tests for: `ok` with no watches, `ok` with fresh watches, `degraded` on a stale cycle,
       `degraded` on a watch carrying an error status
-- [ ] write a test asserting a freshly created watch with `last_run_at IS NULL` reports `ok` before the
+- [x] write a test asserting a freshly created watch with `last_run_at IS NULL` reports `ok` before the
       threshold elapses and `degraded` after
-- [ ] write a test asserting the watcher check leaves an `unhealthy` status untouched
-- [ ] run tests — must pass before Task 11
+- [x] write a test asserting the watcher check leaves an `unhealthy` status untouched
+- [x] run tests — must pass before Task 11
 
 ### Task 11: Verify acceptance criteria
 

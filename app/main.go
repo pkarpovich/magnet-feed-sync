@@ -193,6 +193,7 @@ func run(cfg *config.Config) error {
 		WatchStore:       watchRepo,
 		Engine:           engine,
 		StaleRunAfter:    staleRunAfter(cfg.Cron),
+		StaleWatchAfter:  staleRunAfter(cfg.WatchCron),
 		StartedAt:        time.Now(),
 		FailureThreshold: downloadTasks.FailureThreshold,
 	}
