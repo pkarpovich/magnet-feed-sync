@@ -49,6 +49,16 @@ Manage tracking tasks programmatically via the REST API:
 - `POST /api/file-locations` - Update download location for a task
 - `GET /api/health` - Health check (see below)
 
+Release watcher (see [Release watcher](#release-watcher)):
+
+- `POST /api/watches` - Create a watch
+- `GET /api/watches` - List watches
+- `GET /api/watches/{watchId}` - One watch plus the releases it has already announced
+- `PATCH /api/watches/{watchId}` - Edit queries/sources/regexes (increments `rev`)
+- `DELETE /api/watches/{watchId}` - Soft delete (sets `disabled_at`)
+- `POST /api/watches/{watchId}/search` - Re-run this watch's own search and return the full results
+- `POST /api/search` - Ad-hoc search with caller-supplied queries, sources and regexes
+
 **POST /api/files** - tracker URL only (parses the page, persists a row, monitors for updates):
 ```json
 {"url": "https://rutracker.org/forum/viewtopic.php?t=6810475", "location": "/downloads/tv shows"}
@@ -77,14 +87,19 @@ With a Jackett `/dl/` `.torrent` URL:
   "tracked": 42,
   "failing": 0,
   "last_run_at": "2026-08-10T12:00:00Z",
-  "providers": {"rutracker": "ok", "nnm": "ok"}
+  "providers": {"rutracker": "ok", "nnm": "ok"},
+  "watches": {"active": 1, "oldest_run_at": "2026-08-10T12:20:00Z", "with_errors": 0}
 }
 ```
 
 - `status` - `ok`, `degraded`, or `unhealthy`. Evaluated in order, first match wins:
   1. `unhealthy` (HTTP **503**) - any provider circuit breaker is tripped, or the last cron run is stale
      (older than twice the cron interval; before the first run the service start time is used instead)
-  2. `degraded` (HTTP 200) - at least one tracked task is failing
+  2. `degraded` (HTTP 200) - at least one tracked task is failing, or the watcher is in trouble: a watch
+     cycle staler than twice the `WATCH_CRON` interval, an active watch carrying a non-empty
+     `last_status`, or an active watch that has never run once the service has been up longer than that
+     window. The watcher check can only move `ok` to `degraded`; it never lowers a verdict already
+     reached above, and never reports `unhealthy` itself. Zero watches is `ok`, not degraded
   3. `ok` (HTTP 200)
 - `tracked` - number of tracked tasks.
 - `failing` - tasks with 3 or more consecutive sync failures. Fewer than 3 is a silent ramp-up and is not
@@ -92,6 +107,9 @@ With a Jackett `/dl/` `.torrent` URL:
 - `last_run_at` - when the cron sweep last finished; omitted until the first run completes.
 - `providers` - per-provider circuit breaker state, `ok` or `blocked`. Keys are the providers the service
   actually built, so `jackett` only appears when `JACKETT_URL` is set.
+- `watches` - watcher state: `active` (not disabled, not expired), `oldest_run_at` (the oldest
+  `last_run_at` across active watches, omitted while none has run) and `with_errors` (active watches
+  whose `last_status` is non-empty).
 
 Consumers should assert on `status`, not on the HTTP body text.
 
@@ -108,6 +126,60 @@ A tracker that returns a blocked response (HTTP 403/429 or a Cloudflare challeng
 circuit breaker: its tasks are skipped without issuing requests, and a single half-open probe is retried
 after a cooldown that doubles from 1h up to 24h. Tasks that have failed 3 times in a row are retried at
 most once per 24 hours instead of every run. Both transitions are announced once in Telegram.
+
+A second job runs on the `WATCH_CRON` schedule (`20 * * * *` by default, offset from the files sweep) and
+drives the release watcher below.
+
+## Release watcher
+
+A **watch** is a saved hunt for a release that does not exist yet: a list of queries, a set of sources
+(`jackett`, `extto`), an `include_regex`, an `exclude_regex`, and the set of releases it has already
+announced. Every `WATCH_CRON` tick searches each source for each query, merges and dedups the results,
+applies the two regexes, and diffs what is left against the seen set. A non-empty diff is published to
+NATS (`tuclaw.releases.found.<watch_id>`) and mirrored to the admin Telegram channel.
+
+The watcher **never downloads anything** — it notifies. Indexers only index the title, so verification and
+the download decision stay with the consumer.
+
+```bash
+curl -X POST http://localhost:8080/api/watches -d '{
+  "id": "one-night-only-en",
+  "queries": ["One Night Only 2026"],
+  "sources": ["jackett", "extto"],
+  "include_regex": "(?i)one[ ._-]night[ ._-]only.*2026",
+  "exclude_regex": "(?i)bee gees|def leppard|rupaul|concert",
+  "expires_at": null
+}'
+```
+
+- The id becomes a NATS subject token, so it must match `^[a-z0-9_-]+$`. At least one non-empty query is
+  required, both regexes must compile, and source names must be known — each failure is a 400 with a
+  specific message; a duplicate id is a 409.
+- The **narrow query is the primary filter**; `include_regex` is the second and `exclude_regex` only a
+  backstop. A broad query returns hundreds of junk rows that no regex reliably sorts out.
+- The **first cycle seeds silently**: everything it matches is recorded without publishing, so a new watch
+  cannot immediately announce releases that already existed. `GET /api/watches/{id}` returns those rows,
+  so the seed is inspectable. A first cycle in which a source failed does not seed.
+- Publishing happens **before** marking seen. A crash between the two costs one duplicate notification;
+  the reverse would lose the release permanently and silently.
+- A source failure is never silence: it lands in the watch's `last_status` and turns `/api/health`
+  `degraded`. A partial run can still publish what it did find.
+- `DELETE` is a soft delete, and a watch past its `expires_at` is skipped and disabled on the next cycle.
+
+`POST /api/watches/{id}/search` re-runs the watch's **own** stored search and returns the full result set -
+`page_url`, host-rewritten `download_url`, the resolved `magnet` for ext.to items, `seeders`,
+`published_at`, and a `new` flag per item. `?raw=true` returns the pre-filter set instead, which is how
+you answer "why was I woken with this junk" and "why was I *not* woken". The cron and this endpoint call
+the same code over the same stored parameters, so what you see cannot drift from what woke you.
+`POST /api/search` is the ad-hoc equivalent for parameters that are not saved as a watch.
+
+Both search endpoints are slow by nature: a cold Jackett search takes ~40s and a cold ext.to search ~80s
+(Cloudflare challenge). A warm cookie and Jackett's own cache make a repeat within the hour near-instant.
+
+**Idempotency is explicitly not guaranteed.** An id present in a NATS payload's `new` list but absent from
+`POST /api/watches/{id}/search` means the release was taken down, and is not an error. Only *query
+reproducibility* is guaranteed — a release can be pulled between the cron tick and the call, and Jackett's
+result cache expires after 35 minutes.
 
 ## Database migrations
 
@@ -170,7 +242,11 @@ Configure the bot using the following environment variables:
 - `TELEGRAM_TOKEN`: Telegram bot token.
 - `TELEGRAM_SUPER_USERS`: Comma-separated list of Telegram user IDs allowed to manage the bot.
 - `CRON`: cron expression for the update sweep, standard 5 fields (default `0 * * * *`). It also sets the health staleness window: a last run older than twice the schedule's longest gap between firings makes `/api/health` report `unhealthy`. An expression that cannot be parsed falls back to a 2h window and logs a warning.
+- `WATCH_CRON`: cron expression for the release-watcher sweep, standard 5 fields (default `20 * * * *`, offset from `CRON` so the two sweeps never start together). It also sets the watch staleness window on `/api/health` in the same way `CRON` does, with the same 2h fallback and warning.
 - `JACKETT_URL`: Jackett instance base URL (optional, enables Jackett/Torznab support).
+- `JACKETT_API_KEY`: Jackett api key, required by the watcher's search (`JACKETT_URL` carries no key). Without it the Jackett watch source is disabled with a startup warning and the service still runs.
+- `JACKETT_PUBLIC_URL`: publicly reachable Jackett base URL (defaults to `JACKETT_URL`). Jackett puts its own internal base URL in the download links it returns; the watcher rewrites the scheme and host of `download_url` to this value, otherwise the link resolves nowhere at download time.
+- `NATS_URL`: JetStream endpoint for watch notifications, e.g. `nats://nats:4222`. Empty disables publishing — the service still starts and still runs cycles, but nothing is marked as announced, so releases are retried once publishing is configured. The stream is owned by its consumer; this service only publishes to it and never creates or reconfigures one. A failed connect is logged, not fatal.
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
 
 > Breaking change: the Synology DownloadStation client has been removed. qBittorrent is now the only supported download client. Remove any `DOWNLOAD_CLIENT` and `SYNOLOGY_*` variables from your environment.

@@ -1162,15 +1162,15 @@ adding a second one.
 - Modify: `README.md`
 - Modify: `compose.yaml`
 
-- [ ] update `CLAUDE.md`: the new `watcher` and `watch-store` packages, the second cron job, the new env
+- [x] update `CLAUDE.md`: the new `watcher` and `watch-store` packages, the second cron job, the new env
       vars, and the watch endpoints
-- [ ] update `README.md`: add the watch endpoints to its HTTP API section and
+- [x] update `README.md`: add the watch endpoints to its HTTP API section and
       `JACKETT_API_KEY` / `JACKETT_PUBLIC_URL` / `NATS_URL` / `WATCH_CRON` to its configuration section
-- [ ] document the idempotency non-guarantee in `README.md` in these words: an id present in a NATS
+- [x] document the idempotency non-guarantee in `README.md` in these words: an id present in a NATS
       payload's `new` list but absent from `POST /api/watches/{id}/search` means the release was taken
       down, and is not an error
-- [ ] update `compose.yaml` with the new environment variables
-- [ ] move this plan to `docs/plans/completed/`
+- [x] update `compose.yaml` with the new environment variables
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
