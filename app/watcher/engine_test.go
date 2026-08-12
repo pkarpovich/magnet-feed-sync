@@ -203,6 +203,71 @@ func acceptanceWatch() *Watch {
 	}
 }
 
+// mustExcludeTitles are the verbatim junk titles from the measured 226-result set that the
+// acceptance watch has to reject.
+var mustExcludeTitles = []string{
+	"Bee Gees One Night Only 1998 WEBRip 1080p x264 AAC ENG Lulloz",
+	"Def Leppard - One Night Only: Live At The Leadmill [2024, Classic Rock, Hard Rock, Blu-ray, 1080i]",
+	"RuPauls Drag Race S15E02 One Night Only Part 2 1080p AMZN WEB DL DDP2 0 H 264 FLUX TGx",
+	"One Night Only / Tian Liang Zhi Qian [2016, BDRemux 1080p] VO + DVO + Sub Rus, Eng + Original Chi",
+}
+
+func resultsFor(source string, titles ...string) []SearchResult {
+	results := make([]SearchResult, 0, len(titles))
+	for i, title := range titles {
+		results = append(results, SearchResult{
+			Source:     source,
+			ExternalID: source + "-" + externalID(i),
+			Title:      title,
+			Query:      "One Night Only 2026",
+		})
+	}
+
+	return results
+}
+
+// TestAcceptanceScenario runs the whole acceptance scenario over the Acceptance watch verbatim —
+// both queries, both sources — rather than the trimmed watches the per-effect tests use.
+func TestAcceptanceScenario(t *testing.T) {
+	w := acceptanceWatch()
+	store := newFakeStore(w)
+	pub := &fakePublisher{}
+
+	jackettTitles := append([]string{ruRelease}, mustExcludeTitles...)
+	jackett := &fakeSource{name: "jackett", replies: []sourceReply{{results: resultsFor("jackett", jackettTitles...)}}}
+	extto := &fakeSource{name: "extto", replies: []sourceReply{{results: resultsFor("extto", mustExcludeTitles...)}}}
+	engine := NewEngine(EngineDeps{Sources: []SearchSource{jackett, extto}, Store: store, Publisher: pub})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Empty(t, pub.published, "the first cycle must seed silently")
+	assert.Equal(t, []string{w.ID}, store.seeded)
+	assert.Equal(t, []string{ruRelease}, store.seenTitles(w.ID))
+	assert.Equal(t, "", store.statuses[w.ID])
+	assert.Equal(t, []string{"One Night Only 2026", "Только на одну ночь 2026"}, jackett.calls)
+
+	jackett.replies = []sourceReply{{results: resultsFor("jackett", append([]string{ruRelease, enRelease}, mustExcludeTitles...)...)}}
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	require.Len(t, pub.published, 1)
+	require.Len(t, pub.published[0].New, 1)
+	assert.Equal(t, enRelease, pub.published[0].New[0].Title)
+	assert.ElementsMatch(t, []string{ruRelease, enRelease}, store.seenTitles(w.ID))
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Len(t, pub.published, 1, "a repeat cycle must publish nothing")
+
+	extto.replies = []sourceReply{{err: errors.New("challenge twice")}}
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Contains(t, store.statuses[w.ID], "challenge twice")
+	assert.Len(t, pub.published, 1)
+	assert.Equal(t, 4, store.runs[w.ID])
+}
+
 func TestEvaluateFiltersWithAcceptanceRegexes(t *testing.T) {
 	source := sourceWith("jackett",
 		enRelease,

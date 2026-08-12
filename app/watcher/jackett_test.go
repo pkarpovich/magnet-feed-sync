@@ -203,4 +203,4 @@ func TestJackettSourceName(t *testing.T) {
 	assert.Equal(t, "jackett", NewJackettSource(JackettOptions{}).Name())
 }
 
-var _ SearchSource = (*JackettSource)(nil)
+var _ SearchSource = (*jackettSource)(nil)

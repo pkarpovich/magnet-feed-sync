@@ -1130,23 +1130,30 @@ adding a second one.
 
 ### Task 11: Verify acceptance criteria
 
-- [ ] verify the acceptance scenario at test level against the **Acceptance watch** block verbatim: it
+- [x] verify the acceptance scenario at test level against the **Acceptance watch** block verbatim: it
       seeds silently on its first cycle, publishes exactly once when a title from the must-match list
       appears, publishes nothing on a repeat, leaves every title from the must-exclude list unpublished,
-      and leaves `last_status` non-empty when a source fails
-- [ ] confirm no test reaches the network:
+      and leaves `last_status` non-empty when a source fails — added `TestAcceptanceScenario` in
+      `app/watcher/engine_test.go`, which runs the watch with **both** queries and **both** sources rather
+      than the trimmed watches the per-effect tests use
+- [x] confirm no test reaches the network:
       `grep -rnE 'http\.Get|http\.Post|net\.Dial|http\.DefaultClient' app/ --include="*_test.go"` prints
-      nothing outside `httptest` usage
-- [ ] confirm the degraded-startup paths actually ran, by name — `go test ./app/... -run
+      nothing outside `httptest` usage — the grep matches nothing at all
+- [x] confirm the degraded-startup paths actually ran, by name — `go test ./app/... -run
       'TestDegradedNoJackettKey|TestDegradedNoSolver|TestDegradedNoNATS' -v` reports three `=== RUN` lines
       and passes. A bare `-run Degraded` would exit 0 even if the tests were never written, so require the
       count. Do **not** attempt to boot the binary: `main.go` also needs Telegram, DB and qBittorrent
-      settings unrelated to this plan
-- [ ] run the deferred export-discipline check described in Code-Quality Rules over every exported
-      top-level type/func/var added by Tasks 1-10
-- [ ] run the full suite: `go test ./... -race`
-- [ ] run `go vet ./...` and `go build ./...`
-- [ ] confirm `gofmt -s -l .` prints nothing
+      settings unrelated to this plan — three `=== RUN` lines, all PASS
+- [x] run the deferred export-discipline check described in Code-Quality Rules over every exported
+      top-level type/func/var added by Tasks 1-10 — one failure found and fixed: `watcher.JackettSource`
+      was exported with no out-of-package caller and is now `jackettSource` (matching the lowercase
+      `exttoSource` that Technical Details prescribes); `NewJackettSource` stays exported for `main.go`.
+      `watcher.ExttoSource` is named as a field in `main.go` and `watch_store.Repository` is prescribed
+      verbatim in the "Watch repository contract" block, so both stay. Note `app/watch-store` is imported
+      as `watchStore` in `main.go`, so the check must match `watch_?[Ss]tore\.`
+- [x] run the full suite: `go test ./... -race`
+- [x] run `go vet ./...` and `go build ./...`
+- [x] confirm `gofmt -s -l .` prints nothing
 
 ### Task 12: Update documentation and close out
 

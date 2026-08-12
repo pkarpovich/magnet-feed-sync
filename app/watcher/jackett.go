@@ -28,8 +28,8 @@ type JackettOptions struct {
 	APIKey    string
 }
 
-// JackettSource searches every configured indexer through Jackett's torznab endpoint.
-type JackettSource struct {
+// jackettSource searches every configured indexer through Jackett's torznab endpoint.
+type jackettSource struct {
 	baseURL   string
 	publicURL *url.URL
 	apiKey    string
@@ -38,7 +38,7 @@ type JackettSource struct {
 
 // NewJackettSource builds a source for the given Jackett instance. An empty PublicURL falls
 // back to BaseURL.
-func NewJackettSource(o JackettOptions) *JackettSource {
+func NewJackettSource(o JackettOptions) *jackettSource {
 	public := o.PublicURL
 	if public == "" {
 		public = o.BaseURL
@@ -49,7 +49,7 @@ func NewJackettSource(o JackettOptions) *JackettSource {
 		parsedPublic = nil
 	}
 
-	return &JackettSource{
+	return &jackettSource{
 		baseURL:   normalizeJackettBase(o.BaseURL),
 		publicURL: parsedPublic,
 		apiKey:    o.APIKey,
@@ -73,11 +73,11 @@ func normalizeJackettBase(raw string) string {
 	return u.String()
 }
 
-func (s *JackettSource) Name() string {
+func (s *jackettSource) Name() string {
 	return sourceJackett
 }
 
-func (s *JackettSource) Search(ctx context.Context, query string) ([]SearchResult, error) {
+func (s *jackettSource) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	if s.baseURL == "" {
 		return nil, errors.New("search jackett: base url is not configured")
 	}
@@ -96,7 +96,7 @@ func (s *JackettSource) Search(ctx context.Context, query string) ([]SearchResul
 	return s.parse(body, query)
 }
 
-func (s *JackettSource) fetch(ctx context.Context, query string) ([]byte, error) {
+func (s *jackettSource) fetch(ctx context.Context, query string) ([]byte, error) {
 	params := url.Values{}
 	params.Set("apikey", s.apiKey)
 	params.Set("t", "search")
@@ -130,7 +130,7 @@ func (s *JackettSource) fetch(ctx context.Context, query string) ([]byte, error)
 	return body, nil
 }
 
-func (s *JackettSource) parse(body []byte, query string) ([]SearchResult, error) {
+func (s *jackettSource) parse(body []byte, query string) ([]SearchResult, error) {
 	var rss torznabRSS
 	if err := xml.Unmarshal(body, &rss); err != nil {
 		return nil, fmt.Errorf("search jackett: parse response: %w", err)
@@ -160,7 +160,7 @@ func (s *JackettSource) parse(body []byte, query string) ([]SearchResult, error)
 	return results, nil
 }
 
-func (s *JackettSource) pageURL(item torznabItem) string {
+func (s *jackettSource) pageURL(item torznabItem) string {
 	if strings.HasPrefix(item.Comments, "http") {
 		return item.Comments
 	}
@@ -171,7 +171,7 @@ func (s *JackettSource) pageURL(item torznabItem) string {
 	return ""
 }
 
-func (s *JackettSource) externalID(item torznabItem, pageURL string) string {
+func (s *jackettSource) externalID(item torznabItem, pageURL string) string {
 	if pageURL != "" {
 		if u, err := url.Parse(pageURL); err == nil {
 			if t := u.Query().Get("t"); t != "" {
@@ -185,7 +185,7 @@ func (s *JackettSource) externalID(item torznabItem, pageURL string) string {
 
 // downloadURL rewrites the scheme and host Jackett emits — its own internal base — to the
 // configured public one, so the link resolves for whoever receives it.
-func (s *JackettSource) downloadURL(item torznabItem) string {
+func (s *jackettSource) downloadURL(item torznabItem) string {
 	raw := item.Link
 	if raw == "" {
 		raw = item.Enclosure.URL
@@ -204,7 +204,7 @@ func (s *JackettSource) downloadURL(item torznabItem) string {
 	return u.String()
 }
 
-func (s *JackettSource) seeders(item torznabItem) int {
+func (s *jackettSource) seeders(item torznabItem) int {
 	for _, attr := range item.Attrs {
 		if attr.Name != "seeders" {
 			continue
@@ -220,7 +220,7 @@ func (s *JackettSource) seeders(item torznabItem) int {
 	return 0
 }
 
-func (s *JackettSource) publishedAt(item torznabItem) time.Time {
+func (s *jackettSource) publishedAt(item torznabItem) time.Time {
 	if item.PubDate == "" {
 		return time.Time{}
 	}
