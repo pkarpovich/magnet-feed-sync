@@ -13,24 +13,20 @@ import (
 	"magnet-feed-sync/app/watcher"
 )
 
-// the schema is declared once, in the migrations; a constructor that also created the
-// tables is what let a half-applied schema reach production
+// schema is declared once, in the migrations: a constructor that also created the tables
+// is what let a half-applied schema reach production
 var ErrSchemaNotInitialised = errors.New("watch schema not initialised: run the migrate binary (`go run ./cmd/migrate`)")
 
 var ErrNotFound = errors.New("watch not found")
 
 const watchColumns = `id, queries, include_regex, exclude_regex, sources, rev, seeded_at, expires_at, disabled_at, last_run_at, last_status`
 
-// requiredColumns is checked column by column rather than table by table, for the reason
-// task-store does the same: the incident behind that check had the table present and the
-// columns missing, which a table check passes.
+// column by column, not table by table: the incident had the table present and columns missing
 var requiredColumns = map[string][]string{
 	"watches":    {"id", "queries", "include_regex", "exclude_regex", "sources", "rev", "seeded_at", "expires_at", "disabled_at", "last_run_at", "last_status"},
 	"watch_seen": {"watch_id", "source", "external_id", "title", "first_seen_at"},
 }
 
-// SeenRow is one already-announced release, rendered by GET /api/watches/{id} so a silent
-// seed is inspectable.
 type SeenRow struct {
 	Source      string
 	ExternalID  string
@@ -54,8 +50,7 @@ func NewRepository(db *database.Client) (*Repository, error) {
 
 func (r *Repository) verifySchema() error {
 	for _, table := range []string{"watches", "watch_seen"} {
-		// checked before the columns: PRAGMA table_info on a missing table returns no rows
-		// and no error, which would report an absent database as an absent column
+		// before the columns: PRAGMA table_info on a missing table returns no rows and no error
 		if err := r.requireTable(table); err != nil {
 			return err
 		}
@@ -146,20 +141,8 @@ func (r *Repository) Disable(id string) error {
 	return r.requireAffected(res, id)
 }
 
-// Revive re-creates a soft-deleted watch. Without it a removed or expired id is retired for
-// good: the row still exists, so a re-create is a conflict, and nothing else ever writes
-// disabled_at back to NULL.
-//
-// It clears the run lifecycle along with the soft delete, so a re-created id starts where a
-// freshly created one does: unseeded, so the next cycle records the current world silently
-// instead of waking the agent with releases that already existed when the watch was
-// (re-)created — the request may well carry different queries or a wider include regex, and
-// those matches are in nobody's watch_seen — and without the dead watch's last_run_at and
-// last_status, which /api/health would otherwise report as degraded and stale until the next
-// cycle overwrote them.
-//
-// watch_seen is deliberately untouched: it is what keeps the revived watch from re-announcing
-// what it already announced.
+// clears the run lifecycle so a revived id starts unseeded, like a fresh one; watch_seen is
+// kept deliberately, it is what stops the revived watch re-announcing what it already sent
 func (r *Repository) Revive(id string) error {
 	res, err := r.db.Exec(`
 		UPDATE watches
@@ -209,8 +192,7 @@ func (r *Repository) GetAll() ([]*watcher.Watch, error) {
 	return r.list(`SELECT ` + watchColumns + ` FROM watches ORDER BY id`)
 }
 
-// WatchesForCycle filters on disabled_at only: an expired watch must still reach the cycle
-// so it can be skipped *and disabled* there, otherwise disabled_at is never set.
+// expired watches must still reach the cycle so it can disable them there
 func (r *Repository) WatchesForCycle() ([]*watcher.Watch, error) {
 	return r.list(`SELECT ` + watchColumns + ` FROM watches WHERE disabled_at IS NULL ORDER BY id`)
 }

@@ -25,10 +25,8 @@ type HttpConfig struct {
 }
 
 type JackettConfig struct {
-	URL string `env:"JACKETT_URL"`
-	// APIKey is required to search: the URL alone carries no key.
-	APIKey string `env:"JACKETT_API_KEY"`
-	// PublicURL replaces the internal host Jackett puts in download links; it defaults to URL.
+	URL       string `env:"JACKETT_URL"`
+	APIKey    string `env:"JACKETT_API_KEY"`
 	PublicURL string `env:"JACKETT_PUBLIC_URL"`
 }
 
@@ -43,13 +41,10 @@ type Config struct {
 	OtelEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	LokiURL         string `env:"LOKI_URL"`
 	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
-	// NatsURL is where watch notifications go; empty disables publishing.
-	NatsURL string `env:"NATS_URL"`
-	// WatchCron schedules the watcher sweep; it defaults to defaultWatchCron.
-	WatchCron string `env:"WATCH_CRON"`
+	NatsURL         string `env:"NATS_URL"`
+	WatchCron       string `env:"WATCH_CRON"`
 }
 
-// defaultWatchCron is offset from the files job at `0 * * * *` so the two never start together.
 const defaultWatchCron = "20 * * * *"
 
 func Init() (*Config, error) {

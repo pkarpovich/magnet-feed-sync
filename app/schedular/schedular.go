@@ -20,10 +20,8 @@ func NewService() (*Service, error) {
 	return &Service{scheduler: s}, nil
 }
 
-// AddJob registers one cron job under a name. Every job runs in singleton mode: both sweeps
-// can outlive their interval (a cold flaresolverr solve is ~74s, and a watcher cycle is
-// sequential over sources and queries with 120s/180s per-source timeouts), and an overlapping
-// run would publish twice and race the shared ext.to cookie and token state.
+// singleton mode: both sweeps can outlive their interval, and an overlapping watcher run
+// would publish twice and race the shared ext.to cookie
 func (s *Service) AddJob(name, cronExpr string, cb func()) error {
 	j, err := s.scheduler.NewJob(
 		gocron.CronJob(cronExpr, false),

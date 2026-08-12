@@ -50,8 +50,6 @@ type RunStateReader interface {
 	GetLastRun() (time.Time, bool, error)
 }
 
-// watchStore is the consumer-side view of the watch repository, holding only what the watch
-// handlers call.
 type watchStore interface {
 	Create(w *watcher.Watch) error
 	Update(w *watcher.Watch) error
@@ -63,15 +61,10 @@ type watchStore interface {
 	SeenRows(watchID string) ([]watch_store.SeenRow, error)
 }
 
-// searchEngine is the consumer-side view of the watcher engine. Both search endpoints go
-// through the very Evaluate the cron cycle calls, which is what keeps what the agent can
-// reproduce identical to what woke it.
 type searchEngine interface {
 	Evaluate(ctx context.Context, w watcher.Watch) watcher.RunOutcome
 }
 
-// magnetResolver resolves the magnet of one ext.to row. It is a seam of its own because
-// Magnet is a method on the ext.to source and deliberately not part of SearchSource.
 type magnetResolver interface {
 	Magnet(ctx context.Context, torrentID, query string) (string, error)
 }
@@ -474,15 +467,11 @@ func (c *Client) moveDownloadedFiles(ctx context.Context, magnet, location strin
 	return true, ""
 }
 
-// watchIDPatternSource is doubled as the 400 message, so an operator sees the rule that
-// rejected the id. The id becomes a NATS subject token: a dot or a space would corrupt it.
+// the id becomes a NATS subject token: a dot or a space would corrupt it
 const watchIDPatternSource = `^[a-z0-9_-]+$`
 
 var watchIDPattern = regexp.MustCompile(watchIDPatternSource)
 
-// watchRequest is the body of both POST /api/watches and PATCH /api/watches/{watchId}. The
-// pointer fields separate "absent" from "explicitly empty", which PATCH needs and create
-// treats as the zero value. A nil expires_at leaves an existing expiry untouched.
 type watchRequest struct {
 	ID           string     `json:"id"`
 	Queries      []string   `json:"queries"`
@@ -501,8 +490,7 @@ type watchResponse struct {
 	Rev          int        `json:"rev"`
 	SeededAt     *time.Time `json:"seeded_at"`
 	ExpiresAt    *time.Time `json:"expires_at"`
-	// a soft-deleted or auto-expired watch is still listed, so it has to say so: without
-	// this field it reads exactly like a healthy watch that happens to find nothing
+	// without this a disabled watch reads exactly like a healthy one that finds nothing
 	DisabledAt *time.Time      `json:"disabled_at"`
 	LastRunAt  *time.Time      `json:"last_run_at"`
 	LastStatus string          `json:"last_status"`
@@ -555,9 +543,7 @@ func (c *Client) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "watch already exists", http.StatusConflict)
 		return
 	default:
-		// a soft-deleted or expired id is re-creatable, otherwise DELETE would retire it for
-		// good. The watch_seen rows survive, so the revived watch does not replay what it
-		// already announced
+		// re-creatable, else DELETE retires the id for good; watch_seen survives so nothing replays
 		if !c.reviveWatch(ctx, w, watch) {
 			return
 		}
@@ -566,9 +552,6 @@ func (c *Client) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 	c.writeWatch(ctx, w, watch.ID, http.StatusCreated)
 }
 
-// reviveWatch overwrites a soft-deleted row with the request, then clears the soft delete and
-// the run lifecycle: this is a create, so the revived watch must seed silently and must not
-// inherit the dead one's last status.
 func (c *Client) reviveWatch(ctx context.Context, w http.ResponseWriter, watch *watcher.Watch) bool {
 	if err := c.watches.Update(watch); err != nil {
 		slog.ErrorContext(ctx, "failed to update disabled watch", "watch_id", watch.ID, "error", err)
@@ -693,8 +676,7 @@ func (c *Client) handleRemoveWatch(w http.ResponseWriter, r *http.Request) {
 
 	watchID := r.PathValue("watchId")
 
-	// a soft delete, mirroring how files are removed: the seen set survives, so re-creating
-	// the watch does not replay every release it already announced
+	// soft delete: the seen set survives, so re-creating does not replay past announcements
 	if err := c.watches.Disable(watchID); err != nil {
 		if errors.Is(err, watch_store.ErrNotFound) {
 			http.Error(w, "watch not found", http.StatusNotFound)
@@ -729,8 +711,6 @@ func decodeWatchRequest(w http.ResponseWriter, r *http.Request) (watchRequest, b
 	return req, true
 }
 
-// applyWatchRequest overwrites only the fields the caller sent, which is what makes the same
-// body work for create and for a partial update.
 func (c *Client) applyWatchRequest(watch *watcher.Watch, req watchRequest) {
 	if req.Queries != nil {
 		watch.Queries = trimmed(req.Queries)
@@ -760,8 +740,6 @@ func (c *Client) validateWatch(watch *watcher.Watch) error {
 	return c.validateSearchParams(watch)
 }
 
-// validateSearchParams checks everything a search needs. It is separate from validateWatch
-// because an ad-hoc search has no id to validate and must not be rejected for missing one.
 func (c *Client) validateSearchParams(watch *watcher.Watch) error {
 	if len(watch.Queries) == 0 {
 		return errors.New("at least one non-empty query is required")
@@ -784,8 +762,6 @@ func (c *Client) validateSearchParams(watch *watcher.Watch) error {
 	return nil
 }
 
-// existingWatch returns the stored row, or nil when there is none. Soft-deleted rows come
-// back too: create has to tell "taken" apart from "removed and re-creatable".
 func (c *Client) existingWatch(id string) (*watcher.Watch, error) {
 	watch, err := c.watches.GetByID(id)
 	if errors.Is(err, watch_store.ErrNotFound) {
@@ -815,8 +791,6 @@ func (c *Client) loadWatch(ctx context.Context, w http.ResponseWriter, id string
 	return watch, true
 }
 
-// writeWatch answers with the stored row rather than with the request, so rev and the
-// timestamps the database owns are what the caller sees.
 func (c *Client) writeWatch(ctx context.Context, w http.ResponseWriter, id string, code int) {
 	watch, err := c.watches.GetByID(id)
 	if err != nil {
@@ -874,14 +848,8 @@ func trimmed(values []string) []string {
 	return kept
 }
 
-// magnetUnavailable is reported per item rather than as a request failure: an ext.to source
-// disabled at startup must still let the rest of a result set through.
 const magnetUnavailable = "extto magnet resolver is not configured"
 
-// searchResponse reports what the engine found. total counts the deduped pre-filter set and
-// matched the post-filter one, so a caller reading a short items list still learns how much
-// was thrown away. errors is non-empty when a source failed: the result set is then partial
-// and must not be read as "nothing new".
 type searchResponse struct {
 	WatchID string       `json:"watch_id"`
 	Total   int          `json:"total"`
@@ -933,8 +901,7 @@ func (c *Client) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// an ad-hoc watch has no id, which is what makes Evaluate skip the seen set and report
-	// everything it matched as new
+	// no id: Evaluate then skips the seen set and reports everything matched as new
 	watch := &watcher.Watch{}
 	c.applyWatchRequest(watch, req)
 
@@ -946,8 +913,6 @@ func (c *Client) handleSearch(w http.ResponseWriter, r *http.Request) {
 	c.runSearch(ctx, w, r, *watch)
 }
 
-// runSearch is the one path both endpoints share, so the ad-hoc search and the watch
-// reproduction cannot answer differently for the same parameters.
 func (c *Client) runSearch(ctx context.Context, w http.ResponseWriter, r *http.Request, watch watcher.Watch) {
 	o := c.engine.Evaluate(ctx, watch)
 
@@ -964,9 +929,7 @@ func (c *Client) runSearch(ctx context.Context, w http.ResponseWriter, r *http.R
 		Matched: len(o.Matched),
 		Raw:     raw,
 		Errors:  errorMessages(o.Errs),
-		// magnets are resolved for the matched rows only: each one is a sequential signed
-		// round trip, and the raw view exists to show what the regexes threw away — paying
-		// for a magnet per discarded row would hammer ext.to for rows nobody will download
+		// matched rows only: a magnet is a sequential signed round trip per row
 		Items: c.searchItems(ctx, results, freshKeys(o.New), freshKeys(o.Matched)),
 	})
 }
@@ -989,8 +952,7 @@ func (c *Client) searchItems(
 		}
 		_, item.New = fresh[result.SeenKey()]
 
-		// ext.to has no direct .torrent, so its magnet is fetched on demand — sequentially,
-		// because the signed call reuses the tokens of the search page just fetched
+		// sequential: the signed call reuses the tokens of the search page just fetched
 		if _, keep := matched[result.SeenKey()]; keep && result.Source == watcher.SourceExtto {
 			item.Magnet, item.MagnetError = c.resolveMagnet(ctx, result)
 		}
@@ -1001,8 +963,6 @@ func (c *Client) searchItems(
 	return items
 }
 
-// resolveMagnet reports a failure on the item instead of failing the request: one dead row
-// must not hide the rest of a result set the agent still has to look at.
 func (c *Client) resolveMagnet(ctx context.Context, result watcher.SearchResult) (string, string) {
 	if c.magnets == nil {
 		return "", magnetUnavailable
@@ -1018,9 +978,6 @@ func (c *Client) resolveMagnet(ctx context.Context, result watcher.SearchResult)
 	return magnet, ""
 }
 
-// loadActiveWatch answers 404 for a soft-deleted watch too. Watch carries no disabled flag,
-// so the active set comes from the loader the cron uses rather than from GetByID, which
-// happily returns a watch that was removed.
 func (c *Client) loadActiveWatch(ctx context.Context, w http.ResponseWriter, id string) (*watcher.Watch, bool) {
 	watches, err := c.watches.WatchesForCycle()
 	if err != nil {
@@ -1127,8 +1084,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		resp.LastRunAt = &run.at
 	}
 
-	// the watcher check appears in the degraded arm only, so it can never lower an
-	// unhealthy verdict the files sweep or the breaker already reached
+	// degraded arm only, so it can never lower an unhealthy verdict reached elsewhere
 	code := http.StatusOK
 	switch {
 	case anyBlocked || c.runIsStale(run):
@@ -1167,15 +1123,12 @@ func (c *Client) providerStates() (map[string]string, bool) {
 	return states, anyBlocked
 }
 
-// watchHealth summarises the active watches and reports whether they degrade the service.
-// It never returns an unhealthy verdict: a watcher that is behind still leaves the download
-// path working.
 func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
 	if c.watches == nil {
 		return nil, false
 	}
 
-	// WatchesForCycle drops the soft-deleted rows only, so expiry is filtered here
+	// WatchesForCycle drops soft-deleted rows only, so expiry is filtered here
 	watches, err := c.watches.WatchesForCycle()
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to load watches for health", "error", err)
@@ -1195,8 +1148,7 @@ func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
 		if watch.LastStatus != "" {
 			health.WithErrors++
 		}
-		// a watch created seconds ago has no timestamp yet; counting it as the oldest run
-		// would report the service degraded before its first tick could possibly have run
+		// a watch created seconds ago has no timestamp: it must not read as the oldest run
 		if watch.LastRunAt == nil {
 			neverRan = true
 
@@ -1220,7 +1172,7 @@ func (c *Client) watchesAreDegraded(health *watchesHealth, neverRan bool) bool {
 		return true
 	}
 
-	// before the grace period elapses a watch that has never run is expected, not a fault
+	// before the grace period a watch that never ran is expected, not a fault
 	return neverRan && !c.startedAt.IsZero() && time.Since(c.startedAt) > c.staleWatchAfter
 }
 

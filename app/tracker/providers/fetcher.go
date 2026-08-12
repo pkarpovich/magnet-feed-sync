@@ -71,10 +71,7 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	return body, nil
 }
 
-// WithoutURL drops the *url.Error wrapper, whose message embeds the whole request url —
-// for jackett that carries the api key, and this error reaches the logs, loki and the
-// search endpoints. Exported because the watcher's jackett source signs its requests the
-// same way and must strip the same wrapper.
+// the *url.Error message embeds the request url, api key included, and reaches loki
 func WithoutURL(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {

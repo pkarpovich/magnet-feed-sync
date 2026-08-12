@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	// subjectPrefix keeps the literal tuclaw first token the TUCLAW stream subscribes to.
 	subjectPrefix      = "tuclaw.releases.found."
 	maxPayloadItems    = 10
 	maxPayloadBytes    = 8192
@@ -27,30 +26,20 @@ const (
 
 var errPublisherDisabled = errors.New("publish: nats is not configured")
 
-// natsMessage is what the JetStream seam carries. The two strings are on a struct rather
-// than in the signature so a subject can never be passed as a message id — and so the
-// message id is assertable at all: jetstream.WithMsgID returns an opaque PublishOpt over an
-// unexported struct, which a fake standing directly in for jetstream.JetStream could not
-// read back.
 type natsMessage struct {
 	Subject string
 	MsgID   string
 	Payload []byte
 }
 
-// jetStream is the consumer-side view of JetStream. The concrete client is wrapped by
-// jetStreamAdapter, so payload construction can be tested without a broker.
 type jetStream interface {
 	publish(ctx context.Context, m natsMessage) error
 }
 
-// PublisherOptions configures the publisher. An empty URL disables publishing entirely.
 type PublisherOptions struct {
 	URL string
 }
 
-// Publisher announces a watch's new releases on the TUCLAW JetStream stream. The stream is
-// owned by the tuclaw daemon: this is a publisher only and never creates or reconfigures it.
 type Publisher struct {
 	stream jetStream
 	conn   *nats.Conn
@@ -59,9 +48,7 @@ type Publisher struct {
 
 var _ publisher = (*Publisher)(nil)
 
-// NewPublisher connects to NATS. A failed connect is never fatal: the container would
-// otherwise crash-loop every time NATS restarts. A publisher without a stream returns an
-// error from Publish, which keeps the release unmarked and retried next cycle.
+// a failed connect is never fatal: the container would crash-loop on every NATS restart
 func NewPublisher(o PublisherOptions) *Publisher {
 	p := &Publisher{now: time.Now}
 
@@ -94,15 +81,12 @@ func NewPublisher(o PublisherOptions) *Publisher {
 	return p
 }
 
-// Close releases the NATS connection.
 func (p *Publisher) Close() {
 	if p.conn != nil {
 		p.conn.Close()
 	}
 }
 
-// Publish sends the delta of one watch and returns only once JetStream has acked it, so
-// nothing is marked seen before the wake-up is durable.
 func (p *Publisher) Publish(ctx context.Context, w Watch, o RunOutcome) error {
 	if p.stream == nil {
 		return errPublisherDisabled
@@ -145,11 +129,7 @@ type payloadItem struct {
 	Title  string `json:"title"`
 }
 
-// payload carries identity and delta only — never the search parameters, which would drift
-// from what the engine actually evaluated. total, matched and new_total survive every
-// truncation, so a trimmed new list is never mistaken for the whole story: the cycle marks
-// all of New seen, and without new_total a consumer could not tell that the items beyond
-// the cap existed at all.
+// identity and delta only: search parameters here would drift from what the engine evaluated
 func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
 	items := make([]payloadItem, 0, len(o.New))
 	for _, result := range o.New {
@@ -191,16 +171,8 @@ func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
 	}
 }
 
-// messageID is the stream-side dedup key for the deliberate publish-then-mark ordering. It
-// digests the *whole* sorted key set, so it is order-independent and always present — unlike
-// "the newest item", since PublishedAt is the zero time for any ext.to row whose Age cell
-// carries no title attribute.
-//
-// The set matters, not just its maximum: when a publish is acked but MarkSeen fails, the
-// retry re-publishes the same releases plus whatever the cycle found since. A key derived
-// from the maximum alone is unchanged by an added item that sorts lower, so JetStream would
-// ack the retry as a duplicate while the cycle marks the whole set seen — losing that item
-// permanently and silently, which is exactly what publish-then-mark exists to prevent.
+// digests the whole sorted key set, not its maximum: a retry that added a lower-sorting item
+// would otherwise be acked as a duplicate and that item marked seen without ever being sent
 func messageID(w Watch, results []SearchResult) string {
 	keys := make([]string, 0, len(results))
 	for _, result := range results {

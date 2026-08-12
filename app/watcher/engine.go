@@ -18,11 +18,8 @@ const (
 	maxMessageItems = 10
 )
 
-// unavailableSourceError names a source a watch references but this process does not run —
-// no jackett api key, no solver. It is deliberately its own type: a search that *failed* is
-// transient and must hold the seed back, while a source that is not configured at all is a
-// standing fact, and treating it as a failure would leave the watch unseeded forever and
-// therefore permanently silent.
+// its own type on purpose: a failed search must hold the seed back, an unconfigured source
+// must not — that one never recovers and would leave the watch unseeded, and so silent, forever
 type unavailableSourceError struct {
 	name string
 }
@@ -31,9 +28,6 @@ func (e unavailableSourceError) Error() string {
 	return e.name + ": source is not configured"
 }
 
-// RunOutcome is what one evaluation of a watch found: everything the sources returned after
-// dedup (Raw), what survived the regex filters (Matched), what was never announced before
-// (New) and whatever went wrong on the way (Errs).
 type RunOutcome struct {
 	Matched []SearchResult
 	New     []SearchResult
@@ -41,13 +35,10 @@ type RunOutcome struct {
 	Errs    []error
 }
 
-// publisher is the consumer-side view of the NATS notification. The real JetStream
-// implementation is injected from main.go.
 type publisher interface {
 	Publish(ctx context.Context, w Watch, o RunOutcome) error
 }
 
-// watchStore is the consumer-side view of the watch repository.
 type watchStore interface {
 	WatchesForCycle() ([]*Watch, error)
 	SeenKeys(watchID string) (map[string]struct{}, error)
@@ -57,7 +48,6 @@ type watchStore interface {
 	RecordRun(watchID, status string) error
 }
 
-// EngineDeps carries what the engine needs; all of it is injected from main.go.
 type EngineDeps struct {
 	Sources   []SearchSource
 	Store     watchStore
@@ -65,8 +55,6 @@ type EngineDeps struct {
 	Messages  chan<- string
 }
 
-// Engine is the single place a watch is evaluated, so the cron cycle and the reproduction
-// endpoint cannot drift apart.
 type Engine struct {
 	sources   []SearchSource
 	store     watchStore
@@ -92,17 +80,13 @@ func NewEngine(d EngineDeps) *Engine {
 	}
 }
 
-// nopPublisher is what an engine built without a publisher gets. It errors rather than
-// succeeding quietly, because a silent success would let RunCycle mark releases seen that
-// nobody was ever told about.
+// errors rather than succeeding quietly: a silent success would mark releases seen unsent
 type nopPublisher struct{}
 
 func (nopPublisher) Publish(context.Context, Watch, RunOutcome) error {
 	return errors.New("publish: no publisher configured")
 }
 
-// Evaluate searches, merges, filters and diffs. It is side-effect free: RunCycle owns every
-// write, so the reproduction endpoint can share this path.
 func (e *Engine) Evaluate(ctx context.Context, w Watch) RunOutcome {
 	var o RunOutcome
 
@@ -124,9 +108,6 @@ func (e *Engine) Evaluate(ctx context.Context, w Watch) RunOutcome {
 	return o
 }
 
-// collect runs every query of every source sequentially: FlareSolverr must not be
-// parallelised and Jackett must not be hammered. A failing source stops at its failing query
-// but keeps whatever its earlier queries returned, and never aborts the sources after it.
 func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error) {
 	var (
 		raw  []SearchResult
@@ -164,16 +145,12 @@ func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error)
 func (e *Engine) searchAll(ctx context.Context, source SearchSource, queries []string) ([]SearchResult, error) {
 	var results []SearchResult
 
-	// no timeout is applied here: every source bounds its own call with the same constant,
-	// and a second copy of that table keyed on source names would silently disagree with it
+	// each source bounds its own call; a second table keyed on source names would drift from it
 	for _, query := range queries {
 		found, err := source.Search(ctx, query)
 		if err != nil {
-			// the queries after the failure are not attempted — a source that just refused
-			// us will refuse them too, and on ext.to each attempt holds the single solver
-			// slot for up to 180s. What it already returned is still handed back: dropping
-			// it would withhold a release that was genuinely found, which is the silent
-			// miss the publish-then-mark ordering exists to prevent
+			// later queries are skipped (ext.to holds the single solver slot up to 180s), but what
+			// earlier ones returned is kept: dropping it would withhold a genuinely found release
 			return results, fmt.Errorf("%s %q: %w", source.Name(), query, err)
 		}
 
@@ -194,8 +171,7 @@ func (e *Engine) sourceByName(name string) SearchSource {
 }
 
 func (e *Engine) filter(w Watch, raw []SearchResult) ([]SearchResult, error) {
-	// only a stored watch's patterns are cached: POST /api/search takes its regexes from the
-	// request body, and caching those would let a caller grow the map without bound
+	// ad-hoc regexes from POST /api/search are not cached: a caller could grow the map unbounded
 	cache := w.ID != ""
 
 	include, err := e.compile(w.IncludeRegex, cache)
@@ -223,8 +199,7 @@ func (e *Engine) filter(w Watch, raw []SearchResult) ([]SearchResult, error) {
 	return matched, nil
 }
 
-// compile caches on the regex source string rather than on the watch, so a PATCH that
-// changes a pattern can never be served a stale compiled value.
+// keyed on the regex source, not the watch: a PATCH must never be served a stale compiled value
 func (e *Engine) compile(pattern string, cache bool) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, nil
@@ -248,8 +223,6 @@ func (e *Engine) compile(pattern string, cache bool) (*regexp.Regexp, error) {
 	return compiled, nil
 }
 
-// delta reports what was never announced. An ad-hoc watch has no id and therefore no seen
-// set: everything it matched is new.
 func (e *Engine) delta(w Watch, matched []SearchResult) ([]SearchResult, error) {
 	if w.ID == "" {
 		return matched, nil
@@ -272,7 +245,6 @@ func (e *Engine) delta(w Watch, matched []SearchResult) ([]SearchResult, error) 
 	return fresh, nil
 }
 
-// RunCycle evaluates every watch the cron owns and applies the effects.
 func (e *Engine) RunCycle(ctx context.Context) error {
 	watches, err := e.store.WatchesForCycle()
 	if err != nil {
@@ -306,9 +278,6 @@ func (e *Engine) runWatch(ctx context.Context, w Watch) {
 	e.recordRun(w, e.applyEffects(ctx, w, o))
 }
 
-// applyEffects performs the writes a cycle owes and returns the status to record. Ordering
-// is load-bearing: publish first, mark seen only after the ack. A crash between the two
-// costs one duplicate wake; the reverse loses the release permanently and silently.
 func (e *Engine) applyEffects(ctx context.Context, w Watch, o RunOutcome) string {
 	status := statusOf(o.Errs)
 
@@ -335,12 +304,6 @@ func (e *Engine) applyEffects(ctx context.Context, w Watch, o RunOutcome) string
 	return status
 }
 
-// notify mirrors every published hit to the admin channel. An event task fires once and
-// completes, so a missed re-arm on the agent side makes the watch publish to nobody — and
-// that silence reads exactly like "no releases". The telegram copy makes it visible.
-//
-// The send is non-blocking on purpose: messagesForSend is unbuffered, so waiting on a
-// stalled reader would wedge the whole cron behind it.
 func (e *Engine) notify(ctx context.Context, w Watch, results []SearchResult) {
 	if len(results) == 0 {
 		return
@@ -372,25 +335,16 @@ func watchHitMessage(w Watch, results []SearchResult) string {
 	return escapeMarkdown(strings.Join(lines, "\n\n"))
 }
 
-// escapeMarkdown makes plain text safe for the MarkdownV2 parse mode every admin message is
-// sent with (see events.NewMarkdownMessage) — telegram rejects the whole message when a
-// reserved char such as '(' or '-' is left unescaped. '\' is doubled by hand first, because
-// tbapi.EscapeText leaves it alone.
 func escapeMarkdown(text string) string {
 	return tbapi.EscapeText(tbapi.ModeMarkdownV2, strings.ReplaceAll(text, "\\", "\\\\"))
 }
 
-// seed records the current world silently: a fresh watch must not wake the agent with
-// releases that already existed when it was created.
 func (e *Engine) seed(w Watch, o RunOutcome) string {
 	if err := e.store.MarkSeen(w.ID, o.Matched); err != nil {
 		return err.Error()
 	}
 
-	// seeding from a partially failed run would bury every release the failed source
-	// never reported, so the seed waits for a clean cycle. A source that is not configured
-	// at all does not count: it never comes back on its own, and holding the seed for it
-	// leaves the watch unseeded — and therefore silent — forever
+	// a partially failed run would bury releases the failed source never reported
 	if hasSearchFailure(o.Errs) {
 		return ""
 	}
@@ -420,9 +374,6 @@ func expired(w Watch) bool {
 	return w.ExpiresAt != nil && !w.ExpiresAt.After(time.Now())
 }
 
-// hasSearchFailure reports whether anything that could succeed on a later cycle went wrong.
-// An unconfigured source is excluded: it is a standing configuration fact, still reported in
-// last_status and on /api/health, but never a reason to withhold the seed.
 func hasSearchFailure(errs []error) bool {
 	for _, err := range errs {
 		var unavailable unavailableSourceError
@@ -456,8 +407,7 @@ func joinStatus(status, addition string) string {
 	return truncateStatus(status + "; " + addition)
 }
 
-// truncateStatus counts runes, not bytes: the statuses carry Cyrillic queries and a byte
-// slice would store a broken rune.
+// runes, not bytes: statuses carry Cyrillic queries
 func truncateStatus(status string) string {
 	runes := []rune(status)
 	if len(runes) <= maxStatusLength {

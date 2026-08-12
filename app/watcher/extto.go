@@ -33,22 +33,15 @@ const (
 	exttoDateLayout    = "02 Jan 2006"
 )
 
-// solver is the consumer-side view of the FlareSolverr client. The ext.to source calls it
-// only to refresh the cookie; every other request goes through its own http client.
 type solver interface {
 	Solve(ctx context.Context, url string) (*providers.SolvedPage, error)
 }
 
-// ExttoOptions configures the source. An empty BaseURL falls back to the public site; a nil
-// Solver leaves the source disabled, reporting a configuration error rather than no rows.
 type ExttoOptions struct {
 	BaseURL string
 	Solver  solver
 }
 
-// ExttoSource searches search.extto.com, which sits behind a Cloudflare challenge. The
-// cookie, the User-Agent and the two page tokens are process-wide state shared by the cron
-// cycle and the http handlers, so every access is guarded.
 type ExttoSource struct {
 	baseURL string
 	solver  solver
@@ -59,13 +52,11 @@ type ExttoSource struct {
 	userAgent string
 	pageToken string
 	csrfToken string
-	// tokenQuery and tokenSession say which query's page the tokens came from and under which
-	// cookie it was fetched — the signed magnet POST has to reproduce both
+	// the signed magnet POST has to reproduce both
 	tokenQuery   string
 	tokenSession exttoSession
 }
 
-// NewExttoSource builds an ext.to source. It never dials anything at construction time.
 func NewExttoSource(o ExttoOptions) *ExttoSource {
 	base := strings.TrimRight(o.BaseURL, "/")
 	if base == "" {
@@ -99,12 +90,8 @@ func (s *ExttoSource) Search(ctx context.Context, query string) ([]SearchResult,
 	return s.parse(body, query, session)
 }
 
-// Magnet resolves the magnet link of one row. query is required because the signature is
-// built from tokens carried by that query's search page, so the search is replayed when no
-// fresh tokens are held.
-// The nil receiver is handled rather than dereferenced: a typed nil in an interface field
-// passes the caller's `!= nil` check, and the composition root is then the only thing
-// standing between a disabled ext.to source and a panic on the first magnet call.
+// query is required: the signature uses tokens from that query's page. The nil receiver is
+// handled, not dereferenced — a typed nil in an interface passes the caller's != nil check
 func (s *ExttoSource) Magnet(ctx context.Context, torrentID, query string) (string, error) {
 	if s == nil || s.solver == nil {
 		return "", errors.New("extto magnet: flaresolverr is not configured")
@@ -127,9 +114,8 @@ func (s *ExttoSource) Magnet(ctx context.Context, torrentID, query string) (stri
 	form.Set("hmac", s.sign(torrentID, ts, tokens.page))
 	form.Set("sessid", tokens.csrf)
 
-	// the POST is sent under the very cookie the tokens were minted for, not under whatever
-	// the shared state holds now: a concurrent refresh between the two would otherwise pair
-	// this query's page and csrf tokens with a different session, which ext.to refuses
+	// sent under the cookie the tokens were minted for: a concurrent refresh would pair this
+	// query's tokens with another session, which ext.to refuses
 	body, err := s.postForm(ctx, s.baseURL+exttoMagnetPath, form, tokens.session)
 	if err != nil {
 		return "", err
@@ -155,8 +141,6 @@ func (s *ExttoSource) sign(torrentID, ts, pageToken string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// browse returns the search page together with the session it was fetched under, so the
-// tokens that page carries can be stored next to the cookie they belong to.
 func (s *ExttoSource) browse(ctx context.Context, query string) ([]byte, exttoSession, error) {
 	if s.session().cookie == "" {
 		if err := s.refreshCookie(ctx); err != nil {
@@ -173,8 +157,7 @@ func (s *ExttoSource) browse(ctx context.Context, query string) ([]byte, exttoSe
 		return body, session, nil
 	}
 
-	// only a GET may be replayed after a refresh; a signed POST carries tokens of its own
-	// and has to be re-issued by its caller
+	// only a GET may be replayed after a refresh; a signed POST must be re-issued by its caller
 	if err := s.refreshCookie(ctx); err != nil {
 		return nil, exttoSession{}, err
 	}
@@ -211,8 +194,7 @@ func (s *ExttoSource) get(ctx context.Context, endpoint string) ([]byte, exttoSe
 		return nil, exttoSession{}, err
 	}
 
-	// a challenge answers with a status of its own, and the caller handles it by refreshing
-	// the cookie, so it must reach them as a body rather than as a status error
+	// a challenge must reach the caller as a body, not a status error, so it can refresh the cookie
 	if (status < 200 || status >= 300) && !isExttoChallenge(body) {
 		return nil, exttoSession{}, fmt.Errorf("search extto: unexpected status %d", status)
 	}
@@ -240,9 +222,6 @@ func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Va
 	return body, nil
 }
 
-// newRequest takes the session rather than reading it, so a caller that has to stay on one
-// session for several steps — the signed magnet POST — cannot be handed a refreshed one
-// halfway through.
 func (s *ExttoSource) newRequest(
 	ctx context.Context, method, endpoint string, body io.Reader, session exttoSession,
 ) (*http.Request, error) {
@@ -262,9 +241,7 @@ func (s *ExttoSource) newRequest(
 func (s *ExttoSource) do(req *http.Request) ([]byte, int, error) {
 	res, err := s.client.Do(req)
 	if err != nil {
-		// same treatment the jackett source gives its transport errors: the *url.Error
-		// wrapper carries the full request url into last_status, the unauthenticated search
-		// responses and loki
+		// the *url.Error wrapper would carry the full request url into last_status and loki
 		return nil, 0, fmt.Errorf("call extto: %w", providers.WithoutURL(err))
 	}
 	defer func() {
@@ -319,25 +296,20 @@ func (s *ExttoSource) session() exttoSession {
 	return exttoSession{cookie: s.cookie, userAgent: s.userAgent}
 }
 
-// exttoTokens carries the session the tokens were minted under alongside them: the hmac is
-// built from the page token and the csrf token goes out as sessid, and ext.to checks both
-// against the cookie that fetched the page.
+// hmac uses the page token, sessid the csrf token; ext.to checks both against the fetching cookie
 type exttoTokens struct {
 	page    string
 	csrf    string
 	session exttoSession
 }
 
-// tokensFor returns the tokens of query's search page, running the search itself when the
-// held ones belong to another query or none are held at all.
 func (s *ExttoSource) tokensFor(ctx context.Context, query string) (exttoTokens, error) {
 	tokens, ok, searched := s.heldTokens(query)
 	if ok {
 		return tokens, nil
 	}
-	// the query's page has already been fetched this session and carried no usable tokens —
-	// markup ext.to changed under us. Replaying the search would do it once per row, and a
-	// search is a full challenge-fenced round trip holding the shared solver.
+	// page already fetched this session with no usable tokens: replaying would run a full
+	// challenge-fenced search per row
 	if searched {
 		return exttoTokens{}, fmt.Errorf("extto magnet: no page tokens for query %q", query)
 	}
@@ -354,9 +326,6 @@ func (s *ExttoSource) tokensFor(ctx context.Context, query string) (exttoTokens,
 	return tokens, nil
 }
 
-// heldTokens reports the tokens of query's page, whether they are usable, and whether that
-// page was fetched at all — the last one is what stops a token-less page from being
-// re-searched once per row.
 func (s *ExttoSource) heldTokens(query string) (exttoTokens, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -424,7 +393,7 @@ func (s *ExttoSource) rowResult(row *goquery.Selection, query string) (SearchRes
 	return SearchResult{
 		Source:     SourceExtto,
 		ExternalID: externalID,
-		// the query terms come back wrapped in highlight tags, so only the text is the title
+		// query terms come back wrapped in highlight tags
 		Title:       strings.TrimSpace(link.Text()),
 		PageURL:     pageURL,
 		Query:       query,
@@ -433,9 +402,6 @@ func (s *ExttoSource) rowResult(row *goquery.Selection, query string) (SearchRes
 	}, true
 }
 
-// labelledValue returns the value span of the cell carrying the given label. The numeric
-// cells are keyed by their label rather than by position, so a column reorder degrades to a
-// missing field instead of a wrong one.
 func (s *ExttoSource) labelledValue(row *goquery.Selection, label string) *goquery.Selection {
 	var value *goquery.Selection
 	row.Find("div.add-block-wrapper").EachWithBreak(func(_ int, cell *goquery.Selection) bool {
@@ -464,8 +430,7 @@ func (s *ExttoSource) seeders(row *goquery.Selection) int {
 	return seeders
 }
 
-// publishedAt reads the Age cell's title attribute: its text is a relative age ("1 year
-// ago") and carries no date.
+// the cell text is a relative age ("1 year ago"); only the title attribute carries a date
 func (s *ExttoSource) publishedAt(row *goquery.Selection) time.Time {
 	value := s.labelledValue(row, "Age")
 	if value == nil || value.Length() == 0 {
@@ -487,8 +452,7 @@ func (s *ExttoSource) publishedAt(row *goquery.Selection) time.Time {
 
 var searchPageTokenPattern = regexp.MustCompile(`searchPageToken\s*=\s*['"]([0-9a-f]{32})['"]`)
 
-// exttoChallengeMarkers are what a Cloudflare interstitial carries. The status code is not
-// a reliable signal, and a solved page still mentions challenge-platform.
+// the status code is not a reliable signal, and a solved page still mentions challenge-platform
 var exttoChallengeMarkers = [][]byte{[]byte("Just a moment"), []byte("_cf_chl_opt")}
 
 func isExttoChallenge(body []byte) bool {

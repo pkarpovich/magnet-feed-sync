@@ -34,8 +34,7 @@ type solverSolution struct {
 	UserAgent string         `json:"userAgent"`
 }
 
-// solverCookie mirrors the cookie shape flaresolverr emits. net/http.Cookie cannot be
-// unmarshalled directly: its Expires is a time.Time and the solver sends a unix number.
+// net/http.Cookie cannot be unmarshalled directly: Expires is a time.Time, the solver sends unix
 type solverCookie struct {
 	Name   string `json:"name"`
 	Value  string `json:"value"`
@@ -43,9 +42,6 @@ type solverCookie struct {
 	Path   string `json:"path"`
 }
 
-// SolvedPage is a page fetched through FlareSolverr together with the browser state that
-// produced it. The cookie and the User-Agent belong together — presenting one without the
-// other re-triggers the challenge immediately.
 type SolvedPage struct {
 	Body      []byte
 	Cookies   []*http.Cookie
@@ -113,9 +109,6 @@ func (f *solverFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	return page.Body, nil
 }
 
-// Solve fetches pageURL and returns the cookies and User-Agent alongside the body, for a
-// caller that continues the session with its own http client. Unlike Fetch it does not
-// judge the body: such a caller owns its own challenge detection.
 func (f *solverFetcher) Solve(ctx context.Context, pageURL string) (*SolvedPage, error) {
 	if err := f.acquire(ctx); err != nil {
 		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("wait for solver: %w", err)}
@@ -219,9 +212,7 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("encode solver request: %w", err)}
 	}
 
-	// the *url.Error wrapper embeds the whole solver endpoint, which carries any userinfo
-	// FLARESOLVERR_URL was configured with — and this error reaches loki, last_status and the
-	// unauthenticated search responses, where main.go is careful to log it redacted
+	// the *url.Error message embeds the solver endpoint, userinfo included, and reaches loki
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.baseURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build solver request: %w", WithoutURL(err))}
