@@ -24,7 +24,10 @@ const (
 var errPublisherDisabled = errors.New("publish: nats is not configured")
 
 // natsMessage is what the JetStream seam carries. The two strings are on a struct rather
-// than in the signature so a subject can never be passed as a message id.
+// than in the signature so a subject can never be passed as a message id — and so the
+// message id is assertable at all: jetstream.WithMsgID returns an opaque PublishOpt over an
+// unexported struct, which a fake standing directly in for jetstream.JetStream could not
+// read back.
 type natsMessage struct {
 	Subject string
 	MsgID   string
@@ -128,6 +131,7 @@ type payload struct {
 	FoundAt  string        `json:"found_at"`
 	Total    int           `json:"total"`
 	Matched  int           `json:"matched"`
+	NewTotal int           `json:"new_total"`
 	New      []payloadItem `json:"new"`
 }
 
@@ -138,8 +142,10 @@ type payloadItem struct {
 }
 
 // payload carries identity and delta only — never the search parameters, which would drift
-// from what the engine actually evaluated. total and matched survive every truncation, so a
-// trimmed new list is never mistaken for the whole story.
+// from what the engine actually evaluated. total, matched and new_total survive every
+// truncation, so a trimmed new list is never mistaken for the whole story: the cycle marks
+// all of New seen, and without new_total a consumer could not tell that the items beyond
+// the cap existed at all.
 func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
 	items := make([]payloadItem, 0, len(o.New))
 	for _, result := range o.New {
@@ -159,6 +165,7 @@ func (p *Publisher) payload(w Watch, o RunOutcome) ([]byte, error) {
 		FoundAt:  p.now().UTC().Format(time.RFC3339),
 		Total:    len(o.Raw),
 		Matched:  len(o.Matched),
+		NewTotal: len(o.New),
 		New:      items,
 	}
 

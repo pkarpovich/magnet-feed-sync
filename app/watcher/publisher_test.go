@@ -117,6 +117,9 @@ func TestPublisherCapsItems(t *testing.T) {
 	assert.Len(t, decoded.New, maxPayloadItems)
 	assert.Equal(t, maxPayloadItems+5, decoded.Total)
 	assert.Equal(t, maxPayloadItems+5, decoded.Matched)
+	// the cycle marks every one of them seen, so without this count the 5 dropped releases
+	// would be invisible to the consumer forever
+	assert.Equal(t, maxPayloadItems+5, decoded.NewTotal)
 }
 
 func TestPublisherTrimsToByteCap(t *testing.T) {
@@ -145,6 +148,7 @@ func TestPublisherTrimsToByteCap(t *testing.T) {
 	// the counts describe the whole run, so a trimmed list never reads as the whole story
 	assert.Equal(t, maxPayloadItems, decoded.Total)
 	assert.Equal(t, maxPayloadItems, decoded.Matched)
+	assert.Equal(t, maxPayloadItems, decoded.NewTotal)
 }
 
 func TestPublisherSubjectAndMessageID(t *testing.T) {

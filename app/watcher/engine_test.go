@@ -3,9 +3,12 @@ package watcher
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,6 +83,8 @@ type fakeStore struct {
 	seeded   []string
 	disabled []string
 
+	seenKeysCalls int
+
 	seenKeysErr error
 	markSeenErr error
 	cycleErr    error
@@ -99,6 +104,10 @@ func (s *fakeStore) WatchesForCycle() ([]*Watch, error) {
 }
 
 func (s *fakeStore) SeenKeys(watchID string) (map[string]struct{}, error) {
+	s.mu.Lock()
+	s.seenKeysCalls++
+	s.mu.Unlock()
+
 	if s.seenKeysErr != nil {
 		return nil, s.seenKeysErr
 	}
@@ -351,7 +360,9 @@ func TestEvaluateAdHocWatchReportsEverythingAsNew(t *testing.T) {
 
 	require.Empty(t, o.Errs)
 	assert.Len(t, o.New, 2)
-	assert.Nil(t, store.seenKeysErr)
+	// an ad-hoc watch has no id, so it must not consult the seen set at all — the two rows
+	// are new because nothing was looked up, not because the lookup missed
+	assert.Zero(t, store.seenKeysCalls)
 }
 
 func TestEvaluateFailingSourceDoesNotAbortTheOthers(t *testing.T) {
@@ -381,8 +392,52 @@ func TestEvaluateUnknownSourceIsAnError(t *testing.T) {
 	o := engine.Evaluate(context.Background(), *w)
 
 	require.Len(t, o.Errs, 1)
-	assert.Contains(t, o.Errs[0].Error(), "unknown source")
+	assert.Contains(t, o.Errs[0].Error(), "source is not configured")
 	assert.Empty(t, o.Raw)
+}
+
+// the compiled-regex cache is keyed on the pattern string, not on the watch, so a PATCH
+// that changes a pattern can never be served the previous compiled value
+func TestEvaluateUsesTheCurrentRegexAfterAChange(t *testing.T) {
+	source := &fakeSource{
+		name: "jackett",
+		replies: []sourceReply{
+			{results: resultsFor("jackett", enRelease, ruRelease)},
+			{results: resultsFor("jackett", enRelease, ruRelease)},
+		},
+	}
+	w := Watch{ID: "one-night-only-en", Queries: []string{"q"}, Sources: []string{"jackett"}, IncludeRegex: `(?i)WEB-DL`}
+	engine := NewEngine(EngineDeps{Sources: []SearchSource{source}, Store: newFakeStore()})
+
+	first := engine.Evaluate(context.Background(), w)
+	require.Len(t, first.Matched, 1)
+	assert.Equal(t, enRelease, first.Matched[0].Title)
+
+	w.IncludeRegex = `(?i)TSRip`
+	second := engine.Evaluate(context.Background(), w)
+
+	require.Len(t, second.Matched, 1)
+	assert.Equal(t, ruRelease, second.Matched[0].Title)
+}
+
+// POST /api/search takes its regexes from the request body; caching those would let a
+// caller grow the map without bound for as long as the process runs
+func TestEvaluateDoesNotCacheAdHocRegexes(t *testing.T) {
+	stored := Watch{ID: "one-night-only-en", Queries: []string{"q"}, Sources: []string{"jackett"}, IncludeRegex: `(?i)WEB-DL`}
+	adHoc := Watch{Queries: []string{"q"}, Sources: []string{"jackett"}, IncludeRegex: `(?i)TSRip`}
+	engine := NewEngine(EngineDeps{
+		Sources: []SearchSource{sourceWith("jackett", enRelease)},
+		Store:   newFakeStore(),
+	})
+
+	engine.Evaluate(context.Background(), stored)
+	engine.Evaluate(context.Background(), adHoc)
+	engine.Evaluate(context.Background(), adHoc)
+
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	assert.Len(t, engine.regexes, 1)
+	assert.Contains(t, engine.regexes, stored.IncludeRegex)
 }
 
 func TestEvaluateInvalidRegexIsAnError(t *testing.T) {
@@ -479,6 +534,93 @@ func TestRunCycleDoesNotSeedOnAFailedFirstCycle(t *testing.T) {
 	assert.Empty(t, store.seeded)
 	assert.Equal(t, []string{ruRelease}, store.seenTitles(w.ID))
 	assert.Contains(t, store.statuses[w.ID], "challenge twice")
+}
+
+// A source the process does not run at all is a standing configuration fact, not a failed
+// cycle. Holding the seed back for it would leave the watch unseeded — and therefore
+// permanently silent — for as long as the deployment runs without a jackett key or a solver.
+func TestRunCycleSeedsDespiteAnUnconfiguredSource(t *testing.T) {
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"extto", "jackett"}
+	store := newFakeStore(w)
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", ruRelease)},
+		Store:     store,
+		Publisher: &fakePublisher{},
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Equal(t, []string{w.ID}, store.seeded)
+	// the fact is still reported, it just does not withhold the seed
+	assert.Contains(t, store.statuses[w.ID], "extto: source is not configured")
+}
+
+// the follow-on half of the same rule: once seeded, the watch keeps publishing from the
+// sources that do run
+func TestRunCyclePublishesWithAnUnconfiguredSource(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"extto", "jackett"}
+	w.SeededAt = &seeded
+	store := newFakeStore(w)
+	pub := &fakePublisher{}
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     store,
+		Publisher: pub,
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	require.Len(t, pub.published, 1)
+	assert.Equal(t, []string{enRelease}, store.seenTitles(w.ID))
+}
+
+// a failed seed write must not be followed by MarkSeeded: the watch would be sealed as
+// seeded while holding none of the rows it is supposed to suppress
+func TestRunCycleFailedSeedWriteDoesNotMarkSeeded(t *testing.T) {
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	store := newFakeStore(w)
+	store.markSeenErr = errors.New("database is locked")
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     store,
+		Publisher: &fakePublisher{},
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	assert.Empty(t, store.seeded)
+	assert.Contains(t, store.statuses[w.ID], "database is locked")
+}
+
+// publish succeeded but the seen write did not: the release stays in the delta and is
+// retried, which is the deliberate cost of publishing before marking
+func TestRunCycleFailedMarkSeenKeepsTheDelta(t *testing.T) {
+	seeded := time.Now().Add(-time.Hour)
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026"}
+	w.Sources = []string{"jackett"}
+	w.SeededAt = &seeded
+	store := newFakeStore(w)
+	store.markSeenErr = errors.New("database is locked")
+	pub := &fakePublisher{}
+	engine := NewEngine(EngineDeps{
+		Sources:   []SearchSource{sourceWith("jackett", enRelease)},
+		Store:     store,
+		Publisher: pub,
+	})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	require.Len(t, pub.published, 1)
+	assert.Empty(t, store.seenTitles(w.ID))
+	assert.Contains(t, store.statuses[w.ID], "database is locked")
 }
 
 func TestRunCycleNeverMarksFilteredItemsSeen(t *testing.T) {
@@ -686,4 +828,78 @@ func TestRunCycleWithoutPublisherDoesNotMarkSeen(t *testing.T) {
 
 	assert.Empty(t, store.seenTitles(w.ID))
 	assert.Contains(t, store.statuses[w.ID], "no publisher configured")
+}
+
+// last_status is stored as a string of runes, not bytes: the statuses carry Cyrillic
+// queries, and cutting on a byte boundary would store half a rune
+func TestRecordedStatusIsTruncatedOnRuneBoundaries(t *testing.T) {
+	w := acceptanceWatch()
+	w.Queries = []string{strings.Repeat("ночь", 200)}
+	w.Sources = []string{"jackett"}
+	store := newFakeStore(w)
+	failing := &fakeSource{name: "jackett", replies: []sourceReply{{err: errors.New(strings.Repeat("сбой", 200))}}}
+	engine := NewEngine(EngineDeps{Sources: []SearchSource{failing}, Store: store, Publisher: &fakePublisher{}})
+
+	require.NoError(t, engine.RunCycle(context.Background()))
+
+	status := store.statuses[w.ID]
+	assert.Equal(t, maxStatusLength, len([]rune(status)))
+	assert.True(t, utf8.ValidString(status), "a byte-sliced status would end in a broken rune")
+}
+
+// the telegram mirror is capped, and the tail has to say so — a silently trimmed list reads
+// like the whole delta
+func TestWatchHitMessageReportsWhatItTrimmed(t *testing.T) {
+	results := make([]SearchResult, 0, maxMessageItems+2)
+	for i := range maxMessageItems + 2 {
+		results = append(results, SearchResult{Source: "jackett", ExternalID: strconv.Itoa(i), Title: enRelease})
+	}
+
+	message := watchHitMessage(Watch{ID: "one-night-only-en"}, results)
+
+	assert.Equal(t, maxMessageItems, strings.Count(message, "jackett: "))
+	assert.Contains(t, message, "and 2 more")
+}
+
+// the cron cycle and both search endpoints drive one Engine at once, and the regex cache is
+// the state they share — this is what gives -race something to observe
+func TestEvaluateIsSafeUnderConcurrentUse(t *testing.T) {
+	stored := Watch{ID: "one-night-only-en", Queries: []string{"q"}, Sources: []string{"jackett"}, IncludeRegex: acceptanceInclude}
+	engine := NewEngine(EngineDeps{
+		Sources: []SearchSource{&concurrentSource{name: "jackett", results: resultsFor("jackett", enRelease, ruRelease)}},
+		Store:   newFakeStore(),
+	})
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			w := stored
+			// half of the goroutines run the stored watch, half an ad-hoc one with a pattern
+			// of its own — the two take different branches of the cache
+			if i%2 == 1 {
+				w.ID = ""
+				w.IncludeRegex = `(?i)` + strconv.Itoa(i) + `|one night only`
+			}
+
+			o := engine.Evaluate(context.Background(), w)
+			assert.Empty(t, o.Errs)
+		}()
+	}
+	wg.Wait()
+}
+
+// concurrentSource is the goroutine-safe counterpart of fakeSource: it always answers the
+// same thing, so it needs no reply script and no call log.
+type concurrentSource struct {
+	name    string
+	results []SearchResult
+}
+
+func (s *concurrentSource) Name() string { return s.name }
+
+func (s *concurrentSource) Search(context.Context, string) ([]SearchResult, error) {
+	return s.results, nil
 }

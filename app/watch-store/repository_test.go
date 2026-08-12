@@ -76,6 +76,64 @@ func TestNewRepositoryWithoutSeenTable(t *testing.T) {
 	require.ErrorIs(t, err, ErrSchemaNotInitialised)
 }
 
+// the check is on columns, not on table existence: the incident behind task-store's version
+// of this had the table present and the columns missing, which a table check passes
+func TestNewRepositoryWithoutAColumn(t *testing.T) {
+	db := newTestDB(t)
+	_, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
+
+	_, err = db.Exec(`ALTER TABLE watches DROP COLUMN last_status`)
+	require.NoError(t, err)
+
+	_, err = NewRepository(db)
+
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "watches.last_status")
+}
+
+// a soft delete that nothing can clear retires the id for good: the row still exists, so a
+// re-create is a conflict forever
+func TestEnableClearsTheSoftDelete(t *testing.T) {
+	repo := newTestRepo(t)
+	w := testWatch()
+	require.NoError(t, repo.Create(w))
+	require.NoError(t, repo.Disable(w.ID))
+
+	disabled, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	require.NotNil(t, disabled.DisabledAt)
+
+	require.NoError(t, repo.Enable(w.ID))
+
+	enabled, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	assert.Nil(t, enabled.DisabledAt)
+
+	forCycle, err := repo.WatchesForCycle()
+	require.NoError(t, err)
+	require.Len(t, forCycle, 1)
+}
+
+func TestEnableUnknownWatch(t *testing.T) {
+	repo := newTestRepo(t)
+
+	require.ErrorIs(t, repo.Enable("nowhere"), ErrNotFound)
+}
+
+// every production watch is created without an expiry, and testWatch always sets one
+func TestCreateWithoutExpiry(t *testing.T) {
+	repo := newTestRepo(t)
+	w := testWatch()
+	w.ExpiresAt = nil
+	require.NoError(t, repo.Create(w))
+
+	got, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.ExpiresAt)
+	assert.Nil(t, got.DisabledAt)
+}
+
 func TestCreateAndGetByID(t *testing.T) {
 	repo := newTestRepo(t)
 	want := testWatch()

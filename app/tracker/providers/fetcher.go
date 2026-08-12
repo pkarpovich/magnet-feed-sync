@@ -40,13 +40,13 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		// a parse failure also comes back as a *url.Error carrying the whole url
-		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build request: %w", withoutURL(err))}
+		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build request: %w", WithoutURL(err))}
 	}
 	req.Header.Set("User-Agent", directUserAgent)
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("do request: %w", withoutURL(err))}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("do request: %w", WithoutURL(err))}
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -71,9 +71,11 @@ func (f *directFetcher) Fetch(ctx context.Context, pageURL string) ([]byte, erro
 	return body, nil
 }
 
-// withoutURL drops the *url.Error wrapper, whose message embeds the whole request url —
-// for jackett that carries the api key, and this error reaches the logs and loki.
-func withoutURL(err error) error {
+// WithoutURL drops the *url.Error wrapper, whose message embeds the whole request url —
+// for jackett that carries the api key, and this error reaches the logs, loki and the
+// search endpoints. Exported because the watcher's jackett source signs its requests the
+// same way and must strip the same wrapper.
+func WithoutURL(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		return urlErr.Err

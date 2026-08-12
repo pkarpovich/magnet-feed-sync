@@ -56,6 +56,7 @@ type watchStore interface {
 	Create(w *watcher.Watch) error
 	Update(w *watcher.Watch) error
 	Disable(id string) error
+	Enable(id string) error
 	GetAll() ([]*watcher.Watch, error)
 	GetByID(id string) (*watcher.Watch, error)
 	WatchesForCycle() ([]*watcher.Watch, error)
@@ -492,17 +493,20 @@ type watchRequest struct {
 }
 
 type watchResponse struct {
-	ID           string          `json:"id"`
-	Queries      []string        `json:"queries"`
-	Sources      []string        `json:"sources"`
-	IncludeRegex string          `json:"include_regex"`
-	ExcludeRegex string          `json:"exclude_regex"`
-	Rev          int             `json:"rev"`
-	SeededAt     *time.Time      `json:"seeded_at"`
-	ExpiresAt    *time.Time      `json:"expires_at"`
-	LastRunAt    *time.Time      `json:"last_run_at"`
-	LastStatus   string          `json:"last_status"`
-	Seen         []watchSeenItem `json:"seen,omitempty"`
+	ID           string     `json:"id"`
+	Queries      []string   `json:"queries"`
+	Sources      []string   `json:"sources"`
+	IncludeRegex string     `json:"include_regex"`
+	ExcludeRegex string     `json:"exclude_regex"`
+	Rev          int        `json:"rev"`
+	SeededAt     *time.Time `json:"seeded_at"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	// a soft-deleted or auto-expired watch is still listed, so it has to say so: without
+	// this field it reads exactly like a healthy watch that happens to find nothing
+	DisabledAt *time.Time      `json:"disabled_at"`
+	LastRunAt  *time.Time      `json:"last_run_at"`
+	LastStatus string          `json:"last_status"`
+	Seen       []watchSeenItem `json:"seen,omitempty"`
 }
 
 type watchSeenItem struct {
@@ -533,24 +537,52 @@ func (c *Client) handleCreateWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := c.watchExists(watch.ID)
+	existing, err := c.existingWatch(watch.ID)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to look up watch", "watch_id", watch.ID, "error", err)
 		http.Error(w, "failed to create watch", http.StatusInternalServerError)
 		return
 	}
-	if exists {
+
+	switch {
+	case existing == nil:
+		if err := c.watches.Create(watch); err != nil {
+			slog.ErrorContext(ctx, "failed to create watch", "watch_id", watch.ID, "error", err)
+			http.Error(w, "failed to create watch", http.StatusInternalServerError)
+			return
+		}
+	case existing.DisabledAt == nil:
 		http.Error(w, "watch already exists", http.StatusConflict)
 		return
-	}
-
-	if err := c.watches.Create(watch); err != nil {
-		slog.ErrorContext(ctx, "failed to create watch", "watch_id", watch.ID, "error", err)
-		http.Error(w, "failed to create watch", http.StatusInternalServerError)
-		return
+	default:
+		// a soft-deleted or expired id is re-creatable, otherwise DELETE would retire it for
+		// good. The watch_seen rows survive, so the revived watch does not replay what it
+		// already announced
+		if !c.reviveWatch(ctx, w, watch) {
+			return
+		}
 	}
 
 	c.writeWatch(ctx, w, watch.ID, http.StatusCreated)
+}
+
+// reviveWatch overwrites a soft-deleted row with the request and clears the soft delete.
+func (c *Client) reviveWatch(ctx context.Context, w http.ResponseWriter, watch *watcher.Watch) bool {
+	if err := c.watches.Update(watch); err != nil {
+		slog.ErrorContext(ctx, "failed to update disabled watch", "watch_id", watch.ID, "error", err)
+		http.Error(w, "failed to create watch", http.StatusInternalServerError)
+
+		return false
+	}
+
+	if err := c.watches.Enable(watch.ID); err != nil {
+		slog.ErrorContext(ctx, "failed to enable watch", "watch_id", watch.ID, "error", err)
+		http.Error(w, "failed to create watch", http.StatusInternalServerError)
+
+		return false
+	}
+
+	return true
 }
 
 func (c *Client) handleWatches(w http.ResponseWriter, r *http.Request) {
@@ -750,16 +782,18 @@ func (c *Client) validateSearchParams(watch *watcher.Watch) error {
 	return nil
 }
 
-func (c *Client) watchExists(id string) (bool, error) {
-	_, err := c.watches.GetByID(id)
+// existingWatch returns the stored row, or nil when there is none. Soft-deleted rows come
+// back too: create has to tell "taken" apart from "removed and re-creatable".
+func (c *Client) existingWatch(id string) (*watcher.Watch, error) {
+	watch, err := c.watches.GetByID(id)
 	if errors.Is(err, watch_store.ErrNotFound) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return true, nil
+	return watch, nil
 }
 
 func (c *Client) loadWatch(ctx context.Context, w http.ResponseWriter, id string) (*watcher.Watch, bool) {
@@ -811,6 +845,7 @@ func toWatchResponse(watch *watcher.Watch) watchResponse {
 		Rev:          watch.Rev,
 		SeededAt:     watch.SeededAt,
 		ExpiresAt:    watch.ExpiresAt,
+		DisabledAt:   watch.DisabledAt,
 		LastRunAt:    watch.LastRunAt,
 		LastStatus:   watch.LastStatus,
 	}
@@ -927,11 +962,18 @@ func (c *Client) runSearch(ctx context.Context, w http.ResponseWriter, r *http.R
 		Matched: len(o.Matched),
 		Raw:     raw,
 		Errors:  errorMessages(o.Errs),
-		Items:   c.searchItems(ctx, results, freshKeys(o.New)),
+		// magnets are resolved for the matched rows only: each one is a sequential signed
+		// round trip, and the raw view exists to show what the regexes threw away — paying
+		// for a magnet per discarded row would hammer ext.to for rows nobody will download
+		Items: c.searchItems(ctx, results, freshKeys(o.New), freshKeys(o.Matched)),
 	})
 }
 
-func (c *Client) searchItems(ctx context.Context, results []watcher.SearchResult, fresh map[string]struct{}) []searchItem {
+func (c *Client) searchItems(
+	ctx context.Context,
+	results []watcher.SearchResult,
+	fresh, matched map[string]struct{},
+) []searchItem {
 	items := make([]searchItem, 0, len(results))
 	for _, result := range results {
 		item := searchItem{
@@ -947,7 +989,7 @@ func (c *Client) searchItems(ctx context.Context, results []watcher.SearchResult
 
 		// ext.to has no direct .torrent, so its magnet is fetched on demand — sequentially,
 		// because the signed call reuses the tokens of the search page just fetched
-		if result.Source == watcher.SourceExtto {
+		if _, keep := matched[result.SeenKey()]; keep && result.Source == watcher.SourceExtto {
 			item.Magnet, item.MagnetError = c.resolveMagnet(ctx, result)
 		}
 

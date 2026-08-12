@@ -148,27 +148,15 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
 
-	jobs := []struct {
-		name string
-		cron string
-		run  func()
-	}{
-		{name: "files", cron: cfg.Cron, run: func() { downloadTasksClient.CheckForUpdates(ctx) }},
-		{name: "watcher", cron: cfg.WatchCron, run: func() { runWatchCycle(ctx, engine) }},
+	// AddJob returns its error and Start is non-blocking, so registration stays on the
+	// startup path: a bad cron expression is a boot failure, not a background surprise
+	if err := s.AddJob("files", cfg.Cron, func() { downloadTasksClient.CheckForUpdates(ctx) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
 	}
-
-	schedulerErr := make(chan error, 1)
-	go func() {
-		for _, job := range jobs {
-			if err := s.AddJob(job.name, job.cron, job.run); err != nil {
-				schedulerErr <- err
-
-				return
-			}
-		}
-
-		s.Start()
-	}()
+	if err := s.AddJob("watcher", cfg.WatchCron, func() { runWatchCycle(ctx, engine) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
+	}
+	s.Start()
 
 	tbAPI, err := tbapi.NewBotAPI(cfg.Telegram.Token)
 	if err != nil {
@@ -218,12 +206,7 @@ func run(cfg *config.Config) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	var runErr error
-	select {
-	case <-sigChan:
-	case err := <-schedulerErr:
-		runErr = fmt.Errorf("scheduler failed: %w", err)
-	}
+	<-sigChan
 
 	cancel()
 
@@ -234,7 +217,7 @@ func run(cfg *config.Config) error {
 		slog.Info("application shutdown timed out")
 	}
 
-	return runErr
+	return nil
 }
 
 // watchSolver is the consumer-side view of the flaresolverr client the ext.to source needs.

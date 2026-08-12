@@ -73,9 +73,18 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
 - **watcher/**: the release watcher — `SearchSource` implementations for Jackett (torznab search over all
   indexers) and ext.to (Cloudflare-fenced HTML plus a signed magnet POST), the `Engine` that merges,
   filters and diffs, and the JetStream publisher. `Evaluate` is side-effect free and is what both the
-  cron and the search endpoints call, so the two cannot drift; `RunCycle` applies the effects
+  cron and the search endpoints call, so the two cannot drift; `RunCycle` applies the effects.
+  The Jackett external id is `<page host>/<t>`, not the bare `t=`: the torznab endpoint aggregates every
+  indexer at once and `t` is the topic id on RuTracker and NNM alike, so an un-namespaced id collides
+  across them and buries the second release as already announced. Both sources wrap their transport
+  errors in `providers.WithoutURL` and cap the body at `maxSearchResponseSize` — the jackett endpoint
+  carries the api key in its query string, and a `*url.Error` reaches `last_status`, the unauthenticated
+  search responses and loki verbatim
 - **watch-store/**: SQLite repository for `watches` / `watch_seen`, verifying its schema the same way
-  `task-store` does
+  `task-store` does — table existence first, then the expected **columns** (`requiredColumns`), because a
+  table check passes a table whose columns a half-applied migration never added. `Disable` / `Enable` are
+  a pair: nothing else writes `disabled_at`, and without `Enable` a soft-deleted id could never be
+  re-created, since the row still exists and a create is a conflict
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
@@ -202,8 +211,13 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   rejects a whole message over one unescaped reserved char. Plain-text alerts are escaped with
   `escapeMarkdown`; `MetadataToMsg` wraps its JSON in a code fence and escapes only backticks/backslashes
 - Watcher cycle ordering — a watch whose `seeded_at` is NULL records everything it matched **without
-  publishing** (a fresh watch would otherwise wake the agent with releases it already has), and only when
-  `Errs` is empty: seeding from a partially failed run buries whatever the dead source never reported.
+  publishing** (a fresh watch would otherwise wake the agent with releases it already has); the matched
+  rows are written either way, but `seeded_at` itself is set only when nothing *failed*, because seeding
+  from a partially failed run buries whatever the dead source never reported. An
+  `unavailableSourceError` — a source the watch names that this process does not run, no api key or no
+  solver — is deliberately **not** a failure for that rule (`hasSearchFailure`): it never comes back on
+  its own, and holding the seed for it leaves the watch unseeded, and therefore permanently silent, for
+  the whole life of the deployment. It is still reported in `last_status`.
   Afterwards the order is **publish first, mark seen second** — a crash between the two costs one
   duplicate wake, the reverse loses the release permanently and silently. A non-empty `Errs` never
   suppresses a publish; it lands in `last_status`, which is what health and the operator read. Items
@@ -247,7 +261,7 @@ Environment variables (see compose.yaml):
 - `JACKETT_API_KEY`: Jackett api key for the watcher's torznab search. `JACKETT_URL` carries no key, so without this the Jackett watch source is disabled with a startup warning
 - `JACKETT_PUBLIC_URL`: public Jackett base used to rewrite the scheme+host of a search result's download link (defaults to `JACKETT_URL`). Jackett emits its own *internal* base there, which would resolve nowhere at download time
 - `NATS_URL`: JetStream endpoint for watch notifications, e.g. `nats://nats:4222`. **Empty disables publishing** (warned once at startup); the service still starts and still runs cycles
-- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` and the service still starts
+- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` **and the ext.to watch source is disabled** (it refreshes its cookie through the same solver); the service still starts
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP HTTP endpoint for trace export (optional, tracing disabled when empty)
 - `LOKI_URL`: Grafana Loki base URL for centralized logging (optional, logs go to stdout only when empty). The code appends `/loki/api/v1/push` automatically

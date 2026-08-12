@@ -19,7 +19,15 @@ var ErrSchemaNotInitialised = errors.New("watch schema not initialised: run the 
 
 var ErrNotFound = errors.New("watch not found")
 
-const watchColumns = `id, queries, include_regex, exclude_regex, sources, rev, seeded_at, expires_at, last_run_at, last_status`
+const watchColumns = `id, queries, include_regex, exclude_regex, sources, rev, seeded_at, expires_at, disabled_at, last_run_at, last_status`
+
+// requiredColumns is checked column by column rather than table by table, for the reason
+// task-store does the same: the incident behind that check had the table present and the
+// columns missing, which a table check passes.
+var requiredColumns = map[string][]string{
+	"watches":    {"id", "queries", "include_regex", "exclude_regex", "sources", "rev", "seeded_at", "expires_at", "disabled_at", "last_run_at", "last_status"},
+	"watch_seen": {"watch_id", "source", "external_id", "title", "first_seen_at"},
+}
 
 // SeenRow is one already-announced release, rendered by GET /api/watches/{id} so a silent
 // seed is inspectable.
@@ -45,9 +53,21 @@ func NewRepository(db *database.Client) (*Repository, error) {
 }
 
 func (r *Repository) verifySchema() error {
-	for _, name := range []string{"watches", "watch_seen"} {
-		if err := r.requireTable(name); err != nil {
+	for _, table := range []string{"watches", "watch_seen"} {
+		// checked before the columns: PRAGMA table_info on a missing table returns no rows
+		// and no error, which would report an absent database as an absent column
+		if err := r.requireTable(table); err != nil {
 			return err
+		}
+
+		for _, column := range requiredColumns[table] {
+			found, err := r.count(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column)
+			if err != nil {
+				return err
+			}
+			if found == 0 {
+				return fmt.Errorf("%s.%s is missing: %w", table, column, ErrSchemaNotInitialised)
+			}
 		}
 	}
 
@@ -55,16 +75,24 @@ func (r *Repository) verifySchema() error {
 }
 
 func (r *Repository) requireTable(name string) error {
-	var count int
-	err := r.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
+	found, err := r.count(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name)
 	if err != nil {
-		return fmt.Errorf("read schema: %w", err)
+		return err
 	}
-	if count == 0 {
+	if found == 0 {
 		return fmt.Errorf("table %s is missing: %w", name, ErrSchemaNotInitialised)
 	}
 
 	return nil
+}
+
+func (r *Repository) count(query string, args ...any) (int, error) {
+	var count int
+	if err := r.db.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("read schema: %w", err)
+	}
+
+	return count, nil
 }
 
 func (r *Repository) Create(w *watcher.Watch) error {
@@ -113,6 +141,18 @@ func (r *Repository) Disable(id string) error {
 	res, err := r.db.Exec(`UPDATE watches SET disabled_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("disable watch: %w", err)
+	}
+
+	return r.requireAffected(res, id)
+}
+
+// Enable clears the soft delete. Without it a removed or expired id is retired for good:
+// the row still exists, so a re-create is a conflict, and nothing else ever writes the
+// column back to NULL.
+func (r *Repository) Enable(id string) error {
+	res, err := r.db.Exec(`UPDATE watches SET disabled_at = NULL WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("enable watch: %w", err)
 	}
 
 	return r.requireAffected(res, id)
@@ -206,9 +246,9 @@ type rowScanner interface {
 
 func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 	var (
-		w                              watcher.Watch
-		queries, sources               string
-		seededAt, expiresAt, lastRunAt sql.NullTime
+		w                                          watcher.Watch
+		queries, sources                           string
+		seededAt, expiresAt, disabledAt, lastRunAt sql.NullTime
 	)
 
 	err := row.Scan(
@@ -220,6 +260,7 @@ func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 		&w.Rev,
 		&seededAt,
 		&expiresAt,
+		&disabledAt,
 		&lastRunAt,
 		&w.LastStatus,
 	)
@@ -238,6 +279,7 @@ func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 	w.Sources = splitSources(sources)
 	w.SeededAt = timePtr(seededAt)
 	w.ExpiresAt = timePtr(expiresAt)
+	w.DisabledAt = timePtr(disabledAt)
 	w.LastRunAt = timePtr(lastRunAt)
 
 	return &w, nil

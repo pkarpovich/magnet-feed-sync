@@ -348,3 +348,43 @@ func TestExttoMagnetNotRetriedOnChallenge(t *testing.T) {
 	defer mu.Unlock()
 	assert.Equal(t, 1, posts, "a signed post is never replayed")
 }
+
+// a page whose token markup ext.to changed under us must be searched once, not once per
+// row: a search is a full challenge-fenced round trip holding the shared solver, and the
+// http search endpoint resolves a magnet for every ext.to row it answers with
+func TestExttoMagnetDoesNotReplaySearchPerRowWithoutTokens(t *testing.T) {
+	var mu sync.Mutex
+	var searches int
+	source, _ := exttoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		searches++
+		mu.Unlock()
+		// no searchPageToken and no csrf meta tag
+		_, err := w.Write([]byte(`<html><body><table><tbody></tbody></table></body></html>`))
+		require.NoError(t, err)
+	})
+
+	for range 3 {
+		_, err := source.Magnet(context.Background(), "20151803", "One Night Only")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no page tokens")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, searches, "the token-less page must be searched once, not once per row")
+}
+
+// a typed nil in the http layer's magnetResolver field passes its `!= nil` check, so the
+// source itself has to survive being called on a nil receiver
+func TestExttoNilSourceReportsInsteadOfPanicking(t *testing.T) {
+	var source *ExttoSource
+
+	_, err := source.Magnet(context.Background(), "20151803", "One Night Only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "flaresolverr is not configured")
+
+	_, err = source.Search(context.Background(), "One Night Only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "flaresolverr is not configured")
+}

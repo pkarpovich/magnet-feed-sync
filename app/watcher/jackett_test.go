@@ -60,7 +60,9 @@ func TestJackettSourceSearchMapsEveryItem(t *testing.T) {
 
 	first := results[0]
 	assert.Equal(t, "jackett", first.Source)
-	assert.Equal(t, "1883913", first.ExternalID)
+	// the id is namespaced by the page host: `t=` is the topic id on both nnm and rutracker,
+	// so the bare parameter would collide across the indexers jackett aggregates
+	assert.Equal(t, "nnmclub.to/1883913", first.ExternalID)
 	assert.Equal(t, "Только на одну ночь / One Night Only (2026) TSRip [H.264] [AD]", first.Title)
 	assert.Equal(t, "https://nnmclub.to/forum/viewtopic.php?t=1883913", first.PageURL)
 	assert.Equal(t, "One Night Only 2026", first.Query)
@@ -68,7 +70,7 @@ func TestJackettSourceSearchMapsEveryItem(t *testing.T) {
 	assert.Equal(t, time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC), first.PublishedAt.UTC())
 
 	second := results[1]
-	assert.Equal(t, "6543210", second.ExternalID)
+	assert.Equal(t, "rutracker.org/6543210", second.ExternalID)
 	assert.Equal(t, "https://rutracker.org/forum/viewtopic.php?t=6543210", second.PageURL)
 	assert.Equal(t, 3, second.Seeders)
 	assert.Contains(t, second.DownloadURL, "/dl/rutracker/", "falls back to <enclosure> when <link> is empty")
@@ -162,7 +164,36 @@ func TestJackettSourceSearchSkipsItemWithoutIdentity(t *testing.T) {
 	results, err := source.Search(context.Background(), "One Night Only 2026")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, "1883913", results[0].ExternalID)
+	assert.Equal(t, "nnmclub.to/1883913", results[0].ExternalID)
+}
+
+// the aggregated torznab endpoint answers for every indexer at once, and `t=` is the topic
+// id on nnm and on rutracker alike — an id that is not namespaced by host would make the
+// second tracker's release look already announced and bury it for good
+func TestJackettSourceSearchNamespacesTheTopicIDByHost(t *testing.T) {
+	const fixture = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <item>
+      <title>One.Night.Only.2026.1080p.WEB-DL</title>
+      <comments>https://nnmclub.to/forum/viewtopic.php?t=42</comments>
+    </item>
+    <item>
+      <title>Only.on.One.Night.2026.1080p.BDRip</title>
+      <comments>https://rutracker.org/forum/viewtopic.php?t=42</comments>
+    </item>
+  </channel>
+</rss>`
+
+	srv := newFixtureServer(t, fixture, http.StatusOK)
+	source := NewJackettSource(JackettOptions{BaseURL: srv.URL, APIKey: "secret"})
+
+	results, err := source.Search(context.Background(), "One Night Only 2026")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.NotEqual(t, results[0].SeenKey(), results[1].SeenKey())
+	assert.Equal(t, "nnmclub.to/42", results[0].ExternalID)
+	assert.Equal(t, "rutracker.org/42", results[1].ExternalID)
 }
 
 func TestJackettSourceSearchFallsBackToTheRawGUID(t *testing.T) {
@@ -197,6 +228,38 @@ func TestJackettSourceSearchFailsWithoutConfiguration(t *testing.T) {
 	_, err = noBase.Search(context.Background(), "One Night Only 2026")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "base url")
+}
+
+// the api key travels in the query string, and a transport failure comes back as a
+// *url.Error whose message is the whole endpoint. That error reaches watches.last_status,
+// the unauthenticated search responses and loki, so the key must not be in it.
+func TestJackettSourceSearchErrorHidesTheAPIKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	base := srv.URL
+	srv.Close()
+
+	source := NewJackettSource(JackettOptions{BaseURL: base, APIKey: "s3cret-key"})
+
+	_, err := source.Search(context.Background(), "One Night Only 2026")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "s3cret-key")
+	assert.NotContains(t, err.Error(), "apikey")
+}
+
+// a misbehaving indexer must not be able to drive the process to OOM
+func TestJackettSourceSearchCapsTheResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write(make([]byte, maxSearchResponseSize+1024))
+		require.NoError(t, err)
+	}))
+	t.Cleanup(srv.Close)
+
+	source := NewJackettSource(JackettOptions{BaseURL: srv.URL, APIKey: "secret"})
+
+	_, err := source.Search(context.Background(), "One Night Only 2026")
+	// the truncated body is no longer valid xml, which is exactly how the cap surfaces
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse response")
 }
 
 func TestJackettSourceName(t *testing.T) {

@@ -16,8 +16,12 @@ type Watch struct {
 	Rev          int
 	SeededAt     *time.Time
 	ExpiresAt    *time.Time
-	LastRunAt    *time.Time
-	LastStatus   string
+	// DisabledAt is the soft delete. It is carried on the watch rather than filtered away in
+	// the store, because an api that hides it answers "this watch looks fine" for a watch
+	// the cron has stopped running.
+	DisabledAt *time.Time
+	LastRunAt  *time.Time
+	LastStatus string
 }
 
 // SearchResult is the single currency the engine, the API and the NATS payload speak.

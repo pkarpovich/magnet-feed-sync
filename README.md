@@ -12,6 +12,8 @@ also monitors for updates on tracked pages and schedules new download tasks as n
 - Real-time interaction and management via Telegram.
 - Persistent storage and management of download tasks.
 - Database logging for task status and history.
+- Release watcher: saved cross-indexer hunts (Jackett + ext.to) that publish a NATS notification and a
+  Telegram message when a genuinely new release shows up.
 
 ## Usage
 
@@ -155,16 +157,31 @@ curl -X POST http://localhost:8080/api/watches -d '{
 - The id becomes a NATS subject token, so it must match `^[a-z0-9_-]+$`. At least one non-empty query is
   required, both regexes must compile, and source names must be known — each failure is a 400 with a
   specific message; a duplicate id is a 409.
+- `sources` is optional and defaults to **every** known source (`jackett`, `extto`). The names are checked
+  against a static list, not against what is actually running, so a source disabled at startup (no
+  `JACKETT_API_KEY`, no `FLARESOLVERR_URL`) is still accepted here. Such a source reports
+  `<name>: source is not configured` in `last_status` on every cycle; it does not hold the watch back.
 - The **narrow query is the primary filter**; `include_regex` is the second and `exclude_regex` only a
   backstop. A broad query returns hundreds of junk rows that no regex reliably sorts out.
 - The **first cycle seeds silently**: everything it matches is recorded without publishing, so a new watch
   cannot immediately announce releases that already existed. `GET /api/watches/{id}` returns those rows,
-  so the seed is inspectable. A first cycle in which a source failed does not seed.
+  so the seed is inspectable. A first cycle in which a source **failed** still records what it did match
+  but leaves the watch unseeded, so the next clean cycle seeds again before anything is published. A
+  source that is not configured at all does not count as a failure here — it never comes back on its own,
+  and waiting for it would leave the watch silent forever.
 - Publishing happens **before** marking seen. A crash between the two costs one duplicate notification;
   the reverse would lose the release permanently and silently.
+- The NATS payload is
+  `{"watch_id":…,"watch_rev":…,"found_at":…,"total":…,"matched":…,"new_total":…,"new":[{"source","id","title"}]}`.
+  The `new` list is capped (and trimmed further to fit 8 KiB), while `new_total` is the size of the whole
+  delta — every item of which is marked seen, so `new_total > len(new)` is the only way a consumer can
+  tell that releases beyond the cap existed. `found_at` is RFC3339 in UTC.
 - A source failure is never silence: it lands in the watch's `last_status` and turns `/api/health`
   `degraded`. A partial run can still publish what it did find.
 - `DELETE` is a soft delete, and a watch past its `expires_at` is skipped and disabled on the next cycle.
+  Both show up as a non-null `disabled_at` on `GET /api/watches`, and both are reversible: `POST` on the
+  same id re-creates the watch with the new parameters and clears the flag. The `watch_seen` rows survive
+  that, so a revived watch does not replay everything it already announced.
 
 `POST /api/watches/{id}/search` re-runs the watch's **own** stored search and returns the full result set -
 `page_url`, host-rewritten `download_url`, the resolved `magnet` for ext.to items, `seeders`,
@@ -172,6 +189,21 @@ curl -X POST http://localhost:8080/api/watches -d '{
 you answer "why was I woken with this junk" and "why was I *not* woken". The cron and this endpoint call
 the same code over the same stored parameters, so what you see cannot drift from what woke you.
 `POST /api/search` is the ad-hoc equivalent for parameters that are not saved as a watch.
+
+```json
+{"watch_id":"one-night-only-en","total":226,"matched":1,"raw":false,"errors":[],
+ "items":[{"source":"jackett","id":"nnmclub.to/1883913","title":"…","page_url":"…","download_url":"…",
+           "magnet":"","magnet_error":"","seeders":12,"published_at":"…","new":true}]}
+```
+
+- `total` counts the deduped pre-filter set and `matched` the post-filter one, so a short `items` list
+  still tells you how much was thrown away. A non-empty `errors` means a source failed and the set is
+  **partial** — do not read it as "nothing new".
+- `magnet` is resolved on demand for `extto` rows only, and only for rows that passed the filters. A
+  per-item failure sets `magnet_error` (`extto magnet resolver is not configured` when `FLARESOLVERR_URL`
+  is unset) and never fails the request.
+- `POST /api/search` answers with an empty `watch_id` and flags every matched item `new`, since an ad-hoc
+  search has no seen set.
 
 Both search endpoints are slow by nature: a cold Jackett search takes ~40s and a cold ext.to search ~80s
 (Cloudflare challenge). A warm cookie and Jackett's own cache make a repeat within the hour near-instant.
@@ -247,7 +279,7 @@ Configure the bot using the following environment variables:
 - `JACKETT_API_KEY`: Jackett api key, required by the watcher's search (`JACKETT_URL` carries no key). Without it the Jackett watch source is disabled with a startup warning and the service still runs.
 - `JACKETT_PUBLIC_URL`: publicly reachable Jackett base URL (defaults to `JACKETT_URL`). Jackett puts its own internal base URL in the download links it returns; the watcher rewrites the scheme and host of `download_url` to this value, otherwise the link resolves nowhere at download time.
 - `NATS_URL`: JetStream endpoint for watch notifications, e.g. `nats://nats:4222`. Empty disables publishing — the service still starts and still runs cycles, but nothing is marked as announced, so releases are retried once publishing is configured. The stream is owned by its consumer; this service only publishes to it and never creates or reconfigures one. A failed connect is logged, not fatal.
-- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly.
+- `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path, e.g. `https://flaresolverr.example.com/v1` (optional). RuTracker sits behind a Cloudflare challenge and is fetched through FlareSolverr; when this is empty the service still starts, but RuTracker pages are reported as blocked. NNM and Jackett are always fetched directly. The ext.to watch source uses the same solver for its cookie refresh, so an empty value also disables `extto`: a watch listing it records `extto: source is not configured` in `last_status` every cycle and `/api/health` stays `degraded`. Use `"sources": ["jackett"]` on such a deployment.
 
 > Breaking change: the Synology DownloadStation client has been removed. qBittorrent is now the only supported download client. Remove any `DOWNLOAD_CLIENT` and `SYNOLOGY_*` variables from your environment.
 

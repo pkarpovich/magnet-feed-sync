@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -842,6 +841,7 @@ type mockWatchStore struct {
 	marked    map[string]map[string]watcher.SearchResult
 	statuses  map[string]string
 	disabled  []string
+	enabled   []string
 	createErr error
 	updateErr error
 	getAllErr error
@@ -894,11 +894,26 @@ func (m *mockWatchStore) Update(w *watcher.Watch) error {
 }
 
 func (m *mockWatchStore) Disable(id string) error {
-	if _, ok := m.watches[id]; !ok {
+	w, ok := m.watches[id]
+	if !ok {
 		return fmt.Errorf("watch %s: %w", id, watch_store.ErrNotFound)
 	}
 
+	at := time.Now()
+	w.DisabledAt = &at
 	m.disabled = append(m.disabled, id)
+
+	return nil
+}
+
+func (m *mockWatchStore) Enable(id string) error {
+	w, ok := m.watches[id]
+	if !ok {
+		return fmt.Errorf("watch %s: %w", id, watch_store.ErrNotFound)
+	}
+
+	w.DisabledAt = nil
+	m.enabled = append(m.enabled, id)
 
 	return nil
 }
@@ -938,7 +953,7 @@ func (m *mockWatchStore) WatchesForCycle() ([]*watcher.Watch, error) {
 
 	watches := make([]*watcher.Watch, 0, len(m.order))
 	for _, id := range m.order {
-		if slices.Contains(m.disabled, id) {
+		if m.watches[id].DisabledAt != nil {
 			continue
 		}
 
@@ -1751,7 +1766,7 @@ func TestAdHocSearchDefaultsSources(t *testing.T) {
 	resp := decodeSearch(t, w)
 	assert.Equal(t, 1, resp.Total)
 	require.Len(t, resp.Errors, 1)
-	assert.Contains(t, resp.Errors[0], "unknown source")
+	assert.Contains(t, resp.Errors[0], "source is not configured")
 }
 
 func TestAdHocSearchValidation(t *testing.T) {
@@ -1806,4 +1821,118 @@ func TestSearchHandlersWithoutEngine(t *testing.T) {
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 		})
 	}
+}
+
+// DELETE is a soft delete, so the row survives and a plain existence check would retire the
+// id for good — the operator could never re-create the watch they just removed
+func TestCreateWatchRevivesASoftDeletedID(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	require.NoError(t, store.Disable("one-night-only-en"))
+
+	w := httptest.NewRecorder()
+	body := `{"id":"one-night-only-en","queries":["One Night Only 2026"],"sources":["jackett"]}`
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", body))
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	resp := decodeWatch(t, w)
+	assert.Nil(t, resp.DisabledAt)
+	assert.Equal(t, []string{"One Night Only 2026"}, resp.Queries)
+	assert.Equal(t, []string{"one-night-only-en"}, store.enabled)
+	assert.Len(t, store.order, 1, "the revived watch is the same row, not a second one")
+
+	// and the cron picks it up again
+	forCycle, err := store.WatchesForCycle()
+	require.NoError(t, err)
+	assert.Len(t, forCycle, 1)
+}
+
+// a watch the cron has stopped running must not read as a healthy one that finds nothing
+func TestWatchResponseReportsTheSoftDelete(t *testing.T) {
+	store := newMockWatchStore(acceptanceWatch())
+	require.NoError(t, store.Disable("one-night-only-en"))
+
+	w := httptest.NewRecorder()
+	newWatchClient(store).handleWatches(w, newWatchRequest(http.MethodGet, "/api/watches", ""))
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp []watchResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.NotNil(t, resp[0].DisabledAt)
+}
+
+func TestCreateWatchRoundTripsExpiresAt(t *testing.T) {
+	store := newMockWatchStore()
+	w := httptest.NewRecorder()
+
+	body := `{"id":"ok-id","queries":["x"],"sources":["jackett"],"expires_at":"2026-12-31T23:00:00Z"}`
+	newWatchClient(store).handleCreateWatch(w, newWatchRequest(http.MethodPost, "/api/watches", body))
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	resp := decodeWatch(t, w)
+	require.NotNil(t, resp.ExpiresAt)
+	assert.Equal(t, time.Date(2026, time.December, 31, 23, 0, 0, 0, time.UTC), resp.ExpiresAt.UTC())
+}
+
+// a nil expires_at means "absent", not "clear it": a PATCH of the queries must not silently
+// un-expire the watch
+func TestUpdateWatchKeepsAnOmittedExpiry(t *testing.T) {
+	stored := acceptanceWatch()
+	expires := time.Date(2026, time.December, 31, 23, 0, 0, 0, time.UTC)
+	stored.ExpiresAt = &expires
+	store := newMockWatchStore(stored)
+	w := httptest.NewRecorder()
+
+	newWatchClient(store).handleUpdateWatch(w, watchByID(http.MethodPatch, "one-night-only-en", `{"queries":["x"]}`))
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeWatch(t, w)
+	require.NotNil(t, resp.ExpiresAt)
+	assert.Equal(t, expires, resp.ExpiresAt.UTC())
+}
+
+// a typed nil in the interface field passes the handler's `== nil` check, so the resolver
+// itself has to answer rather than panic
+func TestWatchSearchWithATypedNilMagnetResolver(t *testing.T) {
+	store := newMockWatchStore(exttoWatch())
+	source := &scriptedSource{name: watcher.SourceExtto, results: searchResults(watcher.SourceExtto, "One.Night.Only.2026.1080p.WEB-DL")}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), (*watcher.ExttoSource)(nil)).
+		handleWatchSearch(w, searchByID("extto-only", ""))
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 1)
+	assert.Empty(t, resp.Items[0].Magnet)
+	assert.Contains(t, resp.Items[0].MagnetError, "flaresolverr is not configured")
+}
+
+// the raw view exists to show what the regexes threw away; paying a signed ext.to round trip
+// for every discarded row would hammer the site for rows nobody will download
+func TestWatchSearchRawResolvesMagnetsForMatchedRowsOnly(t *testing.T) {
+	watch := exttoWatch()
+	watch.IncludeRegex = `(?i)one[ ._-]night[ ._-]only`
+	store := newMockWatchStore(watch)
+	results := searchResults(watcher.SourceExtto, "One.Night.Only.2026.1080p.WEB-DL", "Dune.Prophecy.S01.2160p")
+	source := &scriptedSource{name: watcher.SourceExtto, results: results}
+	magnets := &mockMagnets{magnets: map[string]string{"1883910": "magnet:?xt=urn:btih:abc123"}}
+	w := httptest.NewRecorder()
+
+	newSearchClient(store, newSearchEngine(store, source, &mockPublisher{}), magnets).
+		handleWatchSearch(w, searchByID("extto-only", "?raw=true"))
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	resp := decodeSearch(t, w)
+	require.Len(t, resp.Items, 2)
+	assert.Equal(t, "magnet:?xt=urn:btih:abc123", resp.Items[0].Magnet)
+	assert.Empty(t, resp.Items[1].Magnet)
+	assert.Empty(t, resp.Items[1].MagnetError)
+	assert.Len(t, magnets.queries, 1, "the filtered-out row costs no magnet call")
 }

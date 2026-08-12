@@ -54,15 +54,19 @@ func TestAddJobRunsInSingletonMode(t *testing.T) {
 	jobs := s.scheduler.Jobs()
 	require.Len(t, jobs, 1)
 
+	// the second trigger waits for the first run to be under way: gocron creates the
+	// per-job singleton runner on the first dispatch, and two simultaneous triggers can both
+	// race past that creation, which would fail the assertion on timing rather than on
+	// behaviour
 	require.NoError(t, jobs[0].RunNow())
-	require.NoError(t, jobs[0].RunNow())
-
-	// the first run blocks on release; without singleton mode the second would join it
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the job never ran")
 	}
+
+	// the first run blocks on release; without singleton mode the second would join it
+	require.NoError(t, jobs[0].RunNow())
 
 	time.Sleep(300 * time.Millisecond)
 	assert.Empty(t, started, "a second run started while the first was still going")

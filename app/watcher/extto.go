@@ -81,7 +81,7 @@ func (s *ExttoSource) Name() string {
 }
 
 func (s *ExttoSource) Search(ctx context.Context, query string) ([]SearchResult, error) {
-	if s.solver == nil {
+	if s == nil || s.solver == nil {
 		return nil, errors.New("search extto: flaresolverr is not configured")
 	}
 
@@ -99,8 +99,11 @@ func (s *ExttoSource) Search(ctx context.Context, query string) ([]SearchResult,
 // Magnet resolves the magnet link of one row. query is required because the signature is
 // built from tokens carried by that query's search page, so the search is replayed when no
 // fresh tokens are held.
+// The nil receiver is handled rather than dereferenced: a typed nil in an interface field
+// passes the caller's `!= nil` check, and the composition root is then the only thing
+// standing between a disabled ext.to source and a panic on the first magnet call.
 func (s *ExttoSource) Magnet(ctx context.Context, torrentID, query string) (string, error) {
-	if s.solver == nil {
+	if s == nil || s.solver == nil {
 		return "", errors.New("extto magnet: flaresolverr is not configured")
 	}
 
@@ -253,7 +256,7 @@ func (s *ExttoSource) do(req *http.Request) ([]byte, int, error) {
 		}
 	}()
 
-	body, err := io.ReadAll(res.Body)
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxSearchResponseSize))
 	if err != nil {
 		return nil, res.StatusCode, fmt.Errorf("call extto: read response: %w", err)
 	}
@@ -307,15 +310,22 @@ type exttoTokens struct {
 // tokensFor returns the tokens of query's search page, running the search itself when the
 // held ones belong to another query or none are held at all.
 func (s *ExttoSource) tokensFor(ctx context.Context, query string) (exttoTokens, error) {
-	if tokens, ok := s.heldTokens(query); ok {
+	tokens, ok, searched := s.heldTokens(query)
+	if ok {
 		return tokens, nil
+	}
+	// the query's page has already been fetched this session and carried no usable tokens —
+	// markup ext.to changed under us. Replaying the search would do it once per row, and a
+	// search is a full challenge-fenced round trip holding the shared solver.
+	if searched {
+		return exttoTokens{}, fmt.Errorf("extto magnet: no page tokens for query %q", query)
 	}
 
 	if _, err := s.Search(ctx, query); err != nil {
 		return exttoTokens{}, err
 	}
 
-	tokens, ok := s.heldTokens(query)
+	tokens, ok, _ = s.heldTokens(query)
 	if !ok {
 		return exttoTokens{}, fmt.Errorf("extto magnet: no page tokens for query %q", query)
 	}
@@ -323,15 +333,19 @@ func (s *ExttoSource) tokensFor(ctx context.Context, query string) (exttoTokens,
 	return tokens, nil
 }
 
-func (s *ExttoSource) heldTokens(query string) (exttoTokens, bool) {
+// heldTokens reports the tokens of query's page, whether they are usable, and whether that
+// page was fetched at all — the last one is what stops a token-less page from being
+// re-searched once per row.
+func (s *ExttoSource) heldTokens(query string) (exttoTokens, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.tokenQuery != query || s.pageToken == "" || s.csrfToken == "" {
-		return exttoTokens{}, false
+	searched := s.tokenQuery == query
+	if !searched || s.pageToken == "" || s.csrfToken == "" {
+		return exttoTokens{}, false, searched
 	}
 
-	return exttoTokens{page: s.pageToken, csrf: s.csrfToken}, true
+	return exttoTokens{page: s.pageToken, csrf: s.csrfToken}, true, true
 }
 
 func (s *ExttoSource) storeTokens(doc *goquery.Document, query string) {

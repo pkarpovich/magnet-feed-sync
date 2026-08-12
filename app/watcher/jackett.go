@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"magnet-feed-sync/app/tracker/providers"
 )
 
 const (
@@ -19,6 +21,10 @@ const (
 	jackettSearchPath    = "/api/v2.0/indexers/all/results/torznab/api"
 	jackettSearchTimeout = 120 * time.Second
 )
+
+// maxSearchResponseSize bounds what a search source is willing to read, mirroring the
+// providers fetcher: a misbehaving indexer must not be able to drive the process to OOM.
+const maxSearchResponseSize = 10 * 1024 * 1024
 
 // JackettOptions carries the three URLs/keys the source needs; they are all strings and
 // therefore a swap hazard as positional parameters.
@@ -103,14 +109,17 @@ func (s *jackettSource) fetch(ctx context.Context, query string) ([]byte, error)
 	params.Set("q", query)
 	endpoint := s.baseURL + jackettSearchPath + "?" + params.Encode()
 
+	// providers.WithoutURL drops the *url.Error wrapper: its message embeds the whole
+	// endpoint, api key included, and this error reaches last_status, the search responses
+	// and loki
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("search jackett: %w", err)
+		return nil, fmt.Errorf("search jackett: %w", providers.WithoutURL(err))
 	}
 
 	res, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("search jackett: %w", err)
+		return nil, fmt.Errorf("search jackett: %w", providers.WithoutURL(err))
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {
@@ -118,7 +127,7 @@ func (s *jackettSource) fetch(ctx context.Context, query string) ([]byte, error)
 		}
 	}()
 
-	body, err := io.ReadAll(res.Body)
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxSearchResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("search jackett: read response: %w", err)
 	}
@@ -171,11 +180,15 @@ func (s *jackettSource) pageURL(item torznabItem) string {
 	return ""
 }
 
+// externalID identifies a row across cycles. The torznab endpoint aggregates *every*
+// indexer, and `t=` is the topic id on rutracker and on nnm alike, so the bare parameter
+// collides across them and would bury the second release as already announced — the id is
+// therefore namespaced by the page host.
 func (s *jackettSource) externalID(item torznabItem, pageURL string) string {
 	if pageURL != "" {
 		if u, err := url.Parse(pageURL); err == nil {
-			if t := u.Query().Get("t"); t != "" {
-				return t
+			if t := u.Query().Get("t"); t != "" && u.Host != "" {
+				return u.Host + "/" + t
 			}
 		}
 	}

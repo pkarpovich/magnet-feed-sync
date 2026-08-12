@@ -14,10 +14,22 @@ import (
 )
 
 const (
-	defaultSearchTimeout = 120 * time.Second
-	maxStatusLength      = 300
-	maxMessageItems      = 10
+	maxStatusLength = 300
+	maxMessageItems = 10
 )
+
+// unavailableSourceError names a source a watch references but this process does not run —
+// no jackett api key, no solver. It is deliberately its own type: a search that *failed* is
+// transient and must hold the seed back, while a source that is not configured at all is a
+// standing fact, and treating it as a failure would leave the watch unseeded forever and
+// therefore permanently silent.
+type unavailableSourceError struct {
+	name string
+}
+
+func (e unavailableSourceError) Error() string {
+	return e.name + ": source is not configured"
+}
 
 // RunOutcome is what one evaluation of a watch found: everything the sources returned after
 // dedup (Raw), what survived the regex filters (Matched), what was never announced before
@@ -80,7 +92,7 @@ func NewEngine(d EngineDeps) *Engine {
 	}
 }
 
-// nopPublisher stands in until the JetStream publisher is wired. It errors rather than
+// nopPublisher is what an engine built without a publisher gets. It errors rather than
 // succeeding quietly, because a silent success would let RunCycle mark releases seen that
 // nobody was ever told about.
 type nopPublisher struct{}
@@ -125,7 +137,7 @@ func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error)
 	for _, name := range w.Sources {
 		source := e.sourceByName(name)
 		if source == nil {
-			errs = append(errs, fmt.Errorf("%s: unknown source", name))
+			errs = append(errs, unavailableSourceError{name: name})
 
 			continue
 		}
@@ -154,8 +166,10 @@ func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error)
 func (e *Engine) searchAll(ctx context.Context, source SearchSource, queries []string) ([]SearchResult, error) {
 	var results []SearchResult
 
+	// no timeout is applied here: every source bounds its own call with the same constant,
+	// and a second copy of that table keyed on source names would silently disagree with it
 	for _, query := range queries {
-		found, err := e.search(ctx, source, query)
+		found, err := source.Search(ctx, query)
 		if err != nil {
 			return nil, fmt.Errorf("%s %q: %w", source.Name(), query, err)
 		}
@@ -164,13 +178,6 @@ func (e *Engine) searchAll(ctx context.Context, source SearchSource, queries []s
 	}
 
 	return results, nil
-}
-
-func (e *Engine) search(ctx context.Context, source SearchSource, query string) ([]SearchResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, sourceTimeout(source.Name()))
-	defer cancel()
-
-	return source.Search(ctx, query)
 }
 
 func (e *Engine) sourceByName(name string) SearchSource {
@@ -184,12 +191,16 @@ func (e *Engine) sourceByName(name string) SearchSource {
 }
 
 func (e *Engine) filter(w Watch, raw []SearchResult) ([]SearchResult, error) {
-	include, err := e.compile(w.IncludeRegex)
+	// only a stored watch's patterns are cached: POST /api/search takes its regexes from the
+	// request body, and caching those would let a caller grow the map without bound
+	cache := w.ID != ""
+
+	include, err := e.compile(w.IncludeRegex, cache)
 	if err != nil {
 		return nil, err
 	}
 
-	exclude, err := e.compile(w.ExcludeRegex)
+	exclude, err := e.compile(w.ExcludeRegex, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +222,7 @@ func (e *Engine) filter(w Watch, raw []SearchResult) ([]SearchResult, error) {
 
 // compile caches on the regex source string rather than on the watch, so a PATCH that
 // changes a pattern can never be served a stale compiled value.
-func (e *Engine) compile(pattern string) (*regexp.Regexp, error) {
+func (e *Engine) compile(pattern string, cache bool) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, nil
 	}
@@ -227,7 +238,9 @@ func (e *Engine) compile(pattern string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile regex %q: %w", pattern, err)
 	}
-	e.regexes[pattern] = compiled
+	if cache {
+		e.regexes[pattern] = compiled
+	}
 
 	return compiled, nil
 }
@@ -372,8 +385,10 @@ func (e *Engine) seed(w Watch, o RunOutcome) string {
 	}
 
 	// seeding from a partially failed run would bury every release the failed source
-	// never reported, so the seed waits for a clean cycle
-	if len(o.Errs) > 0 {
+	// never reported, so the seed waits for a clean cycle. A source that is not configured
+	// at all does not count: it never comes back on its own, and holding the seed for it
+	// leaves the watch unseeded — and therefore silent — forever
+	if hasSearchFailure(o.Errs) {
 		return ""
 	}
 
@@ -402,15 +417,20 @@ func expired(w Watch) bool {
 	return w.ExpiresAt != nil && !w.ExpiresAt.After(time.Now())
 }
 
-func sourceTimeout(name string) time.Duration {
-	switch name {
-	case sourceJackett:
-		return jackettSearchTimeout
-	case SourceExtto:
-		return exttoSearchTimeout
-	default:
-		return defaultSearchTimeout
+// hasSearchFailure reports whether anything that could succeed on a later cycle went wrong.
+// An unconfigured source is excluded: it is a standing configuration fact, still reported in
+// last_status and on /api/health, but never a reason to withhold the seed.
+func hasSearchFailure(errs []error) bool {
+	for _, err := range errs {
+		var unavailable unavailableSourceError
+		if errors.As(err, &unavailable) {
+			continue
+		}
+
+		return true
 	}
+
+	return false
 }
 
 func statusOf(errs []error) string {

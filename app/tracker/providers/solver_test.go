@@ -192,6 +192,49 @@ func TestSolverSolveReturnsSessionState(t *testing.T) {
 	assert.Equal(t, "extto_sess", page.Cookies[1].Name)
 }
 
+// Solve deliberately does not judge the body the way Fetch does: ext.to's cookie refresh
+// solves the front page and detects challenges itself, so moving the marker check into the
+// shared request path would make every refresh fail
+func TestSolverSolveReturnsAChallengeBodyWithoutError(t *testing.T) {
+	body := `<html><head><title>` + challengeMarker + `</title></head></html>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req solverRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		w.Header().Set("Content-Type", "application/json")
+		if req.Cmd != cmdRequestGet {
+			_, _ = w.Write([]byte(`{"status":"ok","message":"Session created successfully."}`))
+			return
+		}
+		payload, err := json.Marshal(map[string]any{
+			"status":  "ok",
+			"message": "Challenge solved!",
+			"solution": map[string]any{
+				"status":    200,
+				"response":  body,
+				"userAgent": "Mozilla/5.0 Firefox",
+				"cookies":   []map[string]string{{"name": "cf_clearance", "value": "abc"}},
+			},
+		})
+		require.NoError(t, err)
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	solver := NewSolverFetcher(server.URL)
+
+	page, err := solver.Solve(context.Background(), "https://search.extto.com/")
+	require.NoError(t, err)
+	assert.Equal(t, body, string(page.Body))
+
+	// Fetch, on the same body, still refuses
+	_, err = solver.Fetch(context.Background(), "https://search.extto.com/")
+	require.Error(t, err)
+	var provErr *ProviderError
+	require.ErrorAs(t, err, &provErr)
+	assert.Equal(t, KindBlocked, provErr.Kind)
+}
+
 func TestSolverSolveReportsRefusal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req solverRequest
