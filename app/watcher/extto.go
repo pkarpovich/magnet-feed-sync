@@ -248,7 +248,10 @@ func (s *ExttoSource) newRequest(ctx context.Context, method, endpoint string, b
 func (s *ExttoSource) do(req *http.Request) ([]byte, int, error) {
 	res, err := s.client.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("call extto: %w", err)
+		// same treatment the jackett source gives its transport errors: the *url.Error
+		// wrapper carries the full request url into last_status, the unauthenticated search
+		// responses and loki
+		return nil, 0, fmt.Errorf("call extto: %w", providers.WithoutURL(err))
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {

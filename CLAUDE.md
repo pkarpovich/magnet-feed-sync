@@ -78,8 +78,12 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   indexer at once and `t` is the topic id on RuTracker and NNM alike, so an un-namespaced id collides
   across them and buries the second release as already announced. Both sources wrap their transport
   errors in `providers.WithoutURL` and cap the body at `maxSearchResponseSize` — the jackett endpoint
-  carries the api key in its query string, and a `*url.Error` reaches `last_status`, the unauthenticated
-  search responses and loki verbatim
+  carries the api key in its query string, the solver endpoint (reached through ext.to's cookie refresh)
+  carries whatever userinfo `FLARESOLVERR_URL` holds, and a `*url.Error` reaches `last_status`, the
+  unauthenticated search responses and loki verbatim. A search that fails stops that source's remaining
+  queries — a source that just refused us will refuse them too, and on ext.to each attempt holds the
+  single solver slot for up to 180s — but what its earlier queries returned is kept, since discarding it
+  would withhold a release that was genuinely found
 - **watch-store/**: SQLite repository for `watches` / `watch_seen`, verifying its schema the same way
   `task-store` does — table existence first, then the expected **columns** (`requiredColumns`), because a
   table check passes a table whose columns a half-applied migration never added. `Disable` / `Enable` are

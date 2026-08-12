@@ -219,9 +219,12 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("encode solver request: %w", err)}
 	}
 
+	// the *url.Error wrapper embeds the whole solver endpoint, which carries any userinfo
+	// FLARESOLVERR_URL was configured with — and this error reaches loki, last_status and the
+	// unauthenticated search responses, where main.go is careful to log it redacted
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.baseURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build solver request: %w", err)}
+		return nil, &ProviderError{Kind: KindPermanent, Err: fmt.Errorf("build solver request: %w", WithoutURL(err))}
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -229,7 +232,7 @@ func (f *solverFetcher) command(ctx context.Context, cmd solverRequest) (*solver
 	// nothing about the tracker, so they must stay transient and leave the breaker closed
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("call solver: %w", err)}
+		return nil, &ProviderError{Kind: KindTransient, Err: fmt.Errorf("call solver: %w", WithoutURL(err))}
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {

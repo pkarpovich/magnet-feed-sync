@@ -384,6 +384,33 @@ func TestEvaluateFailingSourceDoesNotAbortTheOthers(t *testing.T) {
 	assert.Equal(t, enRelease, o.New[0].Title)
 }
 
+// a query that fails stops the rest of that source's queries, but what the earlier ones
+// already returned still counts: dropping it would withhold a release that was really found
+// for as long as the failing query keeps failing
+func TestEvaluateKeepsWhatEarlierQueriesReturned(t *testing.T) {
+	source := &fakeSource{
+		name: "jackett",
+		replies: []sourceReply{
+			{results: resultsFor("jackett", enRelease)},
+			{err: errors.New("bad status: 502")},
+			{results: resultsFor("jackett", ruRelease)},
+		},
+	}
+	w := acceptanceWatch()
+	w.Queries = []string{"One Night Only 2026", "Только на одну ночь 2026", "third"}
+	w.Sources = []string{"jackett"}
+	engine := NewEngine(EngineDeps{Sources: []SearchSource{source}, Store: newFakeStore()})
+
+	o := engine.Evaluate(context.Background(), *w)
+
+	require.Len(t, o.Errs, 1)
+	assert.Contains(t, o.Errs[0].Error(), "bad status: 502")
+	require.Len(t, o.New, 1)
+	assert.Equal(t, enRelease, o.New[0].Title)
+	// the third query is never issued: a source that just refused us will refuse it too
+	assert.Len(t, source.calls, 2)
+}
+
 func TestEvaluateUnknownSourceIsAnError(t *testing.T) {
 	w := acceptanceWatch()
 	w.Sources = []string{"nowhere"}

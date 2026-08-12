@@ -125,8 +125,8 @@ func (e *Engine) Evaluate(ctx context.Context, w Watch) RunOutcome {
 }
 
 // collect runs every query of every source sequentially: FlareSolverr must not be
-// parallelised and Jackett must not be hammered. A failing source contributes nothing but
-// never aborts the sources after it.
+// parallelised and Jackett must not be hammered. A failing source stops at its failing query
+// but keeps whatever its earlier queries returned, and never aborts the sources after it.
 func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error) {
 	var (
 		raw  []SearchResult
@@ -145,8 +145,6 @@ func (e *Engine) collect(ctx context.Context, w Watch) ([]SearchResult, []error)
 		results, err := e.searchAll(ctx, source, w.Queries)
 		if err != nil {
 			errs = append(errs, err)
-
-			continue
 		}
 
 		for _, result := range results {
@@ -171,7 +169,12 @@ func (e *Engine) searchAll(ctx context.Context, source SearchSource, queries []s
 	for _, query := range queries {
 		found, err := source.Search(ctx, query)
 		if err != nil {
-			return nil, fmt.Errorf("%s %q: %w", source.Name(), query, err)
+			// the queries after the failure are not attempted — a source that just refused
+			// us will refuse them too, and on ext.to each attempt holds the single solver
+			// slot for up to 180s. What it already returned is still handed back: dropping
+			// it would withhold a release that was genuinely found, which is the silent
+			// miss the publish-then-mark ordering exists to prevent
+			return results, fmt.Errorf("%s %q: %w", source.Name(), query, err)
 		}
 
 		results = append(results, found...)

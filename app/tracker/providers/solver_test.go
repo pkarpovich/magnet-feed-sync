@@ -575,6 +575,29 @@ func TestSolverLostSessionIsTransient(t *testing.T) {
 	assert.Equal(t, KindTransient, pe.Kind)
 }
 
+// the *url.Error wrapper embeds the solver endpoint, including whatever userinfo
+// FLARESOLVERR_URL was configured with, and this error travels to loki, a watch's
+// last_status and the unauthenticated search responses — main.go redacts the same value
+// before logging it
+func TestSolverTransportFailureDoesNotLeakTheEndpoint(t *testing.T) {
+	server := httptest.NewServer(&fakeSolver{html: "<html>page</html>"})
+	endpoint := strings.Replace(server.URL, "http://", "http://operator:secret@", 1) + "/v1"
+	server.Close()
+
+	fetcher := NewSolverFetcher(endpoint)
+
+	_, err := fetcher.Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
+	require.Error(t, err)
+	// the dial error still names the address it could not reach; what must not survive is
+	// the url wrapper carrying the credentials and the path
+	assert.NotContains(t, err.Error(), "operator")
+	assert.NotContains(t, err.Error(), "/v1")
+
+	var pe *ProviderError
+	require.ErrorAs(t, err, &pe)
+	assert.Equal(t, KindTransient, pe.Kind)
+}
+
 func TestBlockedFetcherIsAlwaysBlocked(t *testing.T) {
 	body, err := NewBlockedFetcher().Fetch(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1")
 	require.Error(t, err)
