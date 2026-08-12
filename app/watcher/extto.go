@@ -24,7 +24,9 @@ import (
 )
 
 const (
-	exttoBaseURL       = "https://search.extto.com"
+	// search.extto.com 301s here, and the redirect target issues the session the page
+	// tokens belong to — posting the signed magnet to the old host fails with Invalid session
+	exttoBaseURL       = "https://extto.com"
 	exttoBrowsePath    = "/browse/"
 	exttoMagnetPath    = "/ajax/getSearchMagnet.php"
 	exttoSort          = "size"
@@ -189,17 +191,19 @@ func (s *ExttoSource) get(ctx context.Context, endpoint string) ([]byte, exttoSe
 		return nil, exttoSession{}, err
 	}
 
-	body, status, err := s.do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return nil, exttoSession{}, err
 	}
 
 	// a challenge must reach the caller as a body, not a status error, so it can refresh the cookie
-	if (status < 200 || status >= 300) && !isExttoChallenge(body) {
-		return nil, exttoSession{}, fmt.Errorf("search extto: unexpected status %d", status)
+	if (res.status < 200 || res.status >= 300) && !isExttoChallenge(res.body) {
+		return nil, exttoSession{}, fmt.Errorf("search extto: unexpected status %d", res.status)
 	}
 
-	return body, session, nil
+	// the page issues its own PHPSESSID and the tokens on it belong to that session, so the
+	// magnet POST has to travel under it rather than under the one the solver handed us
+	return res.body, session.merge(res.cookies), nil
 }
 
 func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Values, session exttoSession) ([]byte, error) {
@@ -211,15 +215,15 @@ func (s *ExttoSource) postForm(ctx context.Context, endpoint string, form url.Va
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	req.Header.Set("Origin", s.baseURL)
 
-	body, status, err := s.do(req)
+	res, err := s.do(req)
 	if err != nil {
 		return nil, err
 	}
-	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("extto magnet: unexpected status %d", status)
+	if res.status < 200 || res.status >= 300 {
+		return nil, fmt.Errorf("extto magnet: unexpected status %d", res.status)
 	}
 
-	return body, nil
+	return res.body, nil
 }
 
 func (s *ExttoSource) newRequest(
@@ -238,11 +242,17 @@ func (s *ExttoSource) newRequest(
 	return req, nil
 }
 
-func (s *ExttoSource) do(req *http.Request) ([]byte, int, error) {
+type exttoResponse struct {
+	body    []byte
+	status  int
+	cookies []*http.Cookie
+}
+
+func (s *ExttoSource) do(req *http.Request) (exttoResponse, error) {
 	res, err := s.client.Do(req)
 	if err != nil {
 		// the *url.Error wrapper would carry the full request url into last_status and loki
-		return nil, 0, fmt.Errorf("call extto: %w", providers.WithoutURL(err))
+		return exttoResponse{}, fmt.Errorf("call extto: %w", providers.WithoutURL(err))
 	}
 	defer func() {
 		if err := res.Body.Close(); err != nil {
@@ -252,10 +262,10 @@ func (s *ExttoSource) do(req *http.Request) ([]byte, int, error) {
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxSearchResponseSize))
 	if err != nil {
-		return nil, res.StatusCode, fmt.Errorf("call extto: read response: %w", err)
+		return exttoResponse{status: res.StatusCode}, fmt.Errorf("call extto: read response: %w", err)
 	}
 
-	return body, res.StatusCode, nil
+	return exttoResponse{body: body, status: res.StatusCode, cookies: res.Cookies()}, nil
 }
 
 func (s *ExttoSource) refreshCookie(ctx context.Context) error {
@@ -287,6 +297,44 @@ func (s *ExttoSource) refreshCookie(ctx context.Context) error {
 type exttoSession struct {
 	cookie    string
 	userAgent string
+}
+
+// merge overlays the cookies a response set onto the session, replacing same-named ones so a
+// rotated PHPSESSID wins over the value the solver captured.
+func (e exttoSession) merge(cookies []*http.Cookie) exttoSession {
+	if len(cookies) == 0 {
+		return e
+	}
+
+	order := make([]string, 0, len(cookies))
+	values := make(map[string]string, len(cookies))
+	for _, pair := range strings.Split(e.cookie, ";") {
+		name, value, found := strings.Cut(strings.TrimSpace(pair), "=")
+		if !found || name == "" {
+			continue
+		}
+		if _, seen := values[name]; !seen {
+			order = append(order, name)
+		}
+		values[name] = value
+	}
+
+	for _, c := range cookies {
+		if c.Value == "" {
+			continue
+		}
+		if _, seen := values[c.Name]; !seen {
+			order = append(order, c.Name)
+		}
+		values[c.Name] = c.Value
+	}
+
+	pairs := make([]string, 0, len(order))
+	for _, name := range order {
+		pairs = append(pairs, name+"="+values[name])
+	}
+
+	return exttoSession{cookie: strings.Join(pairs, "; "), userAgent: e.userAgent}
 }
 
 func (s *ExttoSource) session() exttoSession {
