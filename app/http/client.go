@@ -26,7 +26,7 @@ import (
 )
 
 type TaskCreator interface {
-	CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
+	CreateFromURL(ctx context.Context, url, location string, notify bool) (*tracker.FileMetadata, error)
 	DownloadNow(ctx context.Context, source, location string) (string, error)
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
@@ -223,6 +223,7 @@ type FileMetadataResponse struct {
 	Magnet           string    `json:"magnet"`
 	TorrentUpdatedAt time.Time `json:"torrentUpdatedAt"`
 	Location         string    `json:"location"`
+	Notify           bool      `json:"notify"`
 }
 
 func (c *Client) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -261,12 +262,14 @@ func toResponse(f *tracker.FileMetadata) FileMetadataResponse {
 		OriginalUrl:      f.OriginalUrl,
 		LastComment:      f.LastComment,
 		TorrentUpdatedAt: f.TorrentUpdatedAt,
+		Notify:           f.Notify,
 	}
 }
 
 type CreateFileRequest struct {
 	URL      string `json:"url"`
 	Location string `json:"location"`
+	Notify   bool   `json:"notify"`
 }
 
 func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +287,14 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	metadata, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location)
+	// dry mode is not a refusal here, unlike /api/downloads: the tracked row outlives the dry
+	// run and the flag becomes live at the next real sweep
+	if req.Notify && !c.notifyEnabled() {
+		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnavailable})
+		return
+	}
+
+	metadata, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location, req.Notify)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
 		if errors.Is(err, tracker.ErrProviderNotFound) {
@@ -504,8 +514,12 @@ func (c *Client) recordDuplicate(a duplicateAdd) (string, error) {
 	return c.recordDownload(d)
 }
 
+func (c *Client) notifyEnabled() bool {
+	return c.notifier != nil && c.notifier.Enabled()
+}
+
 func (c *Client) refuseNotify(ctx context.Context, w http.ResponseWriter) bool {
-	if c.notifier == nil || !c.notifier.Enabled() || c.downloadStore == nil {
+	if !c.notifyEnabled() || c.downloadStore == nil {
 		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnavailable})
 		return true
 	}

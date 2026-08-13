@@ -2,11 +2,14 @@ package download_tasks
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"magnet-feed-sync/app/bot"
+	"magnet-feed-sync/app/notify"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
@@ -53,6 +57,10 @@ type DownloadClient interface {
 	CreateDownloadTask(url, destination string) (string, error)
 }
 
+type notifier interface {
+	Publish(ctx context.Context, m notify.Message) error
+}
+
 type Client struct {
 	mu              sync.Mutex
 	messagesForSend chan string
@@ -60,6 +68,7 @@ type Client struct {
 	dClient         DownloadClient
 	store           FileStore
 	breaker         ProviderBreaker
+	notifier        notifier
 	dryMode         bool
 
 	// notifyMu guards failingNotified, the set of tasks the failing alert already went out
@@ -74,6 +83,7 @@ type ClientCtx struct {
 	DClient         DownloadClient
 	Store           FileStore
 	Breaker         ProviderBreaker
+	Notifier        notifier
 	DryMode         bool
 }
 
@@ -90,6 +100,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		dryMode:         ctx.DryMode,
 		store:           ctx.Store,
 		breaker:         breaker,
+		notifier:        ctx.Notifier,
 		failingNotified: make(map[string]struct{}),
 	}
 }
@@ -103,7 +114,8 @@ func (noopBreaker) RecordSuccess(string)                      {}
 func (noopBreaker) Snapshot() map[string]tracker.State        { return nil }
 
 func (c *Client) OnMessage(ctx context.Context, msg bot.Message, location string) (bool, string, error) {
-	metadata, err := c.CreateFromURL(ctx, msg.Text, location)
+	// a message from a human must never arm the agent
+	metadata, err := c.CreateFromURL(ctx, msg.Text, location, false)
 	if err != nil {
 		return false, "", err
 	}
@@ -117,11 +129,12 @@ func (c *Client) OnMessage(ctx context.Context, msg bot.Message, location string
 	return true, replyMsg, nil
 }
 
-func (c *Client) CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error) {
+func (c *Client) CreateFromURL(ctx context.Context, url, location string, notify bool) (*tracker.FileMetadata, error) {
 	metadata, err := c.tracker.Parse(ctx, url, location)
 	if err != nil {
 		return nil, err
 	}
+	metadata.Notify = notify
 
 	slog.DebugContext(ctx, "metadata", "metadata", metadata)
 
@@ -259,6 +272,9 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	if current.Location != "" {
 		updatedMetadata.Location = current.Location
 	}
+	// unconditional: notify has no sentinel value, so guarding it the way Location is guarded
+	// would clear the flag for every tracked file with an empty location
+	updatedMetadata.Notify = current.Notify
 
 	updatedMetadata.LastSyncAt = time.Now()
 	if magnetsEqual(current.Magnet, updatedMetadata.Magnet) {
@@ -301,7 +317,66 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	}
 
 	slog.InfoContext(ctx, "download task created", "name", updatedMetadata.Name)
+
+	// a human pressing refresh must not wake the agent, the same rule the breaker and the
+	// run state already follow
+	if fromCron {
+		c.publishReleaseUpdate(ctx, updatedMetadata)
+	}
+
 	c.sendUpdateNotification(ctx, updatedMetadata)
+}
+
+const releaseSubjectPrefix = "tuclaw.releases.updated."
+
+// a dot or a space in the token would grow the subject an extra token and stop matching
+// the filter the agent armed
+var subjectTokenPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+type releaseUpdatePayload struct {
+	FileID           string `json:"file_id"`
+	Name             string `json:"name"`
+	PageURL          string `json:"page_url"`
+	LastComment      string `json:"last_comment"`
+	Location         string `json:"location"`
+	TorrentUpdatedAt string `json:"torrent_updated_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+func (c *Client) publishReleaseUpdate(ctx context.Context, metadata *tracker.FileMetadata) {
+	if !metadata.Notify || c.notifier == nil {
+		return
+	}
+
+	if !subjectTokenPattern.MatchString(metadata.ID) {
+		slog.ErrorContext(ctx, "file id is not a valid subject token, release update skipped", "id", metadata.ID)
+		return
+	}
+
+	body, err := json.Marshal(releaseUpdatePayload{
+		FileID:           metadata.ID,
+		Name:             metadata.Name,
+		PageURL:          metadata.OriginalUrl,
+		LastComment:      metadata.LastComment,
+		Location:         metadata.Location,
+		TorrentUpdatedAt: metadata.TorrentUpdatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to build release update payload", "id", metadata.ID, "error", err)
+		return
+	}
+
+	digest := sha256.Sum256([]byte(metadata.Magnet))
+	msg := notify.Message{
+		Subject: releaseSubjectPrefix + metadata.ID,
+		MsgID:   metadata.ID + ":" + hex.EncodeToString(digest[:]),
+		Payload: body,
+	}
+
+	if err := c.notifier.Publish(ctx, msg); err != nil {
+		slog.ErrorContext(ctx, "failed to publish release update", "id", metadata.ID, "error", err)
+	}
 }
 
 func (c *Client) recordSyncSuccess(ctx context.Context, id string) {

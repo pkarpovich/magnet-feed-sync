@@ -32,6 +32,8 @@ import (
 type mockTaskCreator struct {
 	lastURL              string
 	lastLocation         string
+	lastNotify           bool
+	createFromURLCalls   int
 	lastDownloadSource   string
 	lastDownloadLocation string
 	downloadCalls        int
@@ -45,9 +47,11 @@ type mockTaskCreator struct {
 	updateLocationErr    error
 }
 
-func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string) (*tracker.FileMetadata, error) {
+func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string, notify bool) (*tracker.FileMetadata, error) {
+	m.createFromURLCalls++
 	m.lastURL = url
 	m.lastLocation = location
+	m.lastNotify = notify
 	return m.returnMeta, m.returnErr
 }
 
@@ -2468,4 +2472,121 @@ func TestWatchSearchRawResolvesMagnetsForMatchedRowsOnly(t *testing.T) {
 	assert.Empty(t, resp.Items[1].Magnet)
 	assert.Empty(t, resp.Items[1].MagnetError)
 	assert.Len(t, magnets.queries, 1, "the filtered-out row costs no magnet call")
+}
+
+func TestHandleCreateFile_NotifyWithDisabledNotifier(t *testing.T) {
+	creator := &mockTaskCreator{}
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{},
+		Notifier:       &mockNotifier{enabled: false},
+	})
+
+	body := `{"url":"https://rutracker.org/forum/viewtopic.php?t=1","notify":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+
+	c.handleCreateFile(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, 0, creator.createFromURLCalls)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, map[string]string{"error": notifyUnavailable}, resp)
+}
+
+func TestHandleCreateFile_NotifyReachesTaskCreator(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		expected bool
+	}{
+		{name: "flag set", body: `{"url":"https://rutracker.org/forum/viewtopic.php?t=1","notify":true}`, expected: true},
+		{name: "flag absent", body: `{"url":"https://rutracker.org/forum/viewtopic.php?t=1"}`, expected: false},
+		{name: "flag false", body: `{"url":"https://rutracker.org/forum/viewtopic.php?t=1","notify":false}`, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &mockTaskCreator{
+				returnMeta: &tracker.FileMetadata{ID: "1", Name: "release", Notify: tt.expected},
+			}
+			c := NewClient(&ClientCtx{
+				Store:          &mockFileStore{},
+				TaskCreator:    creator,
+				DownloadClient: &mockDownloadClient{},
+				Notifier:       &mockNotifier{enabled: true},
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(tt.body))
+			w := httptest.NewRecorder()
+
+			c.handleCreateFile(w, req)
+
+			require.Equal(t, http.StatusCreated, w.Code)
+			assert.Equal(t, 1, creator.createFromURLCalls)
+			assert.Equal(t, tt.expected, creator.lastNotify)
+
+			var resp map[string]any
+			require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+			assert.Equal(t, tt.expected, resp["notify"])
+		})
+	}
+}
+
+func TestHandleCreateFile_NotifyWithoutNotifierConfigured(t *testing.T) {
+	creator := &mockTaskCreator{}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
+
+	body := `{"url":"https://rutracker.org/forum/viewtopic.php?t=1","notify":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+
+	c.handleCreateFile(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, 0, creator.createFromURLCalls)
+}
+
+func TestHandleCreateFile_NotifyIsNotRefusedInDryMode(t *testing.T) {
+	creator := &mockTaskCreator{returnMeta: &tracker.FileMetadata{ID: "1", Notify: true}}
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{},
+		Notifier:       &mockNotifier{enabled: true},
+		DryMode:        true,
+	})
+
+	body := `{"url":"https://rutracker.org/forum/viewtopic.php?t=1","notify":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+
+	c.handleCreateFile(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.True(t, creator.lastNotify)
+}
+
+func TestHandleFiles_CarriesNotifyThroughToResponse(t *testing.T) {
+	store := &mockFileStore{files: []*tracker.FileMetadata{
+		{ID: "1", Name: "armed", Notify: true},
+		{ID: "2", Name: "quiet"},
+	}}
+	c := NewClient(&ClientCtx{Store: store, TaskCreator: &mockTaskCreator{}, DownloadClient: &mockDownloadClient{}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	w := httptest.NewRecorder()
+
+	c.handleFiles(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp []map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.Len(t, resp, 2)
+	assert.Equal(t, true, resp[0]["notify"])
+	assert.Equal(t, false, resp[1]["notify"])
 }

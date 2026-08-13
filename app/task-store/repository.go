@@ -16,7 +16,7 @@ import (
 var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary (`go run ./cmd/migrate`)")
 
 // the columns whose absence caused the incident: the table existed, they did not
-var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at"}
+var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at", "notify"}
 
 type Repository struct {
 	db *database.Client
@@ -86,8 +86,9 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				delete_at,
 				consecutive_failures,
 				last_error,
-				last_error_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+				last_error_at,
+				notify
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.Magnet,
@@ -99,6 +100,7 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 		metadata.ConsecutiveFailures,
 		metadata.LastError,
 		metadata.LastErrorAt,
+		metadata.Notify,
 	)
 
 	return err
@@ -119,7 +121,8 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			delete_at,
 			consecutive_failures,
 			last_error,
-			last_error_at
+			last_error_at,
+			notify
 		FROM
 			files
 		WHERE
@@ -153,6 +156,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.ConsecutiveFailures,
 			&m.LastError,
 			&m.LastErrorAt,
+			&m.Notify,
 		); err != nil {
 			return nil, err
 		}
@@ -185,7 +189,8 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 			delete_at,
 			consecutive_failures,
 			last_error,
-			last_error_at
+			last_error_at,
+			notify
 		FROM
 			files
 		WHERE
@@ -204,6 +209,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 		&m.ConsecutiveFailures,
 		&m.LastError,
 		&m.LastErrorAt,
+		&m.Notify,
 	)
 	if err != nil {
 		return nil, err

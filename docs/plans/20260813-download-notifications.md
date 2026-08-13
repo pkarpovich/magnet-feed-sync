@@ -874,46 +874,46 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/bot/download-tasks/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] add `Notify` to `tracker.FileMetadata`, to `CreateOrReplace`'s column list and values, and to
+- [x] add `Notify` to `tracker.FileMetadata`, to `CreateOrReplace`'s column list and values, and to
       the row scan; add `notify` to the store's required columns
-- [ ] carry `Notify` from the stored row into the freshly parsed metadata in `processFileMetadata`,
+- [x] carry `Notify` from the stored row into the freshly parsed metadata in `processFileMetadata`,
       immediately after the `if current.Location != ""` block and **outside** it (locate it by that
       code, not by a line number - earlier tasks have already edited this file). The assignment is
       unconditional: `notify` has no sentinel value, so guarding it the way `Location` is guarded
       would silently clear the flag for every tracked file with an empty location. Without the
       carry-over at all, the flag is wiped on the first sweep
-- [ ] widen `CreateFromURL(ctx, url, location string, notify bool)`; the Telegram path (`OnMessage`)
+- [x] widen `CreateFromURL(ctx, url, location string, notify bool)`; the Telegram path (`OnMessage`)
       passes `false` explicitly, since a message from a human must never arm the agent. A re-post of
       an already-tracked URL takes the request's flag verbatim - a create is a create - which is
       worth a test of its own so the behaviour is pinned rather than accidental
-- [ ] accept optional `notify` on `POST /api/files`, defaulting to false, and add `"notify"` to
+- [x] accept optional `notify` on `POST /api/files`, defaulting to false, and add `"notify"` to
       `FileMetadataResponse` - which `GET /api/files` shares through `toResponse`, and which the
       backward-compatibility bar allows as an additive key
-- [ ] `POST /api/files` with `notify: true` and the notifier disabled answers the same `503` as
+- [x] `POST /api/files` with `notify: true` and the notifier disabled answers the same `503` as
       `/api/downloads`. Dry mode is **not** a refusal here, unlike `/api/downloads`: the tracked row
       outlives the dry run and the flag becomes live at the next real sweep, so nothing is promised
       that cannot be delivered
-- [ ] give `downloadTasks.ClientCtx` a `Notifier` field over a consumer-side interface
+- [x] give `downloadTasks.ClientCtx` a `Notifier` field over a consumer-side interface
       `interface{ Publish(ctx context.Context, m notify.Message) error }` declared in
       `app/bot/download-tasks`; `main.go` passes the same `notify.Client` the watcher publisher and
       the sweeper use. A nil notifier is a no-op, never a panic
-- [ ] publish `tuclaw.releases.updated.<file_id>` from `processFileMetadata` under **all** of these
+- [x] publish `tuclaw.releases.updated.<file_id>` from `processFileMetadata` under **all** of these
       conditions, and no others: `fromCron` is true (a human pressing refresh must not wake the
       agent - the same rule the breaker and the run state already follow), dry mode is off, the
       magnet actually changed, `CreateDownloadTask` returned nil (so the revert path publishes
       nothing), and the file id matches `^[A-Za-z0-9_-]+$`. A publish failure is logged and never
       aborts the sweep or the re-download
-- [ ] add `TestCreateOrReplacePreservesNotify` beside the existing counter-preservation test
-- [ ] write tests: magnet unchanged -> no event; magnet changed with the flag off -> no event; flag
+- [x] add `TestCreateOrReplacePreservesNotify` beside the existing counter-preservation test
+- [x] write tests: magnet unchanged -> no event; magnet changed with the flag off -> no event; flag
       on via cron -> exactly one event with the documented payload; **flag on via `RefreshAll` or
       `CheckFileForUpdates` -> no event**; dry mode -> no event; re-download failed and metadata
       reverted -> no event; a file id containing a dot -> no publish and an error logged; a tracked
       file with an **empty location** and `notify` set still has `notify` after a sweep
-- [ ] write handler tests in `app/http/client_test.go`: `POST /api/files` with `notify: true` and a
+- [x] write handler tests in `app/http/client_test.go`: `POST /api/files` with `notify: true` and a
       disabled notifier -> 503 with the fixed body and no `CreateFromURL` call; with an enabled
       notifier -> the flag reaches `CreateFromURL` and the decoded body carries `"notify": true`;
       without the flag -> `"notify": false`; `GET /api/files` carries the key through `toResponse`
-- [ ] run `go test ./... -race` - must pass before task 9
+- [x] run `go test ./... -race` - must pass before task 9
 
 ### Task 9: Configuration and wiring
 

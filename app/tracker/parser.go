@@ -21,6 +21,7 @@ type FileMetadata struct {
 	LastSyncAt       time.Time    `json:"last_sync_at"`
 	TorrentUpdatedAt time.Time    `json:"torrent_updated_at"`
 	Location         string       `json:"location"`
+	Notify           bool         `json:"notify"`
 	CreatedAt        time.Time    `json:"-"`
 	DeleteAt         sql.NullTime `json:"-"`
 

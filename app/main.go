@@ -147,6 +147,7 @@ func run(cfg *config.Config) error {
 		DClient:         dClient,
 		Store:           store,
 		Breaker:         breaker,
+		Notifier:        notifier,
 		DryMode:         cfg.DryMode,
 		MessagesForSend: messagesForSend,
 	})
