@@ -185,6 +185,7 @@ func run(cfg *config.Config) error {
 		TaskCreator:      downloadTasksClient,
 		DownloadClient:   dClient,
 		DownloadStore:    downloadRepo,
+		TorrentLookup:    dClient,
 		Notifier:         notifier,
 		DryMode:          cfg.DryMode,
 		Breaker:          breaker,

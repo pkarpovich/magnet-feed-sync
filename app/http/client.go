@@ -20,6 +20,7 @@ import (
 	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
+	"magnet-feed-sync/app/utils"
 	watch_store "magnet-feed-sync/app/watch-store"
 	"magnet-feed-sync/app/watcher"
 )
@@ -35,10 +36,15 @@ type TaskCreator interface {
 
 type downloadStore interface {
 	Create(d *downloads.Download) error
+	NewestBySource(source string) (*downloads.Download, error)
 }
 
 type notifier interface {
 	Enabled() bool
+}
+
+type torrentLookup interface {
+	TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error)
 }
 
 type FileStore interface {
@@ -86,6 +92,7 @@ type Client struct {
 	taskCreator      TaskCreator
 	downloadClient   DownloadClient
 	downloadStore    downloadStore
+	torrents         torrentLookup
 	notifier         notifier
 	dryMode          bool
 	breaker          BreakerSnapshotter
@@ -105,6 +112,7 @@ type ClientCtx struct {
 	TaskCreator      TaskCreator
 	DownloadClient   DownloadClient
 	DownloadStore    downloadStore
+	TorrentLookup    torrentLookup
 	Notifier         notifier
 	DryMode          bool
 	Breaker          BreakerSnapshotter
@@ -142,6 +150,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		taskCreator:      ctx.TaskCreator,
 		downloadClient:   ctx.DownloadClient,
 		downloadStore:    ctx.DownloadStore,
+		torrents:         ctx.TorrentLookup,
 		notifier:         ctx.Notifier,
 		dryMode:          ctx.DryMode,
 		breaker:          ctx.Breaker,
@@ -296,9 +305,12 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 const downloadSubjectPrefix = "tuclaw.downloads.completed."
 
 const (
-	notifyUnavailable = "notifications are not configured"
-	notifyDryMode     = "dry mode: no download is created, so no event can be published"
+	notifyUnavailable   = "notifications are not configured"
+	notifyDryMode       = "dry mode: no download is created, so no event can be published"
+	duplicateUnresolved = "torrent already present and its hash could not be resolved from the source"
 )
+
+const stateUnknown = "unknown"
 
 type CreateDownloadRequest struct {
 	Source   string `json:"source"`
@@ -310,6 +322,24 @@ type createDownloadResponse struct {
 	Status     string `json:"status"`
 	DownloadID string `json:"download_id,omitempty"`
 	Subject    string `json:"subject,omitempty"`
+}
+
+type duplicateDownloadResponse struct {
+	Status     string `json:"status"`
+	Duplicate  bool   `json:"duplicate"`
+	Hash       string `json:"hash"`
+	State      string `json:"state"`
+	Completed  bool   `json:"completed"`
+	DownloadID string `json:"download_id,omitempty"`
+	Subject    string `json:"subject,omitempty"`
+}
+
+type duplicateAdd struct {
+	source   string
+	location string
+	hash     string
+	state    types.TorrentState
+	class    downloads.Classification
 }
 
 func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
@@ -340,6 +370,11 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := c.taskCreator.DownloadNow(ctx, req.Source, location)
 	if err != nil {
+		if errors.Is(err, types.ErrTorrentAlreadyExists) {
+			c.answerDuplicate(ctx, w, req, location)
+			return
+		}
+
 		slog.ErrorContext(ctx, "failed to create one-shot download", "error", err)
 		http.Error(w, "failed to create download", http.StatusInternalServerError)
 		return
@@ -359,6 +394,114 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.encodeJSON(ctx, w, http.StatusCreated, resp)
+}
+
+// qbittorrent already holds the torrent, which is the outcome the caller wanted: the current
+// state is answered inline so a finished one is not left waiting for an event that can never come
+func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req CreateDownloadRequest, location string) {
+	hash := c.duplicateHash(ctx, req.Source)
+	if hash == "" {
+		c.encodeJSON(ctx, w, http.StatusConflict, map[string]string{"error": duplicateUnresolved})
+		return
+	}
+
+	state, found := c.torrentState(ctx, hash)
+	class := downloads.Classify(state, found)
+
+	resp := duplicateDownloadResponse{
+		Status:    statusOk,
+		Duplicate: true,
+		Hash:      hash,
+		State:     state.State,
+		Completed: class.Completed(),
+	}
+	if !found {
+		resp.State = stateUnknown
+	}
+
+	// a failed duplicate gets no row: the sweep would then publish a failure on a subject this
+	// caller was never handed, while the body already carries the state inline
+	if req.Notify && (!class.Terminal() || class.Completed()) {
+		id, err := c.recordDuplicate(duplicateAdd{
+			source:   req.Source,
+			location: location,
+			hash:     hash,
+			state:    state,
+			class:    class,
+		})
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to record duplicate download", "error", err)
+			http.Error(w, "failed to record download", http.StatusInternalServerError)
+			return
+		}
+
+		if !class.Completed() {
+			resp.DownloadID = id
+			resp.Subject = downloadSubjectPrefix + id
+		}
+	}
+
+	c.encodeJSON(ctx, w, http.StatusOK, resp)
+}
+
+func (c *Client) duplicateHash(ctx context.Context, source string) string {
+	if strings.HasPrefix(source, "magnet:") {
+		return utils.ExtractBtihHash(source)
+	}
+
+	if c.downloadStore == nil {
+		return ""
+	}
+
+	// a re-run of the same agent task carries the same .torrent URL, which is the only handle
+	// left once qbittorrent refuses to report the hash of a torrent it already holds
+	row, err := c.downloadStore.NewestBySource(source)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to look up download by source", "error", err)
+		return ""
+	}
+	if row == nil {
+		return ""
+	}
+
+	return row.Hash
+}
+
+// a lookup that failed is reported as not found, never as a state: the caller learns the
+// torrent is present either way, and no row is written for it
+func (c *Client) torrentState(ctx context.Context, hash string) (types.TorrentState, bool) {
+	if c.torrents == nil {
+		return types.TorrentState{}, false
+	}
+
+	states, err := c.torrents.TorrentStates(ctx, []string{hash})
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to look up torrent state", "hash", hash, "error", err)
+		return types.TorrentState{}, false
+	}
+
+	state, found := states[hash]
+
+	return state, found
+}
+
+func (c *Client) recordDuplicate(a duplicateAdd) (string, error) {
+	d := &downloads.Download{Source: a.source, Location: a.location, Hash: a.hash}
+
+	if a.class.Completed() {
+		completedAt := time.Unix(a.state.CompletionOn, 0).UTC()
+		publishedAt := time.Now()
+
+		d.Status = a.class.Status
+		d.Name = a.state.Name
+		d.ContentPath = a.state.ContentPath
+		d.Size = a.state.Size
+		d.CompletedAt = &completedAt
+		// already published as far as the sweep is concerned: the caller was just told inline
+		d.PublishedAt = &publishedAt
+	}
+
+	return c.recordDownload(d)
 }
 
 func (c *Client) refuseNotify(ctx context.Context, w http.ResponseWriter) bool {

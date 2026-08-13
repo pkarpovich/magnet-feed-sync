@@ -369,6 +369,28 @@ type failingDownloadStore struct {
 
 func (f *failingDownloadStore) Create(_ *downloads.Download) error { return f.err }
 
+func (f *failingDownloadStore) NewestBySource(_ string) (*downloads.Download, error) {
+	return nil, f.err
+}
+
+type mockTorrentLookup struct {
+	states      map[string]types.TorrentState
+	err         error
+	askedHashes [][]string
+	lookupCalls int
+}
+
+func (m *mockTorrentLookup) TorrentStates(_ context.Context, hashes []string) (map[string]types.TorrentState, error) {
+	m.lookupCalls++
+	m.askedHashes = append(m.askedHashes, hashes)
+
+	if m.err != nil {
+		return nil, m.err
+	}
+
+	return m.states, nil
+}
+
 func postDownload(t *testing.T, c *Client, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -552,6 +574,274 @@ func TestHandleCreateDownload_NotifyStoreFails(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Equal(t, 1, creator.downloadCalls)
+}
+
+const (
+	completedHash   = "474d1403945c0768506233481557516e7af8d136"
+	completedMagnet = "magnet:?xt=urn:btih:474d1403945c0768506233481557516e7af8d136"
+)
+
+func completedTorrent() types.TorrentState {
+	return types.TorrentState{
+		Hash:         completedHash,
+		Name:         "sample.bin",
+		State:        "stalledUP",
+		ContentPath:  "/downloads/probe/sample.bin",
+		Progress:     1,
+		CompletionOn: 1786626099,
+		Size:         4194304,
+	}
+}
+
+func unfinishedTorrent() types.TorrentState {
+	return types.TorrentState{
+		Hash:         completedHash,
+		Name:         "ubuntu-24.04.1-desktop-amd64.iso",
+		State:        "downloading",
+		ContentPath:  "/downloads/probe-magnet/ubuntu-24.04.1-desktop-amd64.iso",
+		Progress:     0,
+		CompletionOn: -1,
+		Size:         5173995520,
+	}
+}
+
+func duplicateClient(store downloadStore, lookup torrentLookup) *Client {
+	return NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    &mockTaskCreator{downloadErr: fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)},
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		TorrentLookup:  lookup,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+}
+
+func TestHandleCreateDownload_DuplicateWithoutNotify(t *testing.T) {
+	store := newTestDownloadStore(t)
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+completedMagnet+`"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, map[string]any{
+		"status":    "ok",
+		"duplicate": true,
+		"hash":      completedHash,
+		"state":     "stalledUP",
+		"completed": true,
+	}, decodeBody(t, w))
+	assert.Equal(t, [][]string{{completedHash}}, lookup.askedHashes)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+func TestHandleCreateDownload_DuplicateNotifyStillDownloading(t *testing.T) {
+	store := newTestDownloadStore(t)
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: unfinishedTorrent()}}
+
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	body := decodeBody(t, w)
+	id, _ := body["download_id"].(string)
+	assert.Regexp(t, `^[0-9a-f]{16}$`, id)
+	assert.Equal(t, map[string]any{
+		"status":      "ok",
+		"duplicate":   true,
+		"hash":        completedHash,
+		"state":       "downloading",
+		"completed":   false,
+		"download_id": id,
+		"subject":     "tuclaw.downloads.completed." + id,
+	}, body)
+
+	pending, err := store.Pending()
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, id, pending[0].ID)
+	assert.Equal(t, completedHash, pending[0].Hash)
+	assert.Equal(t, "/downloads/default", pending[0].Location)
+	assert.Nil(t, pending[0].PublishedAt)
+}
+
+// the caller was just told inline that it is finished; a row the sweep would publish on top
+// of that wakes the agent twice for one download
+func TestHandleCreateDownload_DuplicateNotifyAlreadyComplete(t *testing.T) {
+	store := newTestDownloadStore(t)
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, map[string]any{
+		"status":    "ok",
+		"duplicate": true,
+		"hash":      completedHash,
+		"state":     "stalledUP",
+		"completed": true,
+	}, decodeBody(t, w))
+
+	pending, err := store.Pending()
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+
+	row, err := store.NewestBySource(completedMagnet)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, "completed", row.Status)
+	assert.Equal(t, "sample.bin", row.Name)
+	assert.Equal(t, "/downloads/probe/sample.bin", row.ContentPath)
+	assert.Equal(t, int64(4194304), row.Size)
+	require.NotNil(t, row.CompletedAt)
+	assert.Equal(t, time.Unix(1786626099, 0).UTC(), row.CompletedAt.UTC())
+	assert.NotNil(t, row.PublishedAt)
+}
+
+func TestHandleCreateDownload_DuplicateNotifyTerminalFailure(t *testing.T) {
+	tests := []struct {
+		name          string
+		lookup        *mockTorrentLookup
+		expectedState string
+	}{
+		{
+			name: "qbittorrent reports an error state",
+			lookup: &mockTorrentLookup{states: map[string]types.TorrentState{
+				completedHash: {Hash: completedHash, State: "error", Progress: 1, CompletionOn: 1786626099},
+			}},
+			expectedState: "error",
+		},
+		{
+			name:          "hash absent from the lookup",
+			lookup:        &mockTorrentLookup{states: map[string]types.TorrentState{}},
+			expectedState: "unknown",
+		},
+		{
+			name:          "lookup failed",
+			lookup:        &mockTorrentLookup{err: errors.New("qbittorrent unreachable")},
+			expectedState: "unknown",
+		},
+		{
+			name:          "lookup unset",
+			expectedState: "unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestDownloadStore(t)
+
+			var lookup torrentLookup
+			if tt.lookup != nil {
+				lookup = tt.lookup
+			}
+
+			c := duplicateClient(store, lookup)
+
+			w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, map[string]any{
+				"status":    "ok",
+				"duplicate": true,
+				"hash":      completedHash,
+				"state":     tt.expectedState,
+				"completed": false,
+			}, decodeBody(t, w))
+
+			row, err := store.NewestBySource(completedMagnet)
+			require.NoError(t, err)
+			assert.Nil(t, row, "a failed duplicate must not leave a row the sweep would publish")
+		})
+	}
+}
+
+func TestHandleCreateDownload_DuplicateTorrentURLResolvedFromStore(t *testing.T) {
+	store := newTestDownloadStore(t)
+	source := "https://tracker.local/download/42.torrent"
+
+	require.NoError(t, store.Create(&downloads.Download{
+		ID:        "0011223344556677",
+		Source:    source,
+		Location:  "/downloads/default",
+		Hash:      completedHash,
+		CreatedAt: time.Now(),
+	}))
+
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+source+`"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, map[string]any{
+		"status":    "ok",
+		"duplicate": true,
+		"hash":      completedHash,
+		"state":     "stalledUP",
+		"completed": true,
+	}, decodeBody(t, w))
+}
+
+func TestHandleCreateDownload_DuplicateUnresolvableHash(t *testing.T) {
+	store := newTestDownloadStore(t)
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"https://tracker.local/download/unseen.torrent","notify":true}`)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, map[string]any{
+		"error": "torrent already present and its hash could not be resolved from the source",
+	}, decodeBody(t, w))
+	assert.Equal(t, 0, lookup.lookupCalls)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+// the 415 "torrent file not valid" branch shares ErrTorrentAddFailed with the 409 one; only a
+// duplicate may answer 200, so an over-matched sentinel would report a broken URL as present
+func TestHandleCreateDownload_NonDuplicateAddFailureStays500(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadErr: errors.New("add torrent: torrent file not valid")}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		TorrentLookup:  &mockTorrentLookup{},
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"https://tracker.local/download/42.torrent","notify":true}`)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+func TestHandleCreateDownload_DuplicateStoreFails(t *testing.T) {
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: unfinishedTorrent()}}
+
+	c := duplicateClient(&failingDownloadStore{err: errors.New("db is down")}, lookup)
+
+	w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {

@@ -797,24 +797,24 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] on `types.ErrTorrentAlreadyExists` from task 4, resolve the hash: `ExtractBtihHash` for a
+- [x] on `types.ErrTorrentAlreadyExists` from task 4, resolve the hash: `ExtractBtihHash` for a
       magnet source, otherwise `NewestBySource` from the download store
-- [ ] declare a third consumer-side interface in `app/http` -
+- [x] declare a third consumer-side interface in `app/http` -
       `torrentLookup{ TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) }` -
       give `ClientCtx` a `TorrentLookup` field, and pass the existing qBittorrent client into it
       from `main.go`. Without this the handler tests pass with a fake while production nil-panics on
       the first 409
-- [ ] answer `200` with the duplicate body fixed under "Subjects and payloads", deciding `completed`
+- [x] answer `200` with the duplicate body fixed under "Subjects and payloads", deciding `completed`
       with `downloads.Classify` - never a second copy of the rule. When the hash is not in the
       returned map, or the lookup errors, use the `state: "unknown"` body from that same block
-- [ ] with `notify: true`, follow the three-outcome table under "Subjects and payloads" exactly:
+- [x] with `notify: true`, follow the three-outcome table under "Subjects and payloads" exactly:
       empty status -> row unpublished, body carries `download_id` and `subject`; `completed` -> row
       with its terminal outcome and `published_at` set to now, no id and no subject, so the sweep
       publishes nothing and the caller is not woken twice for what it was just told; `failed` (or
       hash absent, or lookup error) -> **no row at all**, no id and no subject
-- [ ] when the hash cannot be resolved at all, answer `409` with the reason body - never the old
+- [x] when the hash cannot be resolved at all, answer `409` with the reason body - never the old
       blanket 500
-- [ ] write tests for every branch: `notify: false` duplicate (answered 500 both before this plan
+- [x] write tests for every branch: `notify: false` duplicate (answered 500 both before this plan
       and after task 4) -> 200 with the duplicate body and no row; `notify: true` duplicate still
       downloading -> row written with `published_at` NULL and returned by `Pending()`; `notify: true`
       duplicate already complete -> row with `published_at` non-NULL, `status` and `completed_at`
@@ -823,7 +823,7 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
       subject; `notify: true` duplicate whose hash is absent from the lookup -> the
       `state: "unknown"` body, no row, no subject; unresolvable duplicate -> 409; a 415 add failure
       -> still 500, proving the sentinel is not over-matched
-- [ ] run `go test ./... -race` - must pass before task 7
+- [x] run `go test ./... -race` - must pass before task 7
 
 ### Task 7: The download sweep
 
