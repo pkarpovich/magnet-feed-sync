@@ -465,8 +465,13 @@ func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req
 }
 
 func (c *Client) duplicateHash(ctx context.Context, source string) string {
+	// only a hex infohash can be matched against what torrents/info reports, the same guard the
+	// download client applies: a base32 magnet hash would be answered as a state qbittorrent
+	// never knows, so the caller would be told the download failed and handed no subject
 	if strings.HasPrefix(source, "magnet:") {
-		return utils.ExtractBtihHash(source)
+		if hash := utils.ExtractBtihHash(source); utils.IsInfoHash(hash) {
+			return hash
+		}
 	}
 
 	if c.downloadStore == nil {

@@ -77,11 +77,15 @@ func (r *Repository) count(query string, args ...any) (int, error) {
 }
 
 // created_at is written from Go rather than left to CURRENT_TIMESTAMP, whose one-second
-// resolution would make the ordering of two rows added in the same second arbitrary
+// resolution would make the ordering of two rows added in the same second arbitrary. It is
+// stored in UTC because the driver writes a time.Time as RFC3339 text carrying its offset, and
+// `ORDER BY created_at` then compares wall clocks: under a DST zone the autumn rollback hour
+// would sort a newer row before an older one, which no rowid tiebreak can repair
 func (r *Repository) Create(d *downloads.Download) error {
 	if d.CreatedAt.IsZero() {
 		d.CreatedAt = time.Now()
 	}
+	d.CreatedAt = d.CreatedAt.UTC()
 
 	_, err := r.db.Exec(`
 		INSERT INTO downloads (`+downloadColumns+`)
@@ -123,7 +127,7 @@ func (r *Repository) MarkPublished(id string, o downloads.Outcome) error {
 		UPDATE downloads
 		SET status = ?, reason = ?, name = ?, content_path = ?, size = ?, completed_at = ?, published_at = ?
 		WHERE id = ? AND published_at IS NULL
-	`, o.Status, o.Reason, o.Name, o.ContentPath, o.Size, o.CompletedAt, time.Now(), id)
+	`, o.Status, o.Reason, o.Name, o.ContentPath, o.Size, o.CompletedAt.UTC(), time.Now().UTC(), id)
 	if err != nil {
 		return fmt.Errorf("mark download %s published: %w", id, err)
 	}
@@ -232,7 +236,7 @@ func nullTime(at *time.Time) sql.NullTime {
 		return sql.NullTime{}
 	}
 
-	return sql.NullTime{Time: *at, Valid: true}
+	return sql.NullTime{Time: at.UTC(), Valid: true}
 }
 
 func timePtr(at sql.NullTime) *time.Time {

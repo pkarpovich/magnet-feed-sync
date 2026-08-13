@@ -274,9 +274,10 @@ download is running either way and a request without `notify` still answers `201
 refused, because a row whose torrent cannot be matched would be published as a false failure.
 
 A duplicate is treated as success rather than the blanket 500 it used to answer. The hash is resolved from
-the magnet, or from the newest previous `downloads` row with the same `source` — which covers a re-run of
-the same task. Only an unseen `.torrent` URL for a torrent qBittorrent already holds cannot be identified,
-and that is the 409. With `notify: true`, a duplicate that is still downloading also gets a `download_id`
+the magnet — but only when the magnet carries a 40-char hex infohash, since a base32 one names a torrent
+qBittorrent never reports back — or from the newest previous `downloads` row with the same `source`, which
+covers a re-run of the same task. Only a source for a torrent qBittorrent already holds that neither
+route identifies cannot be resolved, and that is the 409. With `notify: true`, a duplicate that is still downloading also gets a `download_id`
 and a `subject`; one that is **already finished** does not, because the response just said so inline and
 waking the consumer again for it would be noise; one in `error`/`missingFiles` gets neither and no row.
 A duplicate whose state cannot be established — the hash is gone from qBittorrent's list, or the lookup

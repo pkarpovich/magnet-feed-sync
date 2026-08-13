@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,8 @@ type fakeQbit struct {
 	addURL      string
 
 	torrentsHashes string
+	// one entry per torrents/info request, so a batched lookup can be asserted on
+	torrentsRequests []string
 
 	setLocationHashes   string
 	setLocationLocation string
@@ -92,6 +95,7 @@ func newFakeQbit(t *testing.T) *fakeQbit {
 	mux.HandleFunc("/api/v2/torrents/info", func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
 		f.torrentsHashes = r.FormValue("hashes")
+		f.torrentsRequests = append(f.torrentsRequests, r.FormValue("hashes"))
 
 		if f.torrentsStatus != http.StatusOK {
 			w.WriteHeader(f.torrentsStatus)
@@ -345,6 +349,31 @@ func TestTorrentStatesOmitsUnknownHash(t *testing.T) {
 	assert.Len(t, states, 1)
 	_, found := states["9ecd4676fd0f0474151a4b74a5958f42639cebdf"]
 	assert.False(t, found, "a hash qbittorrent does not know must be absent, never zero-valued")
+}
+
+// the hashes travel in the query string of a GET, so an unbounded pending set would eventually
+// blow the request-line limit — and a failed lookup aborts the whole sweep
+func TestTorrentStatesBatchesHashes(t *testing.T) {
+	fake := newFakeQbit(t)
+	fake.torrentsBody = completedTorrentBody
+
+	hashes := make([]string, 0, 250)
+	for i := range 250 {
+		hashes = append(hashes, fmt.Sprintf("%040x", i))
+	}
+
+	states, err := fake.client().TorrentStates(context.Background(), hashes)
+
+	require.NoError(t, err)
+	require.Len(t, fake.torrentsRequests, 3)
+	assert.Len(t, strings.Split(fake.torrentsRequests[0], "|"), 100)
+	assert.Len(t, strings.Split(fake.torrentsRequests[1], "|"), 100)
+	assert.Len(t, strings.Split(fake.torrentsRequests[2], "|"), 50)
+
+	// every batch answers the same body here, so the merged map still holds the one known hash
+	assert.Len(t, states, 1)
+	_, found := states["474d1403945c0768506233481557516e7af8d136"]
+	assert.True(t, found, "states from every batch must be merged")
 }
 
 func TestTorrentStatesError(t *testing.T) {

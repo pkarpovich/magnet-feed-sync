@@ -68,7 +68,10 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   `utils.RedactURL` **inside the client** (the library error stays underneath, so `errors.Is` still
   sees it) rather than at each caller that logs it. `TorrentStates(ctx, hashes)` is the paired lookup the
   sweep and the duplicate path share; a hash qBittorrent does not know is **absent from the map**, never
-  a zero entry, because absence is what the sweep reads as "deleted by hand". The subject both halves of
+  a zero entry, because absence is what the sweep reads as "deleted by hand". It asks in **batches of
+  100**: the library joins the hashes into the query string of a GET `torrents/info` at ~41 chars each,
+  and a pending set that outgrows the request-line limit would fail a lookup whose failure aborts the
+  whole sweep, stalling every pending row rather than one. The subject both halves of
   the promise use is built once by `downloads.Subject(id)` — the HTTP response hands back exactly what
   the sweep will publish on
 - **events/**: Telegram event handlers for bot interactions
@@ -137,7 +140,10 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   publish-then-mark ordering safe to run twice after a crash. `Create` writes `created_at` from a Go
   `time.Time` rather than leaning on `CURRENT_TIMESTAMP`, whose one-second resolution would make the
   ordering of two rows added in the same second arbitrary; `Pending` and `NewestBySource` break ties on
-  `rowid` so the order is total either way
+  `rowid` so the order is total either way. Every timestamp is stored **in UTC**: the driver writes a
+  `time.Time` as RFC3339 text carrying its offset, so `ORDER BY created_at` compares wall clocks, and
+  under a DST zone the autumn rollback hour would sort a newer row before an older one — a difference
+  the `rowid` tiebreak cannot repair, because the two values are not equal
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
@@ -334,7 +340,9 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   when `errors.Is(err, qbt.ErrTorrentAddFailed)` *and* the message contains `conflicts detected`, because
   that sentinel is also used for the 415 "torrent file not valid" case — over-matching it would report a
   broken `.torrent` URL as a finished download. The handler resolves the hash (`ExtractBtihHash` for a
-  magnet, otherwise `NewestBySource`) and answers 200 with the current state inline. With `notify: true` an
+  magnet, and only when `utils.IsInfoHash` accepts it — the same guard the client applies, since a
+  base32 hash names a torrent `torrents/info` never reports, so the caller would be told the download
+  failed and handed no subject; otherwise `NewestBySource`) and answers 200 with the current state inline. With `notify: true` an
   already-complete duplicate gets its row written with `published_at` already set so the sweep skips it —
   the caller was just told inline and must not be woken twice — and a `failed` one gets **no row at all**,
   since the sweep would otherwise publish a failure on a subject the caller was never given

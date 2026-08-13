@@ -56,7 +56,7 @@ func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(url), "magnet:") {
 		// only a hex infohash can be matched against what torrents/info reports: a base32
 		// magnet would be stored as a hash the sweep never finds and published as a false failure
-		if hash := utils.ExtractBtihHash(url); isInfoHash(hash) {
+		if hash := utils.ExtractBtihHash(url); utils.IsInfoHash(hash) {
 			return hash, nil
 		}
 	}
@@ -89,36 +89,32 @@ func (e *sanitisedError) Error() string { return e.msg }
 
 func (e *sanitisedError) Unwrap() error { return e.err }
 
-func isInfoHash(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-
-	return true
-}
+// the library joins the hashes into the query string of a GET torrents/info, ~41 chars each, so
+// an unbounded pending set would eventually exceed the request-line limit of qbittorrent or any
+// proxy in front of it — and one failed lookup aborts the whole sweep, stalling every pending row
+const hashBatchSize = 100
 
 func (c *Client) TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) {
-	torrents, err := c.qbt.GetTorrentsCtx(ctx, qbt.TorrentFilterOptions{Hashes: hashes})
-	if err != nil {
-		return nil, fmt.Errorf("get torrents: %w", err)
-	}
+	states := make(map[string]types.TorrentState, len(hashes))
 
-	states := make(map[string]types.TorrentState, len(torrents))
-	for _, torrent := range torrents {
-		states[torrent.Hash] = types.TorrentState{
-			Hash:         torrent.Hash,
-			Name:         torrent.Name,
-			State:        string(torrent.State),
-			ContentPath:  torrent.ContentPath,
-			Progress:     torrent.Progress,
-			CompletionOn: torrent.CompletionOn,
-			Size:         torrent.Size,
+	for start := 0; start < len(hashes); start += hashBatchSize {
+		end := min(start+hashBatchSize, len(hashes))
+
+		torrents, err := c.qbt.GetTorrentsCtx(ctx, qbt.TorrentFilterOptions{Hashes: hashes[start:end]})
+		if err != nil {
+			return nil, fmt.Errorf("get torrents: %w", err)
+		}
+
+		for _, torrent := range torrents {
+			states[torrent.Hash] = types.TorrentState{
+				Hash:         torrent.Hash,
+				Name:         torrent.Name,
+				State:        string(torrent.State),
+				ContentPath:  torrent.ContentPath,
+				Progress:     torrent.Progress,
+				CompletionOn: torrent.CompletionOn,
+				Size:         torrent.Size,
+			}
 		}
 	}
 

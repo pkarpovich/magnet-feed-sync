@@ -281,6 +281,41 @@ func TestNewestBySourceTiesOnTheIdenticalTimestamp(t *testing.T) {
 	assert.Equal(t, "third", newest.ID)
 }
 
+// the driver writes a time.Time as RFC3339 text carrying its offset, so ORDER BY compares wall
+// clocks: across the autumn DST rollback the newer row reads as the older one unless it is
+// stored in UTC, and the rowid tiebreak cannot help because the two values are not equal
+func TestNewestBySourceSurvivesTheDSTRollback(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skip("no tzdata: ", err)
+	}
+
+	repo := newTestRepo(t)
+	source := "https://tracker.test/download/1.torrent"
+
+	older := testDownload("older")
+	older.Source = source
+	older.CreatedAt = time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC).In(berlin) // 02:30 CEST
+
+	newer := testDownload("newer")
+	newer.Source = source
+	newer.CreatedAt = time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC).In(berlin) // 02:30 CET
+
+	require.NoError(t, repo.Create(older))
+	require.NoError(t, repo.Create(newer))
+
+	newest, err := repo.NewestBySource(source)
+	require.NoError(t, err)
+	require.NotNil(t, newest)
+	assert.Equal(t, "newer", newest.ID)
+
+	pending, err := repo.Pending()
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	assert.Equal(t, "older", pending[0].ID)
+	assert.Equal(t, "newer", pending[1].ID)
+}
+
 func TestNewestBySourceUnknownSource(t *testing.T) {
 	repo := newTestRepo(t)
 

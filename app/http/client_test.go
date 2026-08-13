@@ -863,6 +863,55 @@ func TestHandleCreateDownload_DuplicateUnresolvableHash(t *testing.T) {
 	assert.Equal(t, 0, pending)
 }
 
+// a base32 magnet yields a hash torrents/info never reports, so answering with it would tell the
+// caller the download failed and hand back no subject — the same guard the download client applies
+const base32Magnet = "magnet:?xt=urn:btih:MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U&dn=Some.Name"
+
+func TestHandleCreateDownload_DuplicateBase32MagnetIsNotAHash(t *testing.T) {
+	store := newTestDownloadStore(t)
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+base32Magnet+`","notify":true}`)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, map[string]any{
+		"error": "torrent already present and its hash could not be resolved from the source",
+	}, decodeBody(t, w))
+	assert.Equal(t, 0, lookup.lookupCalls)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+func TestHandleCreateDownload_DuplicateBase32MagnetFallsBackToStore(t *testing.T) {
+	store := newTestDownloadStore(t)
+
+	require.NoError(t, store.Create(&downloads.Download{
+		ID:        "0011223344556677",
+		Source:    base32Magnet,
+		Location:  "/downloads/default",
+		Hash:      completedHash,
+		CreatedAt: time.Now(),
+	}))
+
+	lookup := &mockTorrentLookup{states: map[string]types.TorrentState{completedHash: completedTorrent()}}
+	c := duplicateClient(store, lookup)
+
+	w := postDownload(t, c, `{"source":"`+base32Magnet+`"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, map[string]any{
+		"status":    "ok",
+		"duplicate": true,
+		"hash":      completedHash,
+		"state":     "stalledUP",
+		"completed": true,
+	}, decodeBody(t, w))
+}
+
 // the 415 "torrent file not valid" branch shares ErrTorrentAddFailed with the 409 one; only a
 // duplicate may answer 200, so an over-matched sentinel would report a broken URL as present
 func TestHandleCreateDownload_NonDuplicateAddFailureStays500(t *testing.T) {
