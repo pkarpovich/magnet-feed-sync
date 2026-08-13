@@ -149,6 +149,28 @@ func TestPendingExcludesPublishedAndOrdersOldestFirst(t *testing.T) {
 	assert.Equal(t, []string{"first", "second", "third"}, ids)
 }
 
+func TestPendingTiesOnTheIdenticalTimestamp(t *testing.T) {
+	repo := newTestRepo(t)
+
+	// the rowid tiebreak is what keeps the order total when two rows share a timestamp
+	created := time.Now().Truncate(time.Second)
+	for _, id := range []string{"first", "second", "third"} {
+		d := testDownload(id)
+		d.CreatedAt = created
+		require.NoError(t, repo.Create(d))
+	}
+
+	pending, err := repo.Pending()
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(pending))
+	for _, d := range pending {
+		ids = append(ids, d.ID)
+	}
+
+	assert.Equal(t, []string{"first", "second", "third"}, ids)
+}
+
 func TestMarkPublishedWritesTheWholeOutcome(t *testing.T) {
 	repo := newTestRepo(t)
 	require.NoError(t, repo.Create(testDownload("abcdef0123456789")))

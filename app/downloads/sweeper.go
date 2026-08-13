@@ -11,8 +11,6 @@ import (
 	"magnet-feed-sync/app/types"
 )
 
-const subjectPrefix = "tuclaw.downloads.completed."
-
 type store interface {
 	Pending() ([]*Download, error)
 	MarkPublished(id string, o Outcome) error
@@ -54,7 +52,8 @@ func (s *Sweeper) RunCycle(ctx context.Context) error {
 		return fmt.Errorf("load pending downloads: %w", err)
 	}
 
-	if len(pending) == 0 {
+	// a shutdown is not a cycle failure: the lookup would report the cancelled context as one
+	if len(pending) == 0 || ctx.Err() != nil {
 		return nil
 	}
 
@@ -107,7 +106,7 @@ func (s *Sweeper) report(ctx context.Context, d *Download, state types.TorrentSt
 	}
 
 	msg := notify.Message{
-		Subject: subjectPrefix + d.ID,
+		Subject: Subject(d.ID),
 		MsgID:   d.ID + ":" + outcome.Status,
 		Payload: body,
 	}

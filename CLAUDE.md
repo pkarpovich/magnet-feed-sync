@@ -51,7 +51,15 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
 - **config/**: Environment-based configuration via cleanenv
 - **database/**: SQLite client with retry mechanism for reliability
 - **download-client/**: qBittorrent client (`qbittorrent/`) built on `github.com/autobrr/go-qbittorrent`.
-  Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client
+  Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client.
+  `CreateDownloadTask` returns the **hash**, not just an error: `added_torrent_ids[0]` when qBittorrent
+  supplies it, otherwise `utils.ExtractBtihHash` for a `magnet:` source, otherwise an explicit failure —
+  a row whose torrent cannot be identified later must never be created, so an unidentifiable add is
+  refused (500) rather than silently accepted. `TorrentStates(ctx, hashes)` is the paired lookup the
+  sweep and the duplicate path share; a hash qBittorrent does not know is **absent from the map**, never
+  a zero entry, because absence is what the sweep reads as "deleted by hand". The subject both halves of
+  the promise use is built once by `downloads.Subject(id)` — the HTTP response hands back exactly what
+  the sweep will publish on
 - **events/**: Telegram event handlers for bot interactions
 - **http/**: HTTP server serving web UI, REST API, and health checks. Two download entry points with a
   deliberate split: `POST /api/files` is tracked (provider parses the tracker page, a row is persisted,
@@ -288,7 +296,11 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   (`completed` / `failed`). There is deliberately no `tuclaw.downloads.failed.*`: the agent arms a
   one-shot event task on the single subject it was given, so a failure published anywhere else would
   never fire it, which is the "event that never arrives" this feature exists to prevent. Message ids for
-  JetStream dedup are `<download_id>:<status>` and `<file_id>:<sha256 of the new magnet>`
+  JetStream dedup are `<download_id>:<status>` and `<file_id>:<sha256 of the new magnet>`. On a tracked
+  file the flag lives on the `files` row and is *replaced* by every create — `CreateFromURL` assigns the
+  request's value unconditionally and `OnMessage` passes `false` — so a flagless re-`POST /api/files`, or
+  a Telegram re-post of the same URL, disarms it; there is no endpoint that toggles it. Only the
+  carry-over in `processFileMetadata` protects it during a sweep
 - The completion criterion lives in **one** function, `downloads.Classify`, called by both the sweep and
   the HTTP duplicate path — a second copy is how one call site quietly ends up with `!= 0`. Failure rules
   run first (`error` / `missingFiles`, or the hash absent from a lookup that *succeeded*), so a row that

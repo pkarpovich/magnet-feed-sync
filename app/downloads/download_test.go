@@ -63,10 +63,25 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-func TestClassifyRejectsCompletionOnZero(t *testing.T) {
-	c := Classify(types.TorrentState{State: "stalledUP", Progress: 1, CompletionOn: 0}, true)
+func TestClassifyRejectsUnusableCompletionOn(t *testing.T) {
+	// -1 is what an unfinished torrent reports, so the criterion is `> 0` and never `!= 0`
+	for _, completionOn := range []int64{0, -1} {
+		c := Classify(types.TorrentState{State: "stalledUP", Progress: 1, CompletionOn: completionOn}, true)
 
-	assert.Equal(t, Classification{}, c)
+		assert.Equal(t, Classification{}, c, "completion_on %d must not complete", completionOn)
+	}
+}
+
+func TestClassifyRejectsPartialProgress(t *testing.T) {
+	for _, progress := range []float64{0, 0.5, 0.999} {
+		c := Classify(types.TorrentState{State: "stalledUP", Progress: progress, CompletionOn: 1786626099}, true)
+
+		assert.Equal(t, Classification{}, c, "progress %v must not complete", progress)
+	}
+}
+
+func TestSubjectIsTheOneTheResponseHandsBack(t *testing.T) {
+	assert.Equal(t, "tuclaw.downloads.completed.a1b2c3d4e5f60718", Subject("a1b2c3d4e5f60718"))
 }
 
 func TestClassifyIgnoresStateWhenHashIsMissing(t *testing.T) {

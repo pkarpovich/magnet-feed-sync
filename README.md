@@ -121,7 +121,8 @@ With a Jackett `/dl/` `.torrent` URL:
   whose `last_status` is non-empty).
 - `downloads` - `pending`, the number of notified downloads still waiting for their terminal event. A
   pending download is normal operation and never changes `status`; the count dropping back to zero is how
-  you confirm the sweep is publishing.
+  you confirm the sweep is publishing. The whole object is omitted when the count cannot be read (the
+  error is logged) — its absence means unknown, not zero.
 
 Consumers should assert on `status`, not on the HTTP body text.
 
@@ -258,6 +259,7 @@ the worst failure this feature has. An event task fires once and must be re-arme
 | no `notify` (unchanged) | `201 {"status":"ok"}`, no row, no event |
 | `notify: true` | `201 {"status":"ok","download_id":"<16 hex>","subject":"tuclaw.downloads.completed.<16 hex>"}` |
 | qBittorrent already has the torrent | `200 {"status":"ok","duplicate":true,"hash":"…","state":"<qbittorrent state>","completed":<bool>}` |
+| duplicate whose hash resolves but qBittorrent no longer lists it, or whose state lookup failed | `200 {"status":"ok","duplicate":true,"hash":"…","state":"unknown","completed":false}` |
 | duplicate whose hash cannot be resolved | `409 {"error":"torrent already present and its hash could not be resolved from the source"}` |
 | `notify: true` with `NATS_URL` unset | `503 {"error":"notifications are not configured"}` |
 | `notify: true` in dry mode | `503 {"error":"dry mode: no download is created, so no event can be published"}` |
@@ -271,6 +273,9 @@ the same task. Only an unseen `.torrent` URL for a torrent qBittorrent already h
 and that is the 409. With `notify: true`, a duplicate that is still downloading also gets a `download_id`
 and a `subject`; one that is **already finished** does not, because the response just said so inline and
 waking the consumer again for it would be noise; one in `error`/`missingFiles` gets neither and no row.
+A duplicate whose state cannot be established — the hash is gone from qBittorrent's list, or the lookup
+itself failed — answers `state: "unknown"` and is treated the same way: no row, no `download_id`, no
+subject, since nothing is left that could publish there. The body already carries what is known inline.
 
 Completion payload, published once per row:
 
@@ -330,6 +335,10 @@ sweep finds the topic's magnet has changed and re-queues the download:
 - `notify: true` with `NATS_URL` unset is the same `503 {"error":"notifications are not configured"}`.
   Dry mode is **not** a refusal here, unlike `/api/downloads`: the tracked row outlives the dry run and
   the flag becomes live at the next real sweep.
+- There is no endpoint that flips `notify` on an existing file. A re-`POST /api/files` of the same URL is
+  a create and takes the request's flag verbatim, so re-posting without it **clears** the flag — as does
+  re-sending the same tracker URL to the bot in Telegram, which always creates with `notify: false`. The
+  cron sweep itself preserves the flag on every tick.
 
 A publish failure never aborts the sweep, the re-download, or the Telegram message.
 

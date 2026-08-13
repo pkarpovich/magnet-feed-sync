@@ -93,9 +93,14 @@ func (l *fakeLookup) TorrentStates(_ context.Context, hashes []string) (map[stri
 type recorder struct {
 	messages []notify.Message
 	err      error
+	failFor  map[string]error
 }
 
 func (r *recorder) Publish(_ context.Context, m notify.Message) error {
+	if err, fails := r.failFor[m.MsgID]; fails {
+		return err
+	}
+
 	if r.err != nil {
 		return r.err
 	}
@@ -201,6 +206,60 @@ func TestSweeperAsksForEveryPendingHashOnce(t *testing.T) {
 
 	require.Len(t, lookup.calls, 1)
 	assert.Equal(t, []string{first.Hash, second.Hash}, lookup.calls[0])
+}
+
+func TestSweeperReportsEveryTerminalRowInOneCycle(t *testing.T) {
+	first, second, third := pendingRow("1111111111111111"), pendingRow("2222222222222222"), pendingRow("3333333333333333")
+	second.Hash = "9ecd4676fd0f0474151a4b74a5958f42639cebdf"
+	third.Hash = "5e7c3b1a9d2f4068a1c3e5079b2d4f6081a3c5e7"
+	store := newFakeStore(first, second, third)
+	lookup := &fakeLookup{states: map[string]types.TorrentState{
+		first.Hash:  completedState("stalledUP"),
+		second.Hash: unfinishedState("downloading"),
+		// third is absent: deleted by hand, which is terminal too
+	}}
+	rec := &recorder{}
+
+	require.NoError(t, newTestSweeper(store, lookup, rec).RunCycle(context.Background()))
+
+	require.Len(t, rec.messages, 2)
+	assert.Equal(t, "tuclaw.downloads.completed."+first.ID, rec.messages[0].Subject)
+	assert.Equal(t, "tuclaw.downloads.completed."+third.ID, rec.messages[1].Subject)
+	assert.Equal(t, "completed", store.marked[first.ID].Status)
+	assert.Equal(t, "failed", store.marked[third.ID].Status)
+	assert.NotContains(t, store.marked, second.ID)
+	assert.Nil(t, second.PublishedAt)
+}
+
+func TestSweeperPublishFailureDoesNotAbortTheCycle(t *testing.T) {
+	first, second := pendingRow("1111111111111111"), pendingRow("2222222222222222")
+	second.Hash = "9ecd4676fd0f0474151a4b74a5958f42639cebdf"
+	store := newFakeStore(first, second)
+	lookup := &fakeLookup{states: map[string]types.TorrentState{
+		first.Hash:  completedState("stalledUP"),
+		second.Hash: completedState("stalledUP"),
+	}}
+	rec := &recorder{failFor: map[string]error{first.ID + ":completed": errors.New("nats is down")}}
+
+	require.NoError(t, newTestSweeper(store, lookup, rec).RunCycle(context.Background()))
+
+	require.Len(t, rec.messages, 1)
+	assert.Equal(t, "tuclaw.downloads.completed."+second.ID, rec.messages[0].Subject)
+	assert.Nil(t, first.PublishedAt, "the row whose publish failed must be retried next tick")
+	assert.NotNil(t, second.PublishedAt)
+}
+
+func TestSweeperSkipsTorrentLookupOnCancelledContext(t *testing.T) {
+	row := pendingRow("a1b2c3d4e5f60718")
+	store := newFakeStore(row)
+	lookup := &fakeLookup{err: errors.New("context canceled")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// a shutdown is not a failed cycle, so the lookup is not even attempted
+	require.NoError(t, newTestSweeper(store, lookup, &recorder{}).RunCycle(ctx))
+	assert.Empty(t, lookup.calls)
 }
 
 func TestSweeperCompletedPayload(t *testing.T) {

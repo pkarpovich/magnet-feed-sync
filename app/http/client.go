@@ -313,8 +313,6 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const downloadSubjectPrefix = "tuclaw.downloads.completed."
-
 const (
 	notifyUnavailable   = "notifications are not configured"
 	notifyDryMode       = "dry mode: no download is created, so no event can be published"
@@ -401,7 +399,7 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp.DownloadID = id
-		resp.Subject = downloadSubjectPrefix + id
+		resp.Subject = downloads.Subject(id)
 	}
 
 	c.encodeJSON(ctx, w, http.StatusCreated, resp)
@@ -448,7 +446,7 @@ func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req
 
 		if !class.Completed() {
 			resp.DownloadID = id
-			resp.Subject = downloadSubjectPrefix + id
+			resp.Subject = downloads.Subject(id)
 		}
 	}
 
@@ -540,7 +538,6 @@ func (c *Client) recordDownload(d *downloads.Download) (string, error) {
 	}
 
 	d.ID = id
-	d.CreatedAt = time.Now()
 	if err := c.downloadStore.Create(d); err != nil {
 		return "", err
 	}

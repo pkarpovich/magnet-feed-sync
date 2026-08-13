@@ -13,6 +13,12 @@ const (
 
 const reasonMissing = "torrent no longer present in qbittorrent"
 
+const subjectPrefix = "tuclaw.downloads.completed."
+
+func Subject(id string) string {
+	return subjectPrefix + id
+}
+
 var knownTorrentStates = []string{
 	"error", "missingFiles", "uploading", "pausedUP", "stoppedUP", "queuedUP", "stalledUP",
 	"checkingUP", "forcedUP", "allocating", "downloading", "metaDL", "pausedDL", "stoppedDL",
