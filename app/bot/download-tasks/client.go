@@ -50,7 +50,7 @@ type FileStore interface {
 }
 
 type DownloadClient interface {
-	CreateDownloadTask(url, destination string) error
+	CreateDownloadTask(url, destination string) (string, error)
 }
 
 type Client struct {
@@ -134,7 +134,9 @@ func (c *Client) DownloadNow(ctx context.Context, source, location string) error
 		return nil
 	}
 
-	return c.dClient.CreateDownloadTask(source, location)
+	_, err := c.dClient.CreateDownloadTask(source, location)
+
+	return err
 }
 
 func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {
@@ -163,7 +165,7 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 		return metadata, nil
 	}
 
-	err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
+	_, err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
 		c.rollbackCreate(ctx, metadata.ID, existing, hadActiveRow)
 		return nil, err
@@ -287,7 +289,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		return
 	}
 
-	if err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
+	if _, err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
 		slog.ErrorContext(ctx, "error creating download task", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
 
 		c.mu.Lock()

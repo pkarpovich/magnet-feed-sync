@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -116,10 +117,11 @@ func (m *mockFileStore) SetLastRun(_ time.Time, ok bool) error {
 
 type mockDownloadClient struct {
 	createDownloadTaskFunc func(url, destination string) error
+	hash                   string
 }
 
-func (m *mockDownloadClient) CreateDownloadTask(url, destination string) error {
-	return m.createDownloadTaskFunc(url, destination)
+func (m *mockDownloadClient) CreateDownloadTask(url, destination string) (string, error) {
+	return m.hash, m.createDownloadTaskFunc(url, destination)
 }
 
 func (m *mockDownloadClient) SetLocation(taskID, location string) error {
@@ -203,6 +205,26 @@ func TestDownloadNow_PropagatesError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "qbittorrent unavailable")
+}
+
+// pins the intermediate state: a duplicate add is still an ordinary error here, which is what
+// makes POST /api/downloads answer 500 for it until task 6 resolves the duplicate instead
+func TestDownloadNow_PropagatesAlreadyExists(t *testing.T) {
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+	})
+
+	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, types.ErrTorrentAlreadyExists))
 }
 
 func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) {

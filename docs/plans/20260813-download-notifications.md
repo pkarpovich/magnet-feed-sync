@@ -714,32 +714,35 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Modify: `app/bot/download-tasks/client_test.go` (its `mockDownloadClient` must match the new
   signature or the package stops compiling)
 
-- [ ] change `CreateDownloadTask(url, destination string) error` to
+- [x] change `CreateDownloadTask(url, destination string) error` to
       `CreateDownloadTask(url, destination string) (string, error)`, returning
       `TorrentAddResponse.AddedTorrentIds[0]`; when that slice comes back empty, fall back to
       `utils.ExtractBtihHash` for a `magnet:` source and otherwise return an explicit error - a row
       whose torrent we cannot identify later must never be created
-- [ ] add `types.ErrTorrentAlreadyExists` beside `ErrTorrentNotFound`, and return it **only** when
+- [x] add `types.ErrTorrentAlreadyExists` beside `ErrTorrentNotFound`, and return it **only** when
       `errors.Is(err, qbt.ErrTorrentAddFailed)` and the message contains `conflicts detected`. Every
       other `ErrTorrentAddFailed` - notably the 415 "torrent file not valid" case that shares the
       sentinel, see Verified Facts - is returned as an ordinary failure
-- [ ] add `TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error)`
+- [x] add `TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error)`
       using `qbt.GetTorrentsCtx` with `TorrentFilterOptions{Hashes: hashes}`, keyed by hash. A hash
       qBittorrent does not know must be **absent from the map** - never a zero-valued entry, because
       absence is what task 7 reads as "deleted by hand"
-- [ ] update the `DownloadClient` interface in `app/bot/download-tasks/client.go` and its call sites
+- [x] update the `DownloadClient` interface in `app/bot/download-tasks/client.go` and its call sites
       for the new signature. In this task the callers assign the hash to `_` and behaviour is
       unchanged. Do not pre-implement task 6: after this task a duplicate add must **still** answer
       500, which is asserted by a test here that task 6 then flips - that assertion, not a diff
       against an unnamed baseline, is what pins the intermediate state, and a reviewer must not flag
       the still-500 duplicate as a defect
-- [ ] write tests against an `httptest.Server` serving the bodies recorded in Verified Facts:
+      (`TestDownloadNow_PropagatesAlreadyExists` in `app/bot/download-tasks/client_test.go` pins it:
+      a duplicate stays an error out of `DownloadNow`, and the handler turns every such error into
+      500)
+- [x] write tests against an `httptest.Server` serving the bodies recorded in Verified Facts:
       JSON add response -> hash returned; JSON add response with an empty `added_torrent_ids` +
       magnet -> btih fallback; same + `.torrent` URL -> explicit error; 409 `Conflict` ->
       `ErrTorrentAlreadyExists`; **415 -> not `ErrTorrentAlreadyExists`**; `torrents/info` completed
       and unfinished entries -> all seven `TorrentState` fields populated; a requested hash missing
       from the response -> missing from the map
-- [ ] run `go test ./... -race` - must pass before task 5
+- [x] run `go test ./... -race` - must pass before task 5
 
 ### Task 5: `notify` flag on `POST /api/downloads`
 

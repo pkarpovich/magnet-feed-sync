@@ -1,13 +1,20 @@
 package qbittorrent
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	qbt "github.com/autobrr/go-qbittorrent"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/types"
 	"magnet-feed-sync/app/utils"
 )
+
+// ErrTorrentAddFailed is shared by the 409 and the 415 branch of AddTorrentFromUrl, so only the
+// message tail tells a duplicate from a torrent file qBittorrent refused to parse
+const duplicateAddMarker = "conflicts detected"
 
 type Client struct {
 	qbt                *qbt.Client
@@ -25,12 +32,49 @@ func NewClient(config config.QBittorrentConfig) *Client {
 	}
 }
 
-func (c *Client) CreateDownloadTask(url, destination string) error {
-	if _, err := c.qbt.AddTorrentFromUrl(url, map[string]string{"savepath": destination}); err != nil {
-		return fmt.Errorf("add torrent: %w", err)
+func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
+	res, err := c.qbt.AddTorrentFromUrl(url, map[string]string{"savepath": destination})
+	if err != nil {
+		if errors.Is(err, qbt.ErrTorrentAddFailed) && strings.Contains(err.Error(), duplicateAddMarker) {
+			return "", fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)
+		}
+
+		return "", fmt.Errorf("add torrent: %w", err)
 	}
 
-	return nil
+	if res != nil && len(res.AddedTorrentIds) > 0 {
+		return res.AddedTorrentIds[0], nil
+	}
+
+	if strings.HasPrefix(strings.ToLower(url), "magnet:") {
+		if hash := utils.ExtractBtihHash(url); hash != "" {
+			return hash, nil
+		}
+	}
+
+	return "", fmt.Errorf("add torrent: response carries no torrent id for %s", url)
+}
+
+func (c *Client) TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) {
+	torrents, err := c.qbt.GetTorrentsCtx(ctx, qbt.TorrentFilterOptions{Hashes: hashes})
+	if err != nil {
+		return nil, fmt.Errorf("get torrents: %w", err)
+	}
+
+	states := make(map[string]types.TorrentState, len(torrents))
+	for _, torrent := range torrents {
+		states[torrent.Hash] = types.TorrentState{
+			Hash:         torrent.Hash,
+			Name:         torrent.Name,
+			State:        string(torrent.State),
+			ContentPath:  torrent.ContentPath,
+			Progress:     torrent.Progress,
+			CompletionOn: torrent.CompletionOn,
+			Size:         torrent.Size,
+		}
+	}
+
+	return states, nil
 }
 
 func (c *Client) GetHashByMagnet(magnet string) (string, error) {
