@@ -25,6 +25,7 @@ type fakeQbit struct {
 
 	addedTorrentIds []string
 	addPlainText    bool
+	addFailureCount int
 
 	addSavePath string
 	addURL      string
@@ -84,7 +85,7 @@ func newFakeQbit(t *testing.T) *fakeQbit {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"added_torrent_ids": f.addedTorrentIds,
 			"success_count":     len(f.addedTorrentIds),
-			"failure_count":     0,
+			"failure_count":     f.addFailureCount,
 			"pending_count":     0,
 		})
 	})
@@ -131,6 +132,7 @@ func TestCreateDownloadTask(t *testing.T) {
 		status        int
 		addedIds      []string
 		plainText     bool
+		failureCount  int
 		wantHash      string
 		wantErr       bool
 		wantDuplicate bool
@@ -182,6 +184,16 @@ func TestCreateDownloadTask(t *testing.T) {
 			wantHash:  "",
 		},
 		{
+			// 200 with a failure count is a refusal: the btih fallback would otherwise report a
+			// hash for a torrent qbittorrent never took, and the sweep would call it deleted
+			name:         "a refused source is an error even on 200",
+			source:       "magnet:?xt=urn:btih:2566E2B012EA1EF9087465BC97A7AC4449F4F0DE&dn=Some.Name",
+			status:       http.StatusOK,
+			addedIds:     []string{},
+			failureCount: 1,
+			wantErr:      true,
+		},
+		{
 			name:          "conflict reports an already present torrent",
 			source:        "magnet:?xt=urn:btih:abc",
 			status:        http.StatusConflict,
@@ -201,6 +213,7 @@ func TestCreateDownloadTask(t *testing.T) {
 			fake := newFakeQbit(t)
 			fake.addStatus = tt.status
 			fake.addPlainText = tt.plainText
+			fake.addFailureCount = tt.failureCount
 			if tt.addedIds != nil {
 				fake.addedTorrentIds = tt.addedIds
 			}
@@ -219,6 +232,45 @@ func TestCreateDownloadTask(t *testing.T) {
 			assert.Equal(t, tt.source, fake.addURL)
 		})
 	}
+}
+
+// the client library embeds the source in every add error, and the agent posts jackett `/dl/`
+// links whose query carries JACKETT_API_KEY: that error is logged, so it must not carry the key
+func TestCreateDownloadTaskErrorHidesTheAPIKey(t *testing.T) {
+	const source = "https://jackett.example/dl/tpb/torrent.torrent?jackett_apikey=s3cret-key&path=abc"
+
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "unsupported media type", status: http.StatusUnsupportedMediaType},
+		{name: "unexpected status", status: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeQbit(t)
+			fake.addStatus = tt.status
+
+			_, err := fake.client().CreateDownloadTask(source, "/downloads/movies")
+
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "s3cret-key")
+			assert.Contains(t, err.Error(), "jackett_apikey=redacted")
+		})
+	}
+}
+
+func TestCreateDownloadTaskConflictSurvivesRedaction(t *testing.T) {
+	fake := newFakeQbit(t)
+	fake.addStatus = http.StatusConflict
+
+	_, err := fake.client().CreateDownloadTask(
+		"https://jackett.example/dl/tpb/torrent.torrent?jackett_apikey=s3cret-key", "/downloads/movies")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, types.ErrTorrentAlreadyExists))
+	assert.NotContains(t, err.Error(), "s3cret-key")
 }
 
 const completedTorrentBody = `[{"hash":"474d1403945c0768506233481557516e7af8d136","name":"sample.bin","state":"stalledUP",

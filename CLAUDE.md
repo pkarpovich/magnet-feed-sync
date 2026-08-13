@@ -60,7 +60,13 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   the WebAPI version that added it (it answers `text/plain` "Ok."), so failing there would reject every
   plain `.torrent` add. The check belongs to whoever needs the hash — `POST /api/downloads` with
   `notify: true` refuses the empty hash with 503 rather than writing a row the sweep can never match,
-  while the fire-and-forget path never needed it. `TorrentStates(ctx, hashes)` is the paired lookup the
+  while the fire-and-forget path never needed it. A 200 carrying `failure_count > 0` with no added id
+  is the one exception: qBittorrent refused the source, so it is an **error** — the magnet fallback
+  would otherwise hand back a hash for a torrent that was never added, and the sweep would publish it
+  as deleted by hand ten minutes later. Every add error the library builds embeds the source verbatim
+  and a jackett `.torrent` link carries `JACKETT_API_KEY` in its query, so the message is redacted with
+  `utils.RedactURL` **inside the client** (the library error stays underneath, so `errors.Is` still
+  sees it) rather than at each caller that logs it. `TorrentStates(ctx, hashes)` is the paired lookup the
   sweep and the duplicate path share; a hash qBittorrent does not know is **absent from the map**, never
   a zero entry, because absence is what the sweep reads as "deleted by hand". The subject both halves of
   the promise use is built once by `downloads.Subject(id)` — the HTTP response hands back exactly what
@@ -141,7 +147,9 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
 - **types/**: Shared type definitions (`Location`, `TorrentState`), so `app/downloads` and `app/http` can
   name what a torrent lookup returns without importing the download client
 - **observability/**: Structured logging (slog) with Loki backend and OpenTelemetry tracing setup
-- **utils/**: Shared utility functions (magnet link parsing, date parsing)
+- **utils/**: Shared utility functions (magnet link parsing, date parsing, `RedactURL` — masks the
+  api key / userinfo a source or tracker URL carries before it reaches a log, and returns a URL that
+  holds no credential verbatim so a clean one is not re-encoded for the reader)
 
 ### Migration runner (`/cmd/migrate`)
 Flagless one-shot binary: opens the database with `database.NewClient("tasks.db")` — the same `.db/<file>`

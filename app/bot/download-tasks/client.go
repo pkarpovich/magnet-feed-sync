@@ -240,7 +240,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "error parsing metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+		slog.ErrorContext(ctx, "error parsing metadata", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 		return
 	}
 
@@ -260,7 +260,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		c.mu.Unlock()
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		slog.ErrorContext(ctx, "error re-reading metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+		slog.ErrorContext(ctx, "error re-reading metadata", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 		return
 	}
 
@@ -281,7 +281,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		slog.InfoContext(ctx, "magnet unchanged, updating metadata silently", "id", fileMetadata.ID)
 
 		if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-			slog.ErrorContext(ctx, "error updating metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+			slog.ErrorContext(ctx, "error updating metadata", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 		}
 
 		c.mu.Unlock()
@@ -290,7 +290,7 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	slog.InfoContext(ctx, "magnet changed, re-downloading", "id", fileMetadata.ID)
 
 	if err := c.store.CreateOrReplace(updatedMetadata); err != nil {
-		slog.ErrorContext(ctx, "error updating metadata", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+		slog.ErrorContext(ctx, "error updating metadata", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 		c.mu.Unlock()
 		return
 	}
@@ -304,13 +304,13 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	}
 
 	if _, err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
-		slog.ErrorContext(ctx, "error creating download task", "error", err, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+		slog.ErrorContext(ctx, "error creating download task", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 
 		c.mu.Lock()
 		updatedMetadata.Magnet = current.Magnet
 		updatedMetadata.TorrentUpdatedAt = current.TorrentUpdatedAt
 		if storeErr := c.store.CreateOrReplace(updatedMetadata); storeErr != nil {
-			slog.ErrorContext(ctx, "error reverting metadata after download failure", "error", storeErr, "id", fileMetadata.ID, "url", fileMetadata.OriginalUrl)
+			slog.ErrorContext(ctx, "error reverting metadata after download failure", "error", storeErr, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 		}
 		c.mu.Unlock()
 		return

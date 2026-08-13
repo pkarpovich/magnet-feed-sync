@@ -39,7 +39,14 @@ func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
 			return "", fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)
 		}
 
-		return "", fmt.Errorf("add torrent: %w", err)
+		return "", fmt.Errorf("add torrent: %w", withoutSource(err, url))
+	}
+
+	// qbittorrent answers 200 with a failure count for a source it refused to take; without this
+	// the magnet fallback below would hand back a hash for a torrent that was never added, and the
+	// sweep would publish that as a torrent deleted by hand ten minutes later
+	if res != nil && res.FailureCount > 0 && len(res.AddedTorrentIds) == 0 {
+		return "", errors.New("add torrent: qbittorrent refused the source")
 	}
 
 	if res != nil && len(res.AddedTorrentIds) > 0 {
@@ -60,6 +67,27 @@ func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
 	// `.torrent` add outright. Callers that promise an event check for the empty hash instead
 	return "", nil
 }
+
+// every add error the client library builds embeds the source verbatim, and a jackett `.torrent`
+// link carries its api key in the query string, so the message is redacted here rather than at
+// each caller that logs it. The library error stays underneath, so errors.Is still sees it
+func withoutSource(err error, source string) error {
+	redacted := utils.RedactURL(source)
+	if source == "" || redacted == source {
+		return err
+	}
+
+	return &sanitisedError{err: err, msg: strings.ReplaceAll(err.Error(), source, redacted)}
+}
+
+type sanitisedError struct {
+	err error
+	msg string
+}
+
+func (e *sanitisedError) Error() string { return e.msg }
+
+func (e *sanitisedError) Unwrap() error { return e.err }
 
 func isInfoHash(s string) bool {
 	if len(s) != 40 {
