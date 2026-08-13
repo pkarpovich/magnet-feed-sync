@@ -654,29 +654,29 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Create: `app/download-store/repository.go`
 - Create: `app/download-store/repository_test.go`
 
-- [ ] define `downloads.Download` with the fields of the table (id, source, location, hash, name,
+- [x] define `downloads.Download` with the fields of the table (id, source, location, hash, name,
       content path, size, status, reason, created/completed/published timestamps), plus
       `Classification` as defined in Technical Details and `Outcome` as spelled out in the query
       surface below
-- [ ] define the single classifier `Classify(s types.TorrentState, found bool) Classification` here,
+- [x] define the single classifier `Classify(s types.TorrentState, found bool) Classification` here,
       so the sweep and the HTTP duplicate path share one implementation of the rule; an empty
       `Status` means nothing terminal yet
-- [ ] `Classify` never matches a state against a list of known ones. It applies the deny list from
+- [x] `Classify` never matches a state against a list of known ones. It applies the deny list from
       the criterion, so a state qBittorrent introduces later, carrying `progress >= 1` and a real
       `completion_on`, still classifies as `completed` - that is the entire point of a deny list,
       and an unrecognised-state branch would reintroduce exactly the silent stall it avoids
-- [ ] test `Classify` with a table that enumerates **all 21 states** from the Verified Facts
+- [x] test `Classify` with a table that enumerates **all 21 states** from the Verified Facts
       vocabulary, declared as a package-level `knownTorrentStates []string` in `app/downloads` so
       the list is code rather than prose. Assert `len(knownTorrentStates) == 21`, and cover each
       state twice - once with `progress 1 / completion_on > 0`, once with `progress 0 /
       completion_on -1` - against the outcome the criterion table prescribes, plus `found == false`
       for any state. Add one case for a state string absent from the vocabulary, asserting it
       behaves like the last table row rather than being swallowed
-- [ ] implement `Repository` following `app/watch-store/repository.go`: `NewRepository(db)` verifies
+- [x] implement `Repository` following `app/watch-store/repository.go`: `NewRepository(db)` verifies
       the table exists **and then** each required column, returning `ErrSchemaNotInitialised`;
       `PRAGMA table_info` on a missing table returns no rows and no error, so the table check must
       come first
-- [ ] implement exactly this query surface, which is what tasks 5-10 call:
+- [x] implement exactly this query surface, which is what tasks 5-10 call:
       `Create(d *downloads.Download) error`;
       `Pending() ([]*downloads.Download, error)` - `published_at IS NULL`, oldest first;
       `MarkPublished(id string, o downloads.Outcome) error` with
@@ -689,12 +689,12 @@ Each consumer declares its own narrow interface over it rather than taking `*not
       `NewestBySource(source string) (*downloads.Download, error)` - newest `created_at`, any
       status, used only to resolve a duplicate add;
       `CountPending() (int, error)`
-- [ ] make `MarkPublished` carry `WHERE id = ? AND published_at IS NULL`, so a repeat after a
+- [x] make `MarkPublished` carry `WHERE id = ? AND published_at IS NULL`, so a repeat after a
       crash-retry is a no-op that reports no error - this is what makes publish-then-mark safe to
       run twice. It writes `status`, `reason`, `name`, `content_path`, `size`, `completed_at` and
       `published_at` in that single statement
-- [ ] use explicit `UPDATE`s for outcome writes - never `INSERT OR REPLACE`
-- [ ] write tests through the `newTestRepo(t)` pattern (`t.Chdir(t.TempDir())` + `migrations.Apply`):
+- [x] use explicit `UPDATE`s for outcome writes - never `INSERT OR REPLACE`
+- [x] write tests through the `newTestRepo(t)` pattern (`t.Chdir(t.TempDir())` + `migrations.Apply`):
       round-trip a row; `Pending` excludes published rows and orders oldest first; a second
       `MarkPublished` on the same id changes nothing and returns nil; `NewestBySource` picks the
       newest of three rows sharing a source **created within the same second**, which is what the
@@ -702,7 +702,7 @@ Each consumer declares its own narrow interface over it rather than taking `*not
       a database
       missing the `downloads` table and one missing a single column both return
       `ErrSchemaNotInitialised`
-- [ ] run `go test ./... -race` - must pass before task 4
+- [x] run `go test ./... -race` - must pass before task 4
 
 ### Task 4: qBittorrent client returns the hash and reports duplicates
 
