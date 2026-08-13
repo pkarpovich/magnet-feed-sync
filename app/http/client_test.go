@@ -777,15 +777,41 @@ func TestHandleCreateDownload_DuplicateNotifyTerminalFailure(t *testing.T) {
 			lookup:        &mockTorrentLookup{states: map[string]types.TorrentState{}},
 			expectedState: "unknown",
 		},
-		{
-			name:          "lookup failed",
-			lookup:        &mockTorrentLookup{err: errors.New("qbittorrent unreachable")},
-			expectedState: "unknown",
-		},
-		{
-			name:          "lookup unset",
-			expectedState: "unknown",
-		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestDownloadStore(t)
+
+			c := duplicateClient(store, tt.lookup)
+
+			w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, map[string]any{
+				"status":    "ok",
+				"duplicate": true,
+				"hash":      completedHash,
+				"state":     tt.expectedState,
+				"completed": false,
+			}, decodeBody(t, w))
+
+			row, err := store.NewestBySource(completedMagnet)
+			require.NoError(t, err)
+			assert.Nil(t, row, "a failed duplicate must not leave a row the sweep would publish")
+		})
+	}
+}
+
+// a lookup that could not be performed is not a torrent that is gone: the 409 proved it is there,
+// so the promise is kept with a row the sweep will publish rather than dropped silently
+func TestHandleCreateDownload_DuplicateNotifyUnreadableState(t *testing.T) {
+	tests := []struct {
+		name   string
+		lookup *mockTorrentLookup
+	}{
+		{name: "lookup failed", lookup: &mockTorrentLookup{err: errors.New("qbittorrent unreachable")}},
+		{name: "lookup unset"},
 	}
 
 	for _, tt := range tests {
@@ -802,17 +828,25 @@ func TestHandleCreateDownload_DuplicateNotifyTerminalFailure(t *testing.T) {
 			w := postDownload(t, c, `{"source":"`+completedMagnet+`","notify":true}`)
 
 			assert.Equal(t, http.StatusOK, w.Code)
-			assert.Equal(t, map[string]any{
-				"status":    "ok",
-				"duplicate": true,
-				"hash":      completedHash,
-				"state":     tt.expectedState,
-				"completed": false,
-			}, decodeBody(t, w))
 
-			row, err := store.NewestBySource(completedMagnet)
+			body := decodeBody(t, w)
+			id, _ := body["download_id"].(string)
+			assert.Regexp(t, `^[0-9a-f]{16}$`, id)
+			assert.Equal(t, map[string]any{
+				"status":      "ok",
+				"duplicate":   true,
+				"hash":        completedHash,
+				"state":       "unknown",
+				"completed":   false,
+				"download_id": id,
+				"subject":     "tuclaw.downloads.completed." + id,
+			}, body)
+
+			pending, err := store.Pending()
 			require.NoError(t, err)
-			assert.Nil(t, row, "a failed duplicate must not leave a row the sweep would publish")
+			require.Len(t, pending, 1)
+			assert.Equal(t, id, pending[0].ID)
+			assert.Equal(t, completedHash, pending[0].Hash)
 		})
 	}
 }

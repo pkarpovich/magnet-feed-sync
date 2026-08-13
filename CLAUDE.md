@@ -345,7 +345,12 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   failed and handed no subject; otherwise `NewestBySource`) and answers 200 with the current state inline. With `notify: true` an
   already-complete duplicate gets its row written with `published_at` already set so the sweep skips it —
   the caller was just told inline and must not be woken twice — and a `failed` one gets **no row at all**,
-  since the sweep would otherwise publish a failure on a subject the caller was never given
+  since the sweep would otherwise publish a failure on a subject the caller was never given. Only a
+  lookup that *succeeded* and did not list the hash may classify at all: an errored (or unwired) lookup
+  established nothing while the 409 proved the torrent is there, so it is left **undecided** and gets a
+  row and a subject like any unfinished duplicate — the same rule the sweep follows when it aborts the
+  cycle on a failed `TorrentStates`. Collapsing the error into "not found" would answer `200 ok` with no
+  subject and no row, leaving the caller waiting for the event this feature exists to guarantee
 - A release update publishes only when **all** hold: the sweep is the cron one (a human pressing refresh
   must not wake the agent — the same rule the breaker and the run state follow), dry mode is off, the
   magnet actually changed, `CreateDownloadTask` returned nil (so the revert path publishes nothing), and

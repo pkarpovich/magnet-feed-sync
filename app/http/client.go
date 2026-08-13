@@ -322,6 +322,8 @@ const (
 
 const stateUnknown = "unknown"
 
+var errNoTorrentLookup = errors.New("torrent lookup is not configured")
+
 type CreateDownloadRequest struct {
 	Source   string `json:"source"`
 	Location string `json:"location"`
@@ -425,8 +427,16 @@ func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req
 		return
 	}
 
-	state, found := c.torrentState(ctx, hash)
+	state, found, err := c.torrentState(ctx, hash)
+
 	class := downloads.Classify(state, found)
+	if err != nil {
+		// a lookup that errored is never expressed as "not found", the same rule the sweep
+		// follows: the 409 just proved the torrent is there, so classifying a terminal failure
+		// here would answer it inline and write no row, leaving a `notify` caller with neither a
+		// subject nor an event. Undecided instead, so the sweep publishes the real outcome
+		class = downloads.Classification{}
+	}
 
 	resp := duplicateDownloadResponse{
 		Status:    statusOk,
@@ -492,22 +502,23 @@ func (c *Client) duplicateHash(ctx context.Context, source string) string {
 	return row.Hash
 }
 
-// a lookup that failed is reported as not found, never as a state: the caller learns the
-// torrent is present either way, and no row is written for it
-func (c *Client) torrentState(ctx context.Context, hash string) (types.TorrentState, bool) {
+// the error is returned separately from the not-found flag: only a lookup that *succeeded* and
+// did not list the hash means the torrent is gone, and that difference decides whether the
+// caller is handed a terminal outcome or a subject
+func (c *Client) torrentState(ctx context.Context, hash string) (types.TorrentState, bool, error) {
 	if c.torrents == nil {
-		return types.TorrentState{}, false
+		return types.TorrentState{}, false, errNoTorrentLookup
 	}
 
 	states, err := c.torrents.TorrentStates(ctx, []string{hash})
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to look up torrent state", "hash", hash, "error", err)
-		return types.TorrentState{}, false
+		return types.TorrentState{}, false, err
 	}
 
 	state, found := states[hash]
 
-	return state, found
+	return state, found, nil
 }
 
 func (c *Client) recordDuplicate(a duplicateAdd) (string, error) {

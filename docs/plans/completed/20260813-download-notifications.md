@@ -374,6 +374,7 @@ POST /api/downloads, duplicate + hash known  200 {"status":"ok","duplicate":true
 POST /api/downloads, duplicate, hash known
   but absent from the lookup or lookup failed 200 {"status":"ok","duplicate":true,"hash":"<hash>",
                                                   "state":"unknown","completed":false}
+  (a lookup that *failed* also carries download_id + subject under notify - see the correction below)
 POST /api/downloads, duplicate + no hash     409 {"error":"torrent already present and its hash could not be resolved from the source"}
 POST /api/downloads, notify + NATS disabled  503 {"error":"notifications are not configured"}
 POST /api/downloads, notify + dry mode       503 {"error":"dry mode: no download is created, so no event can be published"}
@@ -389,13 +390,26 @@ A duplicate reported with `notify: true` is resolved by all three `Classify` out
 |---|---|---|
 | empty status - still downloading | yes, unpublished | **yes** - an event is genuinely coming |
 | `completed` | yes, with terminal outcome and `published_at` set to now | **no** |
-| `failed`, or hash absent from the lookup, or the lookup errored | **no row** | **no** |
+| `failed`, or hash absent from a lookup that succeeded | **no row** | **no** |
+| the lookup **errored**, or is not wired | yes, unpublished | **yes** - see the correction below |
 
 The rule behind all three: a `download_id` and a subject are handed back only when something will
 actually be published there, and a row is written only when the sweep still has work to do. Writing
 a row for a `failed` duplicate would make the sweep publish a failure on a subject the caller was
 never given - the same broken promise the 503 rules exist to prevent - while the 200 body already
 tells the caller the state inline.
+
+**Correction, applied during review.** The row above for an errored lookup replaces this plan's
+original rule, which lumped "lookup errored" in with "hash absent from the lookup" and gave both no
+row and no subject (see also the response block above, and task 9's checklist). That was wrong for
+the same reason the sweep aborts its cycle on a failed `TorrentStates` instead of reading an empty
+map as "everything was deleted by hand": a lookup that errored established *nothing*, while the 409
+just proved the torrent is present. Answering it as a terminal failure returned `200 ok` with no
+subject and no row, so a `notify: true` caller was told success and then waited forever - the
+"event that never arrives" this feature exists to prevent. An errored or unwired lookup is now left
+undecided: the body still reports `state: "unknown"`, and with `notify: true` the row is written and
+the subject handed back, so the sweep publishes the real outcome on its next tick. Only a lookup
+that *succeeded* and did not list the hash still classifies as `failed`.
 
 Every timestamp in every payload and response this plan introduces is RFC3339 UTC, produced by
 explicit formatting rather than by marshalling a `time.Time` as-is. `torrent_updated_at` is the
@@ -811,7 +825,8 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
       empty status -> row unpublished, body carries `download_id` and `subject`; `completed` -> row
       with its terminal outcome and `published_at` set to now, no id and no subject, so the sweep
       publishes nothing and the caller is not woken twice for what it was just told; `failed` (or
-      hash absent, or lookup error) -> **no row at all**, no id and no subject
+      hash absent from a lookup that succeeded) -> **no row at all**, no id and no subject. A lookup
+      that *errored* is undecided, not `failed` - see the correction under "Subjects and payloads"
 - [x] when the hash cannot be resolved at all, answer `409` with the reason body - never the old
       blanket 500
 - [x] write tests for every branch: `notify: false` duplicate (answered 500 both before this plan
@@ -821,7 +836,8 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
       set, **not** returned by `Pending()`, and a body carrying `"completed": true` with **no**
       `download_id` and no `subject`; `notify: true` duplicate in state `error` -> **no row** and no
       subject; `notify: true` duplicate whose hash is absent from the lookup -> the
-      `state: "unknown"` body, no row, no subject; unresolvable duplicate -> 409; a 415 add failure
+      `state: "unknown"` body, no row, no subject; `notify: true` duplicate whose lookup **errored**
+      -> the `state: "unknown"` body **with** a row and a subject; unresolvable duplicate -> 409; a 415 add failure
       -> still 500, proving the sentinel is not over-matched
 - [x] run `go test ./... -race` - must pass before task 7
 

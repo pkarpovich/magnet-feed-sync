@@ -259,7 +259,8 @@ the worst failure this feature has. An event task fires once and must be re-arme
 | no `notify` (unchanged) | `201 {"status":"ok"}`, no row, no event |
 | `notify: true` | `201 {"status":"ok","download_id":"<16 hex>","subject":"tuclaw.downloads.completed.<16 hex>"}` |
 | qBittorrent already has the torrent | `200 {"status":"ok","duplicate":true,"hash":"…","state":"<qbittorrent state>","completed":<bool>}` |
-| duplicate whose hash resolves but qBittorrent no longer lists it, or whose state lookup failed | `200 {"status":"ok","duplicate":true,"hash":"…","state":"unknown","completed":false}` |
+| duplicate whose hash resolves but qBittorrent no longer lists it | `200 {"status":"ok","duplicate":true,"hash":"…","state":"unknown","completed":false}`, no row |
+| duplicate whose state lookup failed | the same body, plus `download_id` and `subject` when `notify: true` |
 | duplicate whose hash cannot be resolved | `409 {"error":"torrent already present and its hash could not be resolved from the source"}` |
 | `notify: true` with `NATS_URL` unset | `503 {"error":"notifications are not configured"}` |
 | `notify: true` in dry mode | `503 {"error":"dry mode: no download is created, so no event can be published"}` |
@@ -280,9 +281,15 @@ covers a re-run of the same task. Only a source for a torrent qBittorrent alread
 route identifies cannot be resolved, and that is the 409. With `notify: true`, a duplicate that is still downloading also gets a `download_id`
 and a `subject`; one that is **already finished** does not, because the response just said so inline and
 waking the consumer again for it would be noise; one in `error`/`missingFiles` gets neither and no row.
-A duplicate whose state cannot be established — the hash is gone from qBittorrent's list, or the lookup
-itself failed — answers `state: "unknown"` and is treated the same way: no row, no `download_id`, no
-subject, since nothing is left that could publish there. The body already carries what is known inline.
+A duplicate answers `state: "unknown"` whenever its state cannot be established, but the two ways that
+happens are **not** the same. A lookup that *succeeded* and did not list the hash means the torrent is
+gone: that is a terminal failure, so there is no row, no `download_id` and no subject, because nothing is
+left that could publish there. A lookup that *errored* — or one that is not wired at all — established
+nothing, and the 409 just proved the torrent is present, so it is left undecided: with `notify: true` the
+row is written and the `subject` handed back, and the sweep publishes the real outcome on the next tick.
+Reporting that as "gone" is the one thing it must not do — the caller would be told `ok`, be given no
+subject, and wait forever. This is the same rule the sweep follows, where a failed `TorrentStates` aborts
+the cycle instead of reading an empty map as "every torrent was deleted by hand".
 
 Completion payload, published once per row:
 
