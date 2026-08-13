@@ -19,6 +19,10 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"magnet-feed-sync/app/database"
+	download_store "magnet-feed-sync/app/download-store"
+	"magnet-feed-sync/app/downloads"
+	"magnet-feed-sync/app/migrations"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
 	watch_store "magnet-feed-sync/app/watch-store"
@@ -34,6 +38,7 @@ type mockTaskCreator struct {
 	refreshAllCalls      int
 	returnMeta           *tracker.FileMetadata
 	returnErr            error
+	downloadHash         string
 	downloadErr          error
 	updateLocationCalls  int
 	lastUpdatedLocation  string
@@ -46,12 +51,18 @@ func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string)
 	return m.returnMeta, m.returnErr
 }
 
-func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string) error {
+func (m *mockTaskCreator) DownloadNow(_ context.Context, source, location string) (string, error) {
 	m.downloadCalls++
 	m.lastDownloadSource = source
 	m.lastDownloadLocation = location
-	return m.downloadErr
+	return m.downloadHash, m.downloadErr
 }
+
+type mockNotifier struct {
+	enabled bool
+}
+
+func (m *mockNotifier) Enabled() bool { return m.enabled }
 
 func (m *mockTaskCreator) RemoveTask(id string) error { return nil }
 
@@ -328,6 +339,219 @@ func TestHandleCreateDownload_DownloadError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Equal(t, 1, creator.downloadCalls)
 	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
+}
+
+// the row assertions go through the real repository so a handler that writes a column the
+// migration never added fails here instead of on deploy
+func newTestDownloadStore(t *testing.T) *download_store.Repository {
+	t.Helper()
+
+	t.Chdir(t.TempDir())
+
+	db, err := database.NewClient("test.db")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+	})
+
+	_, err = migrations.Apply(db.DB())
+	require.NoError(t, err)
+
+	repo, err := download_store.NewRepository(db)
+	require.NoError(t, err)
+
+	return repo
+}
+
+type failingDownloadStore struct {
+	err error
+}
+
+func (f *failingDownloadStore) Create(_ *downloads.Download) error { return f.err }
+
+func postDownload(t *testing.T, c *Client, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/downloads", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	c.handleCreateDownload(w, req)
+
+	return w
+}
+
+func decodeBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+
+	return body
+}
+
+func TestHandleCreateDownload_WithoutNotify_WritesNoRow(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadHash: "474d1403945c0768506233481557516e7af8d136"}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123"}`)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, map[string]any{"status": "ok"}, decodeBody(t, w))
+	assert.Equal(t, 1, creator.downloadCalls)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+func TestHandleCreateDownload_NotifyWithoutNotifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		notifier notifier
+	}{
+		{name: "notifier disabled", notifier: &mockNotifier{enabled: false}},
+		{name: "notifier unset", notifier: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestDownloadStore(t)
+			creator := &mockTaskCreator{}
+
+			c := NewClient(&ClientCtx{
+				Store:          &mockFileStore{},
+				TaskCreator:    creator,
+				DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+				DownloadStore:  store,
+				Notifier:       tt.notifier,
+			})
+
+			w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+			assert.Equal(t, map[string]any{"error": "notifications are not configured"}, decodeBody(t, w))
+			assert.Equal(t, 0, creator.downloadCalls, "qbittorrent must not be touched by a refused request")
+
+			pending, err := store.CountPending()
+			require.NoError(t, err)
+			assert.Equal(t, 0, pending)
+		})
+	}
+}
+
+func TestHandleCreateDownload_NotifyInDryMode(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+		DryMode:        true,
+	})
+
+	w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, map[string]any{
+		"error": "dry mode: no download is created, so no event can be published",
+	}, decodeBody(t, w))
+	assert.Equal(t, 0, creator.downloadCalls)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+func TestHandleCreateDownload_NotifyRecordsRow(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadHash: "474d1403945c0768506233481557516e7af8d136"}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	body := decodeBody(t, w)
+	id, _ := body["download_id"].(string)
+	assert.Equal(t, "ok", body["status"])
+	assert.Regexp(t, `^[0-9a-f]{16}$`, id)
+	assert.Equal(t, map[string]any{
+		"status":      "ok",
+		"download_id": id,
+		"subject":     "tuclaw.downloads.completed." + id,
+	}, body)
+
+	row, err := store.GetByID(id)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, "magnet:?xt=urn:btih:abc123", row.Source)
+	assert.Equal(t, "/downloads/default", row.Location)
+	assert.Equal(t, "474d1403945c0768506233481557516e7af8d136", row.Hash)
+	assert.Empty(t, row.Status)
+	assert.Nil(t, row.PublishedAt)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 1, pending)
+}
+
+func TestHandleCreateDownload_NotifyAddFails(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadErr: errors.New("qbittorrent unreachable")}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+// an id handed back without a row is a subject nothing ever publishes on, so the request
+// fails rather than promising an event the sweep knows nothing about
+func TestHandleCreateDownload_NotifyStoreFails(t *testing.T) {
+	creator := &mockTaskCreator{downloadHash: "474d1403945c0768506233481557516e7af8d136"}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  &failingDownloadStore{err: errors.New("db is down")},
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
 }
 
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {

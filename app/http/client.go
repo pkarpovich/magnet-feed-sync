@@ -2,7 +2,9 @@ package http
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"github.com/rs/cors"
 	"go.opentelemetry.io/otel"
 	"magnet-feed-sync/app/config"
+	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/types"
 	watch_store "magnet-feed-sync/app/watch-store"
@@ -23,11 +26,19 @@ import (
 
 type TaskCreator interface {
 	CreateFromURL(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
-	DownloadNow(ctx context.Context, source, location string) error
+	DownloadNow(ctx context.Context, source, location string) (string, error)
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
 	CheckFileForUpdates(ctx context.Context, fileId string)
 	RefreshAll(ctx context.Context)
+}
+
+type downloadStore interface {
+	Create(d *downloads.Download) error
+}
+
+type notifier interface {
+	Enabled() bool
 }
 
 type FileStore interface {
@@ -74,6 +85,9 @@ type Client struct {
 	store            FileStore
 	taskCreator      TaskCreator
 	downloadClient   DownloadClient
+	downloadStore    downloadStore
+	notifier         notifier
+	dryMode          bool
 	breaker          BreakerSnapshotter
 	runState         RunStateReader
 	watches          watchStore
@@ -90,6 +104,9 @@ type ClientCtx struct {
 	Store            FileStore
 	TaskCreator      TaskCreator
 	DownloadClient   DownloadClient
+	DownloadStore    downloadStore
+	Notifier         notifier
+	DryMode          bool
 	Breaker          BreakerSnapshotter
 	RunState         RunStateReader
 	WatchStore       watchStore
@@ -124,6 +141,9 @@ func NewClient(ctx *ClientCtx) *Client {
 		store:            ctx.Store,
 		taskCreator:      ctx.TaskCreator,
 		downloadClient:   ctx.DownloadClient,
+		downloadStore:    ctx.DownloadStore,
+		notifier:         ctx.Notifier,
+		dryMode:          ctx.DryMode,
 		breaker:          ctx.Breaker,
 		runState:         ctx.RunState,
 		watches:          ctx.WatchStore,
@@ -273,9 +293,23 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const downloadSubjectPrefix = "tuclaw.downloads.completed."
+
+const (
+	notifyUnavailable = "notifications are not configured"
+	notifyDryMode     = "dry mode: no download is created, so no event can be published"
+)
+
 type CreateDownloadRequest struct {
 	Source   string `json:"source"`
 	Location string `json:"location"`
+	Notify   bool   `json:"notify"`
+}
+
+type createDownloadResponse struct {
+	Status     string `json:"status"`
+	DownloadID string `json:"download_id,omitempty"`
+	Subject    string `json:"subject,omitempty"`
 }
 
 func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
@@ -298,17 +332,71 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		location = c.downloadClient.GetDefaultLocation()
 	}
 
-	if err := c.taskCreator.DownloadNow(ctx, req.Source, location); err != nil {
+	// refused before qbittorrent is touched: a promised event nobody can deliver is worse
+	// than a rejected request, because the agent waits for it forever
+	if req.Notify && c.refuseNotify(ctx, w) {
+		return
+	}
+
+	hash, err := c.taskCreator.DownloadNow(ctx, req.Source, location)
+	if err != nil {
 		slog.ErrorContext(ctx, "failed to create one-shot download", "error", err)
 		http.Error(w, "failed to create download", http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-		slog.ErrorContext(ctx, "failed to encode response", "error", err)
+	resp := createDownloadResponse{Status: statusOk}
+	if req.Notify {
+		id, err := c.recordDownload(&downloads.Download{Source: req.Source, Location: location, Hash: hash})
+		if err != nil {
+			slog.ErrorContext(ctx, "failed to record download", "error", err)
+			http.Error(w, "failed to record download", http.StatusInternalServerError)
+			return
+		}
+
+		resp.DownloadID = id
+		resp.Subject = downloadSubjectPrefix + id
 	}
+
+	c.encodeJSON(ctx, w, http.StatusCreated, resp)
+}
+
+func (c *Client) refuseNotify(ctx context.Context, w http.ResponseWriter) bool {
+	if c.notifier == nil || !c.notifier.Enabled() || c.downloadStore == nil {
+		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnavailable})
+		return true
+	}
+
+	if c.dryMode {
+		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyDryMode})
+		return true
+	}
+
+	return false
+}
+
+func (c *Client) recordDownload(d *downloads.Download) (string, error) {
+	id, err := c.newDownloadID()
+	if err != nil {
+		return "", err
+	}
+
+	d.ID = id
+	d.CreatedAt = time.Now()
+	if err := c.downloadStore.Create(d); err != nil {
+		return "", err
+	}
+
+	return id, nil
+}
+
+func (c *Client) newDownloadID() (string, error) {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("generate download id: %w", err)
+	}
+
+	return hex.EncodeToString(buf[:]), nil
 }
 
 func isValidDownloadSource(source string) bool {

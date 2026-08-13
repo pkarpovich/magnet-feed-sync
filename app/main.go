@@ -17,6 +17,7 @@ import (
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/download-client/qbittorrent"
+	downloadStore "magnet-feed-sync/app/download-store"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
 	"magnet-feed-sync/app/notify"
@@ -120,6 +121,10 @@ func run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create watch store: %w", err)
 	}
+	downloadRepo, err := downloadStore.NewRepository(db)
+	if err != nil {
+		return fmt.Errorf("failed to create download store: %w", err)
+	}
 
 	messagesForSend := make(chan string)
 
@@ -179,6 +184,9 @@ func run(cfg *config.Config) error {
 		Store:            store,
 		TaskCreator:      downloadTasksClient,
 		DownloadClient:   dClient,
+		DownloadStore:    downloadRepo,
+		Notifier:         notifier,
+		DryMode:          cfg.DryMode,
 		Breaker:          breaker,
 		RunState:         store,
 		WatchStore:       watchRepo,

@@ -771,24 +771,24 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
   an empty hash also arises from a qBittorrent response without ids, and conflating the two would
   make a real failure look like dry mode.
 
-- [ ] add optional `notify` to the request body; when it is absent or false the handler responds
+- [x] add optional `notify` to the request body; when it is absent or false the handler responds
       `201` with body exactly `{"status":"ok"}`, inserts no `downloads` row, and makes no notifier
       call - asserted, not asserted-about
-- [ ] when true and `Notifier.Enabled()` is false, or `DryMode` is set, answer `503` with the body
+- [x] when true and `Notifier.Enabled()` is false, or `DryMode` is set, answer `503` with the body
       fixed under "Subjects and payloads" **before** touching qBittorrent: a promised event nobody
       can deliver must be refused, not accepted
-- [ ] when true, generate the 16-char hex `download_id` (8 random bytes), add the torrent, record
+- [x] when true, generate the 16-char hex `download_id` (8 random bytes), add the torrent, record
       the row with the returned hash, and answer the `notify` body fixed under "Subjects and
       payloads"
-- [ ] dry mode: `DownloadNow` keeps its short-circuit and returns an empty hash with a nil error;
+- [x] dry mode: `DownloadNow` keeps its short-circuit and returns an empty hash with a nil error;
       the handler refuses `notify: true` on the `DryMode` field above and records no row. There is
       no torrent to ever complete, so an id would be a promise that cannot be kept
-- [ ] write handler tests asserting the **full decoded body**, not just the status: flag absent ->
+- [x] write handler tests asserting the **full decoded body**, not just the status: flag absent ->
       `201 {"status":"ok"}`, `SELECT COUNT(*) FROM downloads` is 0, recorder saw no publish; flag
       true + notifier disabled -> 503 with the fixed error body, no row; flag true + dry mode -> 503
       with its fixed error body, no row; flag true -> row created carrying the hash and the response
       body matches the fixed shape; add failure -> 500, no row
-- [ ] run `go test ./... -race` - must pass before task 6
+- [x] run `go test ./... -race` - must pass before task 6
 
 ### Task 6: Treat an already-present torrent as success
 

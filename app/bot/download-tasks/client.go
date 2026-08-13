@@ -128,15 +128,13 @@ func (c *Client) CreateFromURL(ctx context.Context, url, location string) (*trac
 	return c.createWithLock(ctx, metadata)
 }
 
-func (c *Client) DownloadNow(ctx context.Context, source, location string) error {
+func (c *Client) DownloadNow(ctx context.Context, source, location string) (string, error) {
 	if c.dryMode {
 		slog.InfoContext(ctx, "dry mode is enabled, skipping one-shot download", "location", location)
-		return nil
+		return "", nil
 	}
 
-	_, err := c.dClient.CreateDownloadTask(source, location)
-
-	return err
+	return c.dClient.CreateDownloadTask(source, location)
 }
 
 func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetadata) (*tracker.FileMetadata, error) {

@@ -155,9 +155,10 @@ func TestDownloadNow_DryMode_SkipsDownloadClient(t *testing.T) {
 		DryMode:         true,
 	})
 
-	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+	hash, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
 
 	require.NoError(t, err)
+	assert.Empty(t, hash, "dry mode adds no torrent, so there is no hash to report")
 	assert.False(t, downloadCalled, "download client should not be called in dry mode")
 }
 
@@ -165,6 +166,7 @@ func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
 	var gotURL, gotDestination string
 	callCount := 0
 	dClient := &mockDownloadClient{
+		hash: "474d1403945c0768506233481557516e7af8d136",
 		createDownloadTaskFunc: func(url, destination string) error {
 			callCount++
 			gotURL = url
@@ -180,9 +182,10 @@ func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
 	})
 
 	source := "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret"
-	err := client.DownloadNow(context.Background(), source, "/downloads/movies")
+	hash, err := client.DownloadNow(context.Background(), source, "/downloads/movies")
 
 	require.NoError(t, err)
+	assert.Equal(t, "474d1403945c0768506233481557516e7af8d136", hash, "the add response hash is what identifies the row")
 	assert.Equal(t, 1, callCount, "download client should be called exactly once")
 	assert.Equal(t, source, gotURL, "source should be forwarded verbatim")
 	assert.Equal(t, "/downloads/movies", gotDestination, "location should be forwarded verbatim")
@@ -201,7 +204,7 @@ func TestDownloadNow_PropagatesError(t *testing.T) {
 		DryMode:         false,
 	})
 
-	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+	_, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "qbittorrent unavailable")
@@ -221,7 +224,7 @@ func TestDownloadNow_PropagatesAlreadyExists(t *testing.T) {
 		DClient:         dClient,
 	})
 
-	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+	_, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, types.ErrTorrentAlreadyExists))
