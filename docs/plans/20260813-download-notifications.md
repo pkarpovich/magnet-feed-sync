@@ -956,24 +956,24 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 **Files:**
 - Create: `app/downloads/acceptance_test.go`
 
-- [ ] add `TestAcceptanceMagnetNotifyToCompletedEvent` in `app/downloads/acceptance_test.go`,
+- [x] add `TestAcceptanceMagnetNotifyToCompletedEvent` in `app/downloads/acceptance_test.go`,
       declared as **`package downloads_test`** - an in-package test cannot import `app/http`, which
       itself imports `app/downloads`, and the cycle would not build. Post a magnet with
       `notify: true` through the handler, assert one `downloads` row and a 16-hex `download_id` in
       the response; serve the completed `torrents/info` fixture from Verified Facts; run one cycle
       and assert the recorder captured exactly one message, on
       `tuclaw.downloads.completed.<download_id>`, whose `content_path` equals the fixture path
-- [ ] establish the baseline as the first of these that resolves:
+- [x] establish the baseline as the first of these that resolves:
       `git log --format=%H --diff-filter=A -- docs/plans/20260813-download-notifications.md | tail -1`,
       then `git merge-base origin/master HEAD`, then the oldest commit on this branch absent from
       `master`
-- [ ] stage this task's own new file first (`git add -A`), then
+- [x] stage this task's own new file first (`git add -A`), then
       `git diff --cached <baseline> --name-only --diff-filter=A -- '*_test.go'` must list exactly:
       `app/notify/client_test.go`, `app/downloads/download_test.go`, `app/downloads/sweeper_test.go`,
       `app/download-store/repository_test.go`, `app/downloads/acceptance_test.go`. A plain
       `<baseline>..HEAD` diff cannot see the acceptance test this task just wrote, and would fail
       with four entries
-- [ ] `git diff --cached <baseline> --name-only --diff-filter=M -- '*_test.go'` must list only these,
+- [x] `git diff --cached <baseline> --name-only --diff-filter=M -- '*_test.go'` must list only these,
       for these reasons: `app/watcher/publisher_test.go` (task 1 moves three tests out, adds
       `TestPublisherForwardsDisabledTransport`), `app/main_test.go` (task 1 retargets
       `TestDegradedNoNATS`), `app/migrations/embed_test.go` (task 2),
@@ -982,18 +982,18 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
       `app/task-store/repository_test.go` (task 8's `TestCreateOrReplacePreservesNotify`),
       `app/http/client_test.go` (tasks 5, 6, 8 and 10), `app/config/config_test.go` (task 9's
       `DOWNLOAD_CRON` test). Any other modified existing test file is a defect
-- [ ] assert the flagless behaviours directly rather than from memory: `POST /api/downloads` without
+- [x] assert the flagless behaviours directly rather than from memory: `POST /api/downloads` without
       `notify` -> `201 {"status":"ok"}` and no `downloads` row; `POST /api/files` without `notify`
       -> 201 with every pre-existing key byte-identical plus exactly one new key, `"notify": false`
-- [ ] run the classifier's own table test - `go test ./app/downloads -run TestClassify` - which is
+- [x] run the classifier's own table test - `go test ./app/downloads -run TestClassify` - which is
       where `len(knownTorrentStates) == 21` is asserted; it is unexported, so the external
       acceptance test cannot re-assert it
-- [ ] run the visibility check from Code-Quality Rules over every identifier this plan exported;
+- [x] run the visibility check from Code-Quality Rules over every identifier this plan exported;
       this is the one place it runs, because most of them get their first cross-package caller
       several tasks after they are created
-- [ ] run the full suite: `go test ./... -race`
-- [ ] run `go build ./...` and `gofmt -s -l app cmd` (must print nothing)
-- [ ] run the three gate checks and the comment-density command from Code-Quality Rules over exactly
+- [x] run the full suite: `go test ./... -race`
+- [x] run `go build ./...` and `gofmt -s -l app cmd` (must print nothing)
+- [x] run the three gate checks and the comment-density command from Code-Quality Rules over exactly
       these files: `app/notify/client.go`, `app/downloads/download.go`, `app/downloads/sweeper.go`,
       `app/download-store/repository.go`, `app/types/torrent.go`; record the ratios in the progress
       log
