@@ -43,9 +43,13 @@ type Config struct {
 	FlaresolverrURL string `env:"FLARESOLVERR_URL"`
 	NatsURL         string `env:"NATS_URL"`
 	WatchCron       string `env:"WATCH_CRON"`
+	DownloadCron    string `env:"DOWNLOAD_CRON"`
 }
 
-const defaultWatchCron = "20 * * * *"
+const (
+	defaultWatchCron    = "20 * * * *"
+	defaultDownloadCron = "*/10 * * * *"
+)
 
 func Init() (*Config, error) {
 	err := godotenv.Load()
@@ -65,6 +69,10 @@ func Init() (*Config, error) {
 
 	if cfg.WatchCron == "" {
 		cfg.WatchCron = defaultWatchCron
+	}
+
+	if cfg.DownloadCron == "" {
+		cfg.DownloadCron = defaultDownloadCron
 	}
 
 	return &cfg, nil

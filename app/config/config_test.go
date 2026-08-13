@@ -20,6 +20,17 @@ func TestInit_DefaultValues(t *testing.T) {
 	assert.Empty(t, cfg.NatsURL)
 	assert.Equal(t, "0 * * * *", cfg.Cron)
 	assert.Equal(t, defaultWatchCron, cfg.WatchCron)
+	assert.Equal(t, "*/10 * * * *", cfg.DownloadCron)
+}
+
+func TestInit_DownloadCronFromEnv(t *testing.T) {
+	t.Setenv("TELEGRAM_TOKEN", "test-token")
+	t.Setenv("DOWNLOAD_CRON", "*/5 * * * *")
+
+	cfg, err := Init()
+	require.NoError(t, err)
+
+	assert.Equal(t, "*/5 * * * *", cfg.DownloadCron)
 }
 
 func TestInit_WatchCronFromEnv(t *testing.T) {

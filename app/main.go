@@ -18,6 +18,7 @@ import (
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/download-client/qbittorrent"
 	downloadStore "magnet-feed-sync/app/download-store"
+	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
 	"magnet-feed-sync/app/notify"
@@ -142,6 +143,12 @@ func run(cfg *config.Config) error {
 		Messages:  messagesForSend,
 	})
 
+	sweeper := downloads.NewSweeper(downloads.SweeperDeps{
+		Store:    downloadRepo,
+		Torrents: dClient,
+		Notifier: notifier,
+	})
+
 	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
 		Tracker:         t,
 		DClient:         dClient,
@@ -163,6 +170,9 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("scheduler failed: %w", err)
 	}
 	if err := s.AddJob("watcher", cfg.WatchCron, func() { runWatchCycle(ctx, engine) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
+	}
+	if err := s.AddJob("downloads", cfg.DownloadCron, func() { runDownloadCycle(ctx, sweeper) }); err != nil {
 		return fmt.Errorf("scheduler failed: %w", err)
 	}
 	s.Start()
@@ -282,6 +292,12 @@ func watcherSources(cfg *config.Config, solver watchSolver) watchSourceSet {
 func runWatchCycle(ctx context.Context, engine *watcher.Engine) {
 	if err := engine.RunCycle(ctx); err != nil {
 		slog.ErrorContext(ctx, "watcher cycle failed", "error", err)
+	}
+}
+
+func runDownloadCycle(ctx context.Context, sweeper *downloads.Sweeper) {
+	if err := sweeper.RunCycle(ctx); err != nil {
+		slog.ErrorContext(ctx, "download cycle failed", "error", err)
 	}
 }
 

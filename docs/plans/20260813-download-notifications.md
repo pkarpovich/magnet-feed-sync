@@ -923,14 +923,14 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/main.go`
 - Modify: `compose.yaml`
 
-- [ ] add `DOWNLOAD_CRON` with default `*/10 * * * *`, following how `WATCH_CRON` is declared and
+- [x] add `DOWNLOAD_CRON` with default `*/10 * * * *`, following how `WATCH_CRON` is declared and
       defaulted (an empty value falls back to the constant, rather than an `env-default` tag)
-- [ ] construct the sweeper in `main.go` from the store, the qBittorrent client and the
+- [x] construct the sweeper in `main.go` from the store, the qBittorrent client and the
       `notify.Client` already built in earlier tasks, and register a third job named `downloads`
       beside `files` and `watcher`; a failed registration must remain a boot failure
-- [ ] add `DOWNLOAD_CRON` to `compose.yaml` alongside the other cron variables
-- [ ] write a config test asserting the default and an explicit override
-- [ ] run `go test ./... -race` - must pass before task 10
+- [x] add `DOWNLOAD_CRON` to `compose.yaml` alongside the other cron variables
+- [x] write a config test asserting the default and an explicit override
+- [x] run `go test ./... -race` - must pass before task 10
 
 ### Task 10: Health reporting
 
