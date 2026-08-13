@@ -628,20 +628,20 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Create: `app/migrations/20260813120000-add-downloads.sql`
 - Modify: `app/migrations/embed_test.go`
 
-- [ ] add the migration exactly as written in Technical Details -> Schema, Up and Down. It is the
+- [x] add the migration exactly as written in Technical Details -> Schema, Up and Down. It is the
       eighth in `app/migrations/`, so `Apply` on an empty database now reports **8**
-- [ ] extend `app/migrations/embed_test.go`: after `Apply` on a fresh database, `PRAGMA
+- [x] extend `app/migrations/embed_test.go`: after `Apply` on a fresh database, `PRAGMA
       table_info(downloads)` lists all twelve columns of the new table and `PRAGMA table_info(files)`
       contains `notify`
-- [ ] extend `TestApplyAdoptsDatabaseCreatedByTheOldServer` in `app/migrations/embed_test.go` - the
+- [x] extend `TestApplyAdoptsDatabaseCreatedByTheOldServer` in `app/migrations/embed_test.go` - the
       case seeded by `seedLegacyServerSchema`, a `files` table with no `gorp_migrations`, which is
       what production looked like before the migration runner existed - with the same two
       assertions, so adoption plus the new migration is proven on the shape production actually has.
       Adjust whatever migration-count bookkeeping the adoption tests share. Do not touch
       `app/migrations/isolation_test.go`; it holds only the linker-isolation test
-- [ ] confirm the runner end to end: from an empty temp directory, `go run ./cmd/migrate` applies 8
+- [x] confirm the runner end to end: from an empty temp directory, `go run ./cmd/migrate` applies 8
       and an immediate second run applies 0
-- [ ] run `go test ./... -race` - must pass before task 3
+- [x] run `go test ./... -race` - must pass before task 3
 
 ### Task 3: `app/downloads` domain type and `app/download-store` repository
 
