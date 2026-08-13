@@ -1004,15 +1004,15 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] document `DOWNLOAD_CRON` in the environment variable list
-- [ ] update the `/api/downloads` description: it is still fire-and-forget by default, with
+- [x] document `DOWNLOAD_CRON` in the environment variable list
+- [x] update the `/api/downloads` description: it is still fire-and-forget by default, with
       `notify: true` as the explicit exception that persists a row and publishes one terminal event
-- [ ] document the two new subjects, the fact that a failed download publishes on the *same* subject
+- [x] document the two new subjects, the fact that a failed download publishes on the *same* subject
       as a completed one and is told apart by `status`, the completion criterion and the
       publish-before-mark ordering, beside the existing watcher notes
-- [ ] document `files.notify` and the `CreateOrReplace` column-reset trap it shares with the failure
+- [x] document `files.notify` and the `CreateOrReplace` column-reset trap it shares with the failure
       counters
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 
