@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"magnet-feed-sync/app/config"
+	"magnet-feed-sync/app/notify"
 	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/watcher"
 )
@@ -88,15 +89,18 @@ func TestDegradedNoSolver(t *testing.T) {
 }
 
 func TestDegradedNoNATS(t *testing.T) {
-	publisher := watcher.NewPublisher(watcher.PublisherOptions{URL: ""})
-	require.NotNil(t, publisher)
-	t.Cleanup(publisher.Close)
+	notifier := notify.NewClient(notify.Options{URL: ""})
+	require.NotNil(t, notifier)
+	t.Cleanup(notifier.Close)
+	assert.False(t, notifier.Enabled())
+
+	publisher := watcher.NewPublisher(watcher.PublisherOptions{Transport: notifier})
 
 	err := publisher.Publish(context.Background(), watcher.Watch{ID: "one-night-only-en"}, watcher.RunOutcome{})
 
 	// a disabled publisher must error, never succeed quietly: a quiet success would let the
 	// engine mark releases seen that nobody was ever told about
-	require.Error(t, err)
+	require.ErrorIs(t, err, notify.ErrDisabled)
 }
 
 func TestRedactURL(t *testing.T) {

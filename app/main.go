@@ -19,6 +19,7 @@ import (
 	"magnet-feed-sync/app/download-client/qbittorrent"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
+	"magnet-feed-sync/app/notify"
 	"magnet-feed-sync/app/observability"
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
@@ -124,8 +125,10 @@ func run(cfg *config.Config) error {
 
 	sources := watcherSources(cfg, pageSolver)
 
-	publisher := watcher.NewPublisher(watcher.PublisherOptions{URL: cfg.NatsURL})
-	defer publisher.Close()
+	notifier := notify.NewClient(notify.Options{URL: cfg.NatsURL})
+	defer notifier.Close()
+
+	publisher := watcher.NewPublisher(watcher.PublisherOptions{Transport: notifier})
 
 	engine := watcher.NewEngine(watcher.EngineDeps{
 		Sources:   sources.list,

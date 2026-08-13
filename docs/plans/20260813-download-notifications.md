@@ -590,37 +590,37 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Modify: `app/main.go`
 - Modify: `app/main_test.go`
 
-- [ ] create `app/notify` holding the connect logic, the JetStream adapter and the message type
+- [x] create `app/notify` holding the connect logic, the JetStream adapter and the message type
       currently private to `app/watcher/publisher.go`: `NewClient(Options{URL string}) *Client`,
       `Publish(ctx context.Context, m Message) error`, `Enabled() bool`, `Close()`, and exported
       `ErrDisabled`
-- [ ] preserve today's semantics exactly: an empty URL warns once and disables publishing, a failed
+- [x] preserve today's semantics exactly: an empty URL warns once and disables publishing, a failed
       connect logs an error and returns a disabled client, and `Publish` on a disabled client
       returns `ErrDisabled` rather than a silent success
-- [ ] change `watcher.NewPublisher` to take the transport instead of a URL:
+- [x] change `watcher.NewPublisher` to take the transport instead of a URL:
       `PublisherOptions{Transport publisherTransport}` where `publisherTransport` is
       `interface{ Publish(ctx context.Context, m notify.Message) error }`. Delete the dial code, the
       `URL` field and `Publisher.Close()` from `app/watcher` - `main.go` owns and closes the single
       connection. Keep `payload`, the trimming loop and `messageID` byte-identical
-- [ ] keep the existing unexported `jetStream` seam and its `natsMessage` type inside `app/watcher`,
+- [x] keep the existing unexported `jetStream` seam and its `natsMessage` type inside `app/watcher`,
       with a small adapter mapping `natsMessage` to `notify.Message`, so the fake substituted by
       `TestPublisherPayloadFields`, `TestPublisherSubjectAndMessageID` and
       `TestPublisherReturnsStreamError` keeps working untouched
-- [ ] move the three URL-driven tests - `TestPublisherDisabledWithoutURL`,
+- [x] move the three URL-driven tests - `TestPublisherDisabledWithoutURL`,
       `TestNewPublisherSurvivesUnreachableNats`, `TestNewPublisherSurvivesInvalidURL` - from
       `app/watcher/publisher_test.go` to `app/notify/client_test.go`, retargeted at `notify.Client`
       and `ErrDisabled`. Delete `errPublisherDisabled` from `app/watcher` and add one new test there,
       `TestPublisherForwardsDisabledTransport`: a transport stub returning `notify.ErrDisabled` makes
       `Publisher.Publish` return an error satisfying `errors.Is(err, notify.ErrDisabled)`
-- [ ] retarget `TestDegradedNoNATS` in `app/main_test.go`, which today calls
+- [x] retarget `TestDegradedNoNATS` in `app/main_test.go`, which today calls
       `watcher.NewPublisher(watcher.PublisherOptions{URL: ""})` and `t.Cleanup(publisher.Close)` -
       both of which this task deletes. Point it at a disabled `notify.Client` instead; without this
       edit package `main` does not compile and this task's own gate cannot pass
-- [ ] update `app/main.go` to build the `notify.Client` once, hand it to the watcher publisher, and
+- [x] update `app/main.go` to build the `notify.Client` once, hand it to the watcher publisher, and
       `defer` its `Close`
-- [ ] write tests for `notify.Client`: disabled when the URL is empty, `Publish` forwards subject,
+- [x] write tests for `notify.Client`: disabled when the URL is empty, `Publish` forwards subject,
       message id and payload to the JetStream layer, `Enabled` reflects both states
-- [ ] run `go test ./... -race` - must pass before task 2
+- [x] run `go test ./... -race` - must pass before task 2
 
 ### Task 2: Migration for `downloads` and `files.notify`
 

@@ -5,26 +5,19 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
+	"magnet-feed-sync/app/notify"
 )
 
 const (
-	subjectPrefix      = "tuclaw.releases.found."
-	maxPayloadItems    = 10
-	maxPayloadBytes    = 8192
-	natsPublishTimeout = 10 * time.Second
-	natsDialTimeout    = 5 * time.Second
+	subjectPrefix   = "tuclaw.releases.found."
+	maxPayloadItems = 10
+	maxPayloadBytes = 8192
 )
-
-var errPublisherDisabled = errors.New("publish: nats is not configured")
 
 type natsMessage struct {
 	Subject string
@@ -36,69 +29,40 @@ type jetStream interface {
 	publish(ctx context.Context, m natsMessage) error
 }
 
+type publisherTransport interface {
+	Publish(ctx context.Context, m notify.Message) error
+}
+
 type PublisherOptions struct {
-	URL string
+	Transport publisherTransport
 }
 
 type Publisher struct {
 	stream jetStream
-	conn   *nats.Conn
 	now    func() time.Time
 }
 
 var _ publisher = (*Publisher)(nil)
 
-// a failed connect is never fatal: the container would crash-loop on every NATS restart
 func NewPublisher(o PublisherOptions) *Publisher {
 	p := &Publisher{now: time.Now}
 
-	if o.URL == "" {
-		slog.Warn("NATS_URL is empty, watch notifications are disabled")
-
-		return p
+	if o.Transport != nil {
+		p.stream = transportAdapter{transport: o.Transport}
 	}
-
-	conn, err := nats.Connect(o.URL,
-		nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(-1),
-		nats.Timeout(natsDialTimeout),
-	)
-	if err != nil {
-		slog.Error("failed to connect to nats, watch notifications are disabled", "error", err)
-
-		return p
-	}
-	p.conn = conn
-
-	js, err := jetstream.New(conn)
-	if err != nil {
-		slog.Error("failed to create jetstream context, watch notifications are disabled", "error", err)
-
-		return p
-	}
-	p.stream = jetStreamAdapter{js: js}
 
 	return p
 }
 
-func (p *Publisher) Close() {
-	if p.conn != nil {
-		p.conn.Close()
-	}
-}
-
 func (p *Publisher) Publish(ctx context.Context, w Watch, o RunOutcome) error {
 	if p.stream == nil {
-		return errPublisherDisabled
+		return notify.ErrDisabled
 	}
 
 	body, err := p.payload(w, o)
 	if err != nil {
 		return err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, natsPublishTimeout)
-	defer cancel()
 
 	msg := natsMessage{
 		Subject: subjectPrefix + w.ID,
@@ -185,14 +149,14 @@ func messageID(w Watch, results []SearchResult) string {
 	return w.ID + ":" + hex.EncodeToString(digest[:])
 }
 
-type jetStreamAdapter struct {
-	js jetstream.JetStream
+type transportAdapter struct {
+	transport publisherTransport
 }
 
-func (a jetStreamAdapter) publish(ctx context.Context, m natsMessage) error {
-	if _, err := a.js.Publish(ctx, m.Subject, m.Payload, jetstream.WithMsgID(m.MsgID)); err != nil {
-		return err
-	}
-
-	return nil
+func (a transportAdapter) publish(ctx context.Context, m natsMessage) error {
+	return a.transport.Publish(ctx, notify.Message{
+		Subject: m.Subject,
+		MsgID:   m.MsgID,
+		Payload: m.Payload,
+	})
 }

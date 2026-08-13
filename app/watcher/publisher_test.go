@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"magnet-feed-sync/app/notify"
 )
 
 // fakeStream captures what would have gone to JetStream, so payload, subject and message id
@@ -231,33 +233,42 @@ func TestPublisherReturnsStreamError(t *testing.T) {
 	assert.Contains(t, err.Error(), "publish watch w")
 }
 
-func TestPublisherDisabledWithoutURL(t *testing.T) {
-	p := NewPublisher(PublisherOptions{})
-	defer p.Close()
+type disabledTransport struct{}
+
+func (disabledTransport) Publish(context.Context, notify.Message) error {
+	return notify.ErrDisabled
+}
+
+// a disabled transport must surface as an error the engine can recognise, never as a quiet
+// success: the cycle would mark releases seen that nobody was ever told about
+func TestPublisherForwardsDisabledTransport(t *testing.T) {
+	p := NewPublisher(PublisherOptions{Transport: disabledTransport{}})
 
 	err := p.Publish(context.Background(), Watch{ID: "w"}, RunOutcome{New: newResults(sourceJackett, enRelease)})
 
-	require.ErrorIs(t, err, errPublisherDisabled)
+	require.ErrorIs(t, err, notify.ErrDisabled)
 }
 
-func TestNewPublisherSurvivesUnreachableNats(t *testing.T) {
-	// an unreachable broker must not be fatal: the container would crash-loop on every
-	// NATS restart, and the engine already treats a publish error as "retry next cycle"
-	p := NewPublisher(PublisherOptions{URL: "nats://127.0.0.1:1"})
-	defer p.Close()
+func TestPublisherTransportReceivesMessage(t *testing.T) {
+	transport := &recordingTransport{}
+	p := NewPublisher(PublisherOptions{Transport: transport})
+	p.now = func() time.Time { return time.Date(2026, time.August, 10, 12, 30, 0, 0, time.UTC) }
 
-	require.NotNil(t, p)
+	o := RunOutcome{New: []SearchResult{{Source: sourceJackett, ExternalID: "1883913", Title: enRelease}}}
+	require.NoError(t, p.Publish(context.Background(), Watch{ID: "one-night-only-en"}, o))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	require.Error(t, p.Publish(ctx, Watch{ID: "w"}, RunOutcome{New: newResults(sourceJackett, enRelease)}))
+	require.Len(t, transport.messages, 1)
+	assert.Equal(t, "tuclaw.releases.found.one-night-only-en", transport.messages[0].Subject)
+	assert.Equal(t, "one-night-only-en:"+expectedMessageDigest(o.New), transport.messages[0].MsgID)
+	assert.Equal(t, "one-night-only-en", decodePayload(t, transport.messages[0].Payload).WatchID)
 }
 
-func TestNewPublisherSurvivesInvalidURL(t *testing.T) {
-	p := NewPublisher(PublisherOptions{URL: "://not-a-url"})
-	defer p.Close()
+type recordingTransport struct {
+	messages []notify.Message
+}
 
-	require.NotNil(t, p)
-	require.Error(t, p.Publish(context.Background(), Watch{ID: "w"}, RunOutcome{New: newResults(sourceJackett, enRelease)}))
+func (r *recordingTransport) Publish(_ context.Context, m notify.Message) error {
+	r.messages = append(r.messages, m)
+
+	return nil
 }
