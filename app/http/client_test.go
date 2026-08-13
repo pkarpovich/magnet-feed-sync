@@ -542,6 +542,53 @@ func TestHandleCreateDownload_NotifyRecordsRow(t *testing.T) {
 	assert.Equal(t, 1, pending)
 }
 
+// an add qbittorrent named no torrent for cannot be swept, so it is refused instead of
+// recorded: an unmatchable row publishes a false failure on the subject the caller was handed
+func TestHandleCreateDownload_NotifyWithoutHashIsRefused(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadHash: ""}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"https://jackett.example/dl/tpb/torrent.torrent","notify":true}`)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, 1, creator.downloadCalls)
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
+// the same add without notify is the fire-and-forget path, which never needed the hash
+func TestHandleCreateDownload_WithoutNotifyIgnoresMissingHash(t *testing.T) {
+	store := newTestDownloadStore(t)
+	creator := &mockTaskCreator{downloadHash: ""}
+
+	c := NewClient(&ClientCtx{
+		Store:          &mockFileStore{},
+		TaskCreator:    creator,
+		DownloadClient: &mockDownloadClient{defaultLocation: "/downloads/default"},
+		DownloadStore:  store,
+		Notifier:       &mockNotifier{enabled: true},
+	})
+
+	w := postDownload(t, c, `{"source":"https://jackett.example/dl/tpb/torrent.torrent"}`)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, "ok", decodeBody(t, w)["status"])
+
+	pending, err := store.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, 0, pending)
+}
+
 func TestHandleCreateDownload_NotifyAddFails(t *testing.T) {
 	store := newTestDownloadStore(t)
 	creator := &mockTaskCreator{downloadErr: errors.New("qbittorrent unreachable")}

@@ -317,6 +317,7 @@ const (
 	notifyUnavailable   = "notifications are not configured"
 	notifyDryMode       = "dry mode: no download is created, so no event can be published"
 	duplicateUnresolved = "torrent already present and its hash could not be resolved from the source"
+	notifyUnidentified  = "download created, but qbittorrent named no torrent for it, so no event can be published"
 )
 
 const stateUnknown = "unknown"
@@ -391,6 +392,16 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 
 	resp := createDownloadResponse{Status: statusOk}
 	if req.Notify {
+		// the add succeeded but qbittorrent named no torrent, so a row would be one the sweep
+		// could never match: a refusal is the honest answer, an unmatchable row would publish a
+		// false failure on the subject this caller was handed
+		if hash == "" {
+			// the source is not logged: a jackett `.torrent` link carries its api key in the query
+			slog.ErrorContext(ctx, "download added but its torrent could not be identified")
+			c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnidentified})
+			return
+		}
+
 		id, err := c.recordDownload(&downloads.Download{Source: req.Source, Location: location, Hash: hash})
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to record download", "error", err)

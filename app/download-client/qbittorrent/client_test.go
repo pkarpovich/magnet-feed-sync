@@ -24,6 +24,7 @@ type fakeQbit struct {
 	torrentsBody string
 
 	addedTorrentIds []string
+	addPlainText    bool
 
 	addSavePath string
 	addURL      string
@@ -67,6 +68,14 @@ func newFakeQbit(t *testing.T) *fakeQbit {
 
 		if f.addStatus != http.StatusOK {
 			w.WriteHeader(f.addStatus)
+			return
+		}
+
+		// what every qbittorrent below the WebAPI version that added `added_torrent_ids` answers
+		if f.addPlainText {
+			w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("Ok."))
 			return
 		}
 
@@ -121,6 +130,7 @@ func TestCreateDownloadTask(t *testing.T) {
 		source        string
 		status        int
 		addedIds      []string
+		plainText     bool
 		wantHash      string
 		wantErr       bool
 		wantDuplicate bool
@@ -140,11 +150,36 @@ func TestCreateDownloadTask(t *testing.T) {
 			wantHash: "2566e2b012ea1ef9087465bc97a7ac4449f4f0de",
 		},
 		{
-			name:     "no ids and no magnet is an explicit error",
+			// the add succeeded, so it must not be reported as a failure; the empty hash is what
+			// the notify path checks for
+			name:     "no ids and no magnet succeeds without a hash",
 			source:   "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret",
 			status:   http.StatusOK,
 			addedIds: []string{},
-			wantErr:  true,
+			wantHash: "",
+		},
+		{
+			name:      "plain text ok is a success for a torrent url",
+			source:    "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret",
+			status:    http.StatusOK,
+			plainText: true,
+			wantHash:  "",
+		},
+		{
+			name:      "plain text ok still resolves a magnet from its btih",
+			source:    "magnet:?xt=urn:btih:2566E2B012EA1EF9087465BC97A7AC4449F4F0DE&dn=Some.Name",
+			status:    http.StatusOK,
+			plainText: true,
+			wantHash:  "2566e2b012ea1ef9087465bc97a7ac4449f4f0de",
+		},
+		{
+			// a base32 infohash never matches what torrents/info reports, so it must not be
+			// handed back as one: the sweep would read the miss as a deleted torrent
+			name:      "base32 magnet yields no hash",
+			source:    "magnet:?xt=urn:btih:EWLPFAJOUHX7CB2GK6ZF5J6EIRHU6EG6",
+			status:    http.StatusOK,
+			plainText: true,
+			wantHash:  "",
 		},
 		{
 			name:          "conflict reports an already present torrent",
@@ -165,6 +200,7 @@ func TestCreateDownloadTask(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := newFakeQbit(t)
 			fake.addStatus = tt.status
+			fake.addPlainText = tt.plainText
 			if tt.addedIds != nil {
 				fake.addedTorrentIds = tt.addedIds
 			}

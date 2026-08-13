@@ -263,9 +263,15 @@ the worst failure this feature has. An event task fires once and must be re-arme
 | duplicate whose hash cannot be resolved | `409 {"error":"torrent already present and its hash could not be resolved from the source"}` |
 | `notify: true` with `NATS_URL` unset | `503 {"error":"notifications are not configured"}` |
 | `notify: true` in dry mode | `503 {"error":"dry mode: no download is created, so no event can be published"}` |
+| `notify: true` for an add qBittorrent named no torrent for | `503 {"error":"download created, but qbittorrent named no torrent for it, so no event can be published"}` |
 
-The two 503s are refusals **before** qBittorrent is touched: a promise nobody can keep must not be
+The first two 503s are refusals **before** qBittorrent is touched: a promise nobody can keep must not be
 accepted. Dry mode creates no torrent at all, so there is nothing that could ever complete.
+
+The third is the one refusal that comes **after** the add. A `.torrent` URL carries no infohash, so the
+hash has to come from qBittorrent's `added_torrent_ids`, which older WebAPI versions do not return. The
+download is running either way and a request without `notify` still answers `201`; only the promise is
+refused, because a row whose torrent cannot be matched would be published as a false failure.
 
 A duplicate is treated as success rather than the blanket 500 it used to answer. The hash is resolved from
 the magnet, or from the newest previous `downloads` row with the same `source` — which covers a re-run of

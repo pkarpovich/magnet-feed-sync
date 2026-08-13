@@ -53,9 +53,14 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
 - **download-client/**: qBittorrent client (`qbittorrent/`) built on `github.com/autobrr/go-qbittorrent`.
   Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client.
   `CreateDownloadTask` returns the **hash**, not just an error: `added_torrent_ids[0]` when qBittorrent
-  supplies it, otherwise `utils.ExtractBtihHash` for a `magnet:` source, otherwise an explicit failure —
-  a row whose torrent cannot be identified later must never be created, so an unidentifiable add is
-  refused (500) rather than silently accepted. `TorrentStates(ctx, hashes)` is the paired lookup the
+  supplies it, otherwise `utils.ExtractBtihHash` for a `magnet:` source — but only when that yields a
+  40-char hex infohash, since a base32 magnet would be stored as a hash `torrents/info` never reports
+  and the sweep would read the miss as a torrent deleted by hand. An add nothing identifies is
+  **success with an empty hash, not an error**: `added_torrent_ids` is absent on every qBittorrent below
+  the WebAPI version that added it (it answers `text/plain` "Ok."), so failing there would reject every
+  plain `.torrent` add. The check belongs to whoever needs the hash — `POST /api/downloads` with
+  `notify: true` refuses the empty hash with 503 rather than writing a row the sweep can never match,
+  while the fire-and-forget path never needed it. `TorrentStates(ctx, hashes)` is the paired lookup the
   sweep and the duplicate path share; a hash qBittorrent does not know is **absent from the map**, never
   a zero entry, because absence is what the sweep reads as "deleted by hand". The subject both halves of
   the promise use is built once by `downloads.Subject(id)` — the HTTP response hands back exactly what

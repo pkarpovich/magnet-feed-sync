@@ -47,12 +47,32 @@ func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
 	}
 
 	if strings.HasPrefix(strings.ToLower(url), "magnet:") {
-		if hash := utils.ExtractBtihHash(url); hash != "" {
+		// only a hex infohash can be matched against what torrents/info reports: a base32
+		// magnet would be stored as a hash the sweep never finds and published as a false failure
+		if hash := utils.ExtractBtihHash(url); isInfoHash(hash) {
 			return hash, nil
 		}
 	}
 
-	return "", fmt.Errorf("add torrent: response carries no torrent id for %s", url)
+	// the torrent is added; only `added_torrent_ids` is missing, which every qbittorrent below
+	// the WebAPI version that introduced it omits by answering `text/plain`. The add is a success
+	// for every caller that does not need the hash, and refusing it here would fail a plain
+	// `.torrent` add outright. Callers that promise an event check for the empty hash instead
+	return "", nil
+}
+
+func isInfoHash(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (c *Client) TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) {
