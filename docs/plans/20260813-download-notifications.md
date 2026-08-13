@@ -831,35 +831,35 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Create: `app/downloads/sweeper.go`
 - Create: `app/downloads/sweeper_test.go`
 
-- [ ] implement `Sweeper` with `RunCycle(ctx) error`, built from a deps struct carrying the store,
+- [x] implement `Sweeper` with `RunCycle(ctx) error`, built from a deps struct carrying the store,
       the torrent lookup (`TorrentStates`) and the notifier (`Publish`), each behind a
       consumer-side interface declared in this package
-- [ ] read `Pending()` first and **return without calling qBittorrent at all** when it is empty;
+- [x] read `Pending()` first and **return without calling qBittorrent at all** when it is empty;
       otherwise make exactly one `TorrentStates(ctx, hashes)` call for the whole set and match in
       memory. Propagate `ctx` into that call - the lookup is context-aware for this reason
-- [ ] a failed `TorrentStates` call aborts the cycle: log, return the error, publish nothing, mark
+- [x] a failed `TorrentStates` call aborts the cycle: log, return the error, publish nothing, mark
       nothing, retry on the next tick. Proceeding with an empty map would read as "every torrent was
       deleted by hand" and publish a false `failed` for every pending row, then mark them published
       - losing every real completion permanently
-- [ ] classify each row with `downloads.Classify` from task 3 - the sweep does not re-derive the
+- [x] classify each row with `downloads.Classify` from task 3 - the sweep does not re-derive the
       rule; build the payload from the fields listed under "Subjects and payloads"; publish both
       outcomes on `tuclaw.downloads.completed.<download_id>`, and only afterwards call
       `MarkPublished` - never the reverse
-- [ ] honour context cancellation between rows so shutdown mid-sweep publishes nothing by halves,
+- [x] honour context cancellation between rows so shutdown mid-sweep publishes nothing by halves,
       and let a single row's publish failure leave that row unmarked for the next tick instead of
       aborting the cycle
-- [ ] write sweep-level tests over `knownTorrentStates` (the classifier's own 21-state table is
+- [x] write sweep-level tests over `knownTorrentStates` (the classifier's own 21-state table is
       tested in task 3): a state that classifies terminal publishes exactly one message and marks
       the row; one that does not publishes nothing and leaves the row pending
-- [ ] write tests for the ordering guarantee: a publisher error leaves `published_at` empty and the
+- [x] write tests for the ordering guarantee: a publisher error leaves `published_at` empty and the
       next cycle retries; a successful publish marks the row and the next cycle publishes nothing;
       a row seeded already-published (what task 6 writes for an already-complete duplicate) is never
       picked up; a lookup error publishes nothing, marks nothing, and leaves every row pending
-- [ ] assert the exact subject, message id and payload of both event kinds - including that the
+- [x] assert the exact subject, message id and payload of both event kinds - including that the
       **failed** event goes to `tuclaw.downloads.completed.<download_id>` and not to any
       failure-specific subject, the three literal `reason` strings, and that `completed_at` equals
       `completion_on` converted to RFC3339 UTC on success while a failure carries the sweep clock
-- [ ] run `go test ./... -race` - must pass before task 8
+- [x] run `go test ./... -race` - must pass before task 8
 
 ### Task 8: `notify` flag on tracked files and the release-update event
 
