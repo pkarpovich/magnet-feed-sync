@@ -938,18 +938,18 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 
-- [ ] add exactly `"downloads": {"pending": <int>}` to `GET /api/health`, where `pending` is
+- [x] add exactly `"downloads": {"pending": <int>}` to `GET /api/health`, where `pending` is
       `CountPending()`. No other keys
-- [ ] follow the shape `watches` already uses: a `*downloadsHealth` field with `json:"...,omitempty"`,
+- [x] follow the shape `watches` already uses: a `*downloadsHealth` field with `json:"...,omitempty"`,
       so a nil store omits the key instead of panicking. This is not cosmetic - `app/http/client_test.go`
       builds 25 ad-hoc `ClientCtx` literals, most of which will not set the new field. A
       `CountPending` error logs and omits the key
-- [ ] leave the existing `status` derivation untouched: a pending download is normal operation, not
+- [x] leave the existing `status` derivation untouched: a pending download is normal operation, not
       degradation
-- [ ] write tests asserting the full decoded `downloads` object for 0 and 2 pending rows, that the
+- [x] write tests asserting the full decoded `downloads` object for 0 and 2 pending rows, that the
       key is absent when the store is nil, and that the top-level `status` string is unchanged in
       every case
-- [ ] run `go test ./... -race` - must pass before task 11
+- [x] run `go test ./... -race` - must pass before task 11
 
 ### Task 11: Verify acceptance criteria
 

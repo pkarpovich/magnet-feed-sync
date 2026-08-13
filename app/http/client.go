@@ -37,6 +37,7 @@ type TaskCreator interface {
 type downloadStore interface {
 	Create(d *downloads.Download) error
 	NewestBySource(source string) (*downloads.Download, error)
+	CountPending() (int, error)
 }
 
 type notifier interface {
@@ -1288,12 +1289,17 @@ type healthResponse struct {
 	LastRunAt *time.Time        `json:"last_run_at,omitempty"`
 	Providers map[string]string `json:"providers"`
 	Watches   *watchesHealth    `json:"watches,omitempty"`
+	Downloads *downloadsHealth  `json:"downloads,omitempty"`
 }
 
 type watchesHealth struct {
 	Active      int        `json:"active"`
 	OldestRunAt *time.Time `json:"oldest_run_at,omitempty"`
 	WithErrors  int        `json:"with_errors"`
+}
+
+type downloadsHealth struct {
+	Pending int `json:"pending"`
 }
 
 func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -1324,6 +1330,7 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		Failing:   failing,
 		Providers: providerStates,
 		Watches:   watches,
+		Downloads: c.downloadHealth(ctx),
 	}
 	if run.present {
 		resp.LastRunAt = &run.at
@@ -1366,6 +1373,21 @@ func (c *Client) providerStates() (map[string]string, bool) {
 	}
 
 	return states, anyBlocked
+}
+
+func (c *Client) downloadHealth(ctx context.Context) *downloadsHealth {
+	if c.downloadStore == nil {
+		return nil
+	}
+
+	pending, err := c.downloadStore.CountPending()
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to count pending downloads", "error", err)
+
+		return nil
+	}
+
+	return &downloadsHealth{Pending: pending}
 }
 
 func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {

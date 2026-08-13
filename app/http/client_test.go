@@ -377,6 +377,8 @@ func (f *failingDownloadStore) NewestBySource(_ string) (*downloads.Download, er
 	return nil, f.err
 }
 
+func (f *failingDownloadStore) CountPending() (int, error) { return 0, f.err }
+
 type mockTorrentLookup struct {
 	states      map[string]types.TorrentState
 	err         error
@@ -2589,4 +2591,141 @@ func TestHandleFiles_CarriesNotifyThroughToResponse(t *testing.T) {
 	require.Len(t, resp, 2)
 	assert.Equal(t, true, resp[0]["notify"])
 	assert.Equal(t, false, resp[1]["notify"])
+}
+
+func downloadsHealthCtx(store downloadStore) *ClientCtx {
+	return &ClientCtx{
+		Store:            &mockFileStore{files: failingFiles(0, 1)},
+		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter:    2 * time.Hour,
+		StartedAt:        time.Now().Add(-5 * time.Hour),
+		FailureThreshold: 3,
+		DownloadStore:    store,
+	}
+}
+
+func callHealthRaw(t *testing.T, ctx *ClientCtx) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+
+	c := NewClient(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	c.healthHandler(w, req)
+
+	return w, decodeBody(t, w)
+}
+
+func TestHealthDownloadsPending(t *testing.T) {
+	tests := []struct {
+		name    string
+		pending int
+	}{
+		{name: "none pending", pending: 0},
+		{name: "two pending", pending: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestDownloadStore(t)
+			for i := 0; i < tt.pending; i++ {
+				require.NoError(t, store.Create(&downloads.Download{
+					ID:        fmt.Sprintf("001122334455667%d", i),
+					Source:    "magnet:?xt=urn:btih:" + completedHash,
+					Location:  "/downloads/default",
+					Hash:      completedHash,
+					CreatedAt: time.Now(),
+				}))
+			}
+
+			require.NoError(t, store.Create(&downloads.Download{
+				ID:        "ffffffffffffffff",
+				Source:    "magnet:?xt=urn:btih:" + completedHash,
+				Location:  "/downloads/default",
+				Hash:      completedHash,
+				CreatedAt: time.Now(),
+			}))
+			require.NoError(t, store.MarkPublished("ffffffffffffffff", downloads.Outcome{
+				Status:      "completed",
+				Name:        "sample.bin",
+				CompletedAt: time.Now(),
+			}))
+
+			w, body := callHealthRaw(t, downloadsHealthCtx(store))
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, "ok", body["status"])
+			assert.Equal(t, map[string]any{"pending": float64(tt.pending)}, body["downloads"])
+		})
+	}
+}
+
+// most ClientCtx literals in this package leave the store unset, so a nil one must omit the
+// key rather than panic
+func TestHealthDownloadsOmittedWithoutStore(t *testing.T) {
+	w, body := callHealthRaw(t, downloadsHealthCtx(nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "ok", body["status"])
+	assert.NotContains(t, body, "downloads")
+}
+
+// a pending download is normal operation, and an unreadable count is not the file sweep's
+// problem either: neither may move the top-level verdict
+func TestHealthDownloadsDoNotChangeStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		ctx           func(*testing.T) *ClientCtx
+		wantStatus    string
+		wantCode      int
+		wantDownloads any
+	}{
+		{
+			name: "pending rows stay ok",
+			ctx: func(t *testing.T) *ClientCtx {
+				store := newTestDownloadStore(t)
+				require.NoError(t, store.Create(&downloads.Download{
+					ID:        "0011223344556677",
+					Source:    "magnet:?xt=urn:btih:" + completedHash,
+					Location:  "/downloads/default",
+					Hash:      completedHash,
+					CreatedAt: time.Now(),
+				}))
+
+				return downloadsHealthCtx(store)
+			},
+			wantStatus:    "ok",
+			wantCode:      http.StatusOK,
+			wantDownloads: map[string]any{"pending": float64(1)},
+		},
+		{
+			name: "count error stays ok",
+			ctx: func(_ *testing.T) *ClientCtx {
+				return downloadsHealthCtx(&failingDownloadStore{err: errors.New("db is down")})
+			},
+			wantStatus: "ok",
+			wantCode:   http.StatusOK,
+		},
+		{
+			name: "count error does not lower a degraded verdict",
+			ctx: func(_ *testing.T) *ClientCtx {
+				ctx := downloadsHealthCtx(&failingDownloadStore{err: errors.New("db is down")})
+				ctx.Store = &mockFileStore{files: failingFiles(3, 4)}
+
+				return ctx
+			},
+			wantStatus: "degraded",
+			wantCode:   http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, body := callHealthRaw(t, tt.ctx(t))
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, tt.wantStatus, body["status"])
+			assert.Equal(t, tt.wantDownloads, body["downloads"])
+		})
+	}
 }
