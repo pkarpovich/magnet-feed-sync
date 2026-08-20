@@ -51,24 +51,50 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
 - **config/**: Environment-based configuration via cleanenv
 - **database/**: SQLite client with retry mechanism for reliability
 - **download-client/**: qBittorrent client (`qbittorrent/`) built on `github.com/autobrr/go-qbittorrent`.
-  Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client
+  Consumers depend on small consumer-side `DownloadClient` interfaces; `main.go` injects the concrete client.
+  `CreateDownloadTask` returns the **hash**, not just an error: `added_torrent_ids[0]` when qBittorrent
+  supplies it, otherwise `utils.ExtractBtihHash` for a `magnet:` source — but only when that yields a
+  40-char hex infohash, since a base32 magnet would be stored as a hash `torrents/info` never reports
+  and the sweep would read the miss as a torrent deleted by hand. An add nothing identifies is
+  **success with an empty hash, not an error**: `added_torrent_ids` is absent on every qBittorrent below
+  the WebAPI version that added it (it answers `text/plain` "Ok."), so failing there would reject every
+  plain `.torrent` add. The check belongs to whoever needs the hash — `POST /api/downloads` with
+  `notify: true` refuses the empty hash with 503 rather than writing a row the sweep can never match,
+  while the fire-and-forget path never needed it. A 200 carrying `failure_count > 0` with no added id
+  is the one exception: qBittorrent refused the source, so it is an **error** — the magnet fallback
+  would otherwise hand back a hash for a torrent that was never added, and the sweep would publish it
+  as deleted by hand ten minutes later. Every add error the library builds embeds the source verbatim
+  and a jackett `.torrent` link carries `JACKETT_API_KEY` in its query, so the message is redacted with
+  `utils.RedactURL` **inside the client** (the library error stays underneath, so `errors.Is` still
+  sees it) rather than at each caller that logs it. `TorrentStates(ctx, hashes)` is the paired lookup the
+  sweep and the duplicate path share; a hash qBittorrent does not know is **absent from the map**, never
+  a zero entry, because absence is what the sweep reads as "deleted by hand". It asks in **batches of
+  100**: the library joins the hashes into the query string of a GET `torrents/info` at ~41 chars each,
+  and a pending set that outgrows the request-line limit would fail a lookup whose failure aborts the
+  whole sweep, stalling every pending row rather than one. The subject both halves of
+  the promise use is built once by `downloads.Subject(id)` — the HTTP response hands back exactly what
+  the sweep will publish on
 - **events/**: Telegram event handlers for bot interactions
 - **http/**: HTTP server serving web UI, REST API, and health checks. Two download entry points with a
   deliberate split: `POST /api/files` is tracked (provider parses the tracker page, a row is persisted,
-  the cron feed re-checks it); `POST /api/downloads` is one-shot fire-and-forget (magnet or `.torrent`
-  URL forwarded verbatim to the download client, no row, no monitoring, nothing logged/persisted).
-  `GET /api/health` reports real state (`ok` / `degraded` / `unhealthy` + 503), derived from per-task
-  failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string. Both
-  halves of the run state matter: a stale `last_run_at` is `unhealthy`, `last_run_ok = false` is
+  the cron feed re-checks it); `POST /api/downloads` is one-shot fire-and-forget by default (magnet or
+  `.torrent` URL forwarded verbatim to the download client, no row, no monitoring, nothing
+  logged/persisted). `"notify": true` is the explicit exception on both: it persists a `downloads` row
+  and promises one terminal event, and it is **refused with 503 before qBittorrent is touched** when the
+  notifier is disabled (and, on `/api/downloads` only, in dry mode) — a promise nobody can keep must not
+  be accepted. `GET /api/health` reports real state (`ok` / `degraded` / `unhealthy` + 503), derived from
+  per-task failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string.
+  Both halves of the run state matter: a stale `last_run_at` is `unhealthy`, `last_run_ok = false` is
   `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything).
   It also serves the watch CRUD routes (`/api/watches`), the two search entry points
   (`POST /api/watches/{id}/search` reproduces a stored watch, `POST /api/search` is ad-hoc), and the
-  `watches` object on `/api/health`
+  `watches` and `downloads` objects on `/api/health`
 - **schedular/**: Cron job scheduling via gocron. `AddJob(name, cronExpr, cb)` registers one job and
-  `Start()` runs them all; there are two — the files sweep on `CRON` and the watcher sweep on
-  `WATCH_CRON`. Every job runs in singleton mode — a sweep can outrun its interval, and overlapping runs
-  would double-probe the breaker, race the run state, and (for the watcher) publish twice while racing
-  the shared ext.to cookie/token state
+  `Start()` runs them all; there are three — the files sweep on `CRON`, the watcher sweep on
+  `WATCH_CRON` and the download sweep on `DOWNLOAD_CRON`. Every job runs in singleton mode — a sweep can
+  outrun its interval, and overlapping runs would double-probe the breaker, race the run state, publish
+  the same download event twice, and (for the watcher) publish twice while racing the shared ext.to
+  cookie/token state
 - **task-store/**: SQLite repository pattern for task persistence
 - **watcher/**: the release watcher — `SearchSource` implementations for Jackett (torznab search over all
   indexers) and ext.to (Cloudflare-fenced HTML plus a signed magnet POST), the `Engine` that merges,
@@ -98,15 +124,38 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   publishing whatever its new queries or wider regex match) and does not report the dead watch's status as
   its own on `/api/health`. `watch_seen` is deliberately untouched, which is what keeps that seed from
   being a replay
+- **notify/**: the shared JetStream transport — `NewClient(Options{URL})`, `Publish(ctx, Message)`,
+  `Enabled()`, `Close()`, and `ErrDisabled`. One client is built in `main.go` and shared by the watcher
+  publisher, the download sweeper and `bot/download-tasks`; **`main.go` alone closes it**, no consumer
+  dials or closes what it did not open. Each consumer declares its own narrow interface over it rather
+  than taking `*notify.Client`. An empty URL or a failed connect yields a disabled client whose `Publish`
+  returns `ErrDisabled` — never a silent success, so nothing is marked published and the event is retried
+- **downloads/**: the `Download` domain type, the single classifier `Classify` and the `Sweeper` that
+  publishes terminal download events on `DOWNLOAD_CRON`. Mirrors how `watcher` defines `Watch` while
+  `watch-store` persists it: the store, the torrent lookup and the notifier each sit behind a
+  consumer-side interface declared here
+- **download-store/**: SQLite repository over the `downloads` table, verifying its schema by table then
+  **columns** the same way `task-store` and `watch-store` do. Outcome writes are explicit `UPDATE`s, and
+  `MarkPublished` carries `WHERE id = ? AND published_at IS NULL`, which is what makes the
+  publish-then-mark ordering safe to run twice after a crash. `Create` writes `created_at` from a Go
+  `time.Time` rather than leaning on `CURRENT_TIMESTAMP`, whose one-second resolution would make the
+  ordering of two rows added in the same second arbitrary; `Pending` and `NewestBySource` break ties on
+  `rowid` so the order is total either way. Every timestamp is stored **in UTC**: the driver writes a
+  `time.Time` as RFC3339 text carrying its offset, so `ORDER BY created_at` compares wall clocks, and
+  under a DST zone the autumn rollback hour would sort a newer row before an older one — a difference
+  the `rowid` tiebreak cannot repair, because the two values are not equal
 - **tracker/**: RSS feed parsing with provider abstraction
   - `providers/`: RuTracker, NNMClub, and Jackett implementations
   - `breaker.go`: per-provider circuit breaker consumed by the cron sweep and the health endpoint
 - **migrations/**: the `*.sql` migration set plus `embed.go`, which embeds it with `//go:embed *.sql` and
   exposes `Apply(db *sql.DB) (int, error)`. Imported by `cmd/migrate` and by the `task-store` test helper,
   **never by `app/main.go`** — the server binary's dependency graph stays free of `sql-migrate`
-- **types/**: Shared type definitions (Location)
+- **types/**: Shared type definitions (`Location`, `TorrentState`), so `app/downloads` and `app/http` can
+  name what a torrent lookup returns without importing the download client
 - **observability/**: Structured logging (slog) with Loki backend and OpenTelemetry tracing setup
-- **utils/**: Shared utility functions (magnet link parsing, date parsing)
+- **utils/**: Shared utility functions (magnet link parsing, date parsing, `RedactURL` — masks the
+  api key / userinfo a source or tracker URL carries before it reaches a log, and returns a URL that
+  holds no credential verbatim so a clean one is not re-encoded for the reader)
 
 ### Migration runner (`/cmd/migrate`)
 Flagless one-shot binary: opens the database with `database.NewClient("tasks.db")` — the same `.db/<file>`
@@ -134,10 +183,12 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   and `ErrSchemaNotInitialised`
 - `database.Client.DB()` exposes the raw `*sql.DB`. It exists only so `migrations.Apply` can run on the
   connection the client opened; everything else goes through the retry-wrapped `Exec` / `Query` / `QueryRow`
-- Tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at`),
-  `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep), `watches` (saved
-  hunts: queries, sources, both regexes, `rev`, `seeded_at`, run state) and `watch_seen` (one row per
-  announced release, primary key `(watch_id, source, external_id)`)
+- Tables: `files` (tracked tasks, including `consecutive_failures` / `last_error` / `last_error_at` and
+  `notify`), `app_state` (key/value; `last_run_at` + `last_run_ok`, written by the cron sweep), `watches`
+  (saved hunts: queries, sources, both regexes, `rev`, `seeded_at`, run state), `watch_seen` (one row per
+  announced release, primary key `(watch_id, source, external_id)`) and `downloads` (one row per
+  `POST /api/downloads` made with `notify: true`, keyed by the id this service generates; `published_at`
+  NULL is the sweep's work queue)
 - `watch_seen` is a **table, not a JSON column** on `watches`: dedup is a point insert with
   conflict-ignore instead of read-modify-write, growth is bounded per release rather than per watch, and
   the `INSERT OR REPLACE` column-reset trap is structurally impossible. `watch-store` uses explicit
@@ -173,6 +224,12 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
 - `CreateOrReplace` is `INSERT OR REPLACE`, which SQLite executes as DELETE + INSERT: any column missing from
   its INSERT list silently resets to its DEFAULT on every save. `TestCreateOrReplacePreservesConsecutiveFailures`
   guards this. Sync outcomes use targeted `UPDATE`s (`RecordSyncSuccess` / `RecordSyncFailure`) instead
+- `files.notify` shares that trap and is guarded by `TestCreateOrReplacePreservesNotify`. The cron sweep
+  calls `CreateOrReplace` on every check of every tracked file, so the flag has to be held in **two**
+  places or it is cleared on the first tick after it is set: the column list and values of
+  `CreateOrReplace`, and the carry-over from the stored row into the freshly parsed metadata in
+  `processFileMetadata` — beside the one `Location` already has, but **unconditional**, because `notify`
+  has no sentinel value and a `!= ""`-style guard would wipe the flag on every file with an empty location
 - DB-backed tests go through `newTestRepo(t)` in `app/task-store/repository_test.go` — `database.openDB`
   resolves `.db/<file>` against the process CWD, so the helper does `t.Chdir(t.TempDir())` and then
   `migrations.Apply` before constructing the repository
@@ -250,6 +307,56 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   would crash-loop the container on every NATS restart); while disconnected `Publish` errors, so nothing
   is marked seen and the release is retried next cycle. An empty `NATS_URL` disables publishing the same
   way — a would-be publish is an error, never a silent success
+- Download and release-update notifications are **opt-in per request** (`"notify": true` on
+  `POST /api/downloads` and `POST /api/files`); a request without the flag behaves exactly as before and
+  writes no row. There are exactly two subjects: `tuclaw.downloads.completed.<download_id>` and
+  `tuclaw.releases.updated.<file_id>`. **Both terminal download outcomes publish on the `completed`
+  subject** — the one the HTTP response handed back — and are told apart only by `status`
+  (`completed` / `failed`). There is deliberately no `tuclaw.downloads.failed.*`: the agent arms a
+  one-shot event task on the single subject it was given, so a failure published anywhere else would
+  never fire it, which is the "event that never arrives" this feature exists to prevent. Message ids for
+  JetStream dedup are `<download_id>:<status>` and `<file_id>:<sha256 of the new magnet>`. On a tracked
+  file the flag lives on the `files` row and is *replaced* by every create — `CreateFromURL` assigns the
+  request's value unconditionally and `OnMessage` passes `false` — so a flagless re-`POST /api/files`, or
+  a Telegram re-post of the same URL, disarms it; there is no endpoint that toggles it. Only the
+  carry-over in `processFileMetadata` protects it during a sweep
+- The completion criterion lives in **one** function, `downloads.Classify`, called by both the sweep and
+  the HTTP duplicate path — a second copy is how one call site quietly ends up with `!= 0`. Failure rules
+  run first (`error` / `missingFiles`, or the hash absent from a lookup that *succeeded*), so a row that
+  classifies `failed` is never also `completed` however good its progress looks. Otherwise `completed`
+  needs `progress >= 1`, `completion_on > 0` (never `!= 0` — an unfinished torrent reports `-1`) and a
+  state outside the deny list `checkingUP` / `checkingResumeData` / `moving` / `allocating`. It is a
+  **deny list on purpose**: an allow list of "finished" states would silently stop firing on a state
+  qBittorrent adds later, and `moving` is excluded because `content_path` then still points at the
+  directory the files are leaving. A lookup that *errored* is never expressed as "not found" — that would
+  publish a false failure for every pending row — so a failed `TorrentStates` aborts the whole cycle
+- The download sweep reads `Pending()` first and returns **without calling qBittorrent at all** when it is
+  empty, so an idle tick costs one SQL query; otherwise it makes exactly one `TorrentStates` call for the
+  whole set and matches in memory. Ordering is **publish first, `MarkPublished` second**, the same rule
+  the watcher follows: a crash between the two costs one duplicate wake, the reverse loses the event
+  permanently and silently. One row's publish failure leaves that row unmarked for the next tick instead
+  of aborting the cycle
+- A duplicate add (`409`) is success, not failure: `types.ErrTorrentAlreadyExists` is returned **only**
+  when `errors.Is(err, qbt.ErrTorrentAddFailed)` *and* the message contains `conflicts detected`, because
+  that sentinel is also used for the 415 "torrent file not valid" case — over-matching it would report a
+  broken `.torrent` URL as a finished download. The handler resolves the hash (`ExtractBtihHash` for a
+  magnet, and only when `utils.IsInfoHash` accepts it — the same guard the client applies, since a
+  base32 hash names a torrent `torrents/info` never reports, so the caller would be told the download
+  failed and handed no subject; otherwise `NewestBySource`) and answers 200 with the current state inline. With `notify: true` an
+  already-complete duplicate gets its row written with `published_at` already set so the sweep skips it —
+  the caller was just told inline and must not be woken twice — and a `failed` one gets **no row at all**,
+  since the sweep would otherwise publish a failure on a subject the caller was never given. Only a
+  lookup that *succeeded* and did not list the hash may classify at all: an errored (or unwired) lookup
+  established nothing while the 409 proved the torrent is there, so it is left **undecided** and gets a
+  row and a subject like any unfinished duplicate — the same rule the sweep follows when it aborts the
+  cycle on a failed `TorrentStates`. Collapsing the error into "not found" would answer `200 ok` with no
+  subject and no row, leaving the caller waiting for the event this feature exists to guarantee
+- A release update publishes only when **all** hold: the sweep is the cron one (a human pressing refresh
+  must not wake the agent — the same rule the breaker and the run state follow), dry mode is off, the
+  magnet actually changed, `CreateDownloadTask` returned nil (so the revert path publishes nothing), and
+  the file id matches `^[A-Za-z0-9_-]+$`. That last check is not cosmetic: a dot or a space grows the
+  subject an extra token and stops matching the filter the agent armed, and Jackett file ids fall back to
+  a btih hash. A publish failure is logged and never aborts the sweep or the re-download
 - Degrade, not die — a missing `JACKETT_API_KEY` or an unconfigured FlareSolverr disables that source with
   a startup warning instead of failing the boot; a watcher cycle error is logged and the sweep continues,
   and only a job *registration* error is fatal
@@ -274,10 +381,11 @@ Environment variables (see compose.yaml):
 - `DRY_MODE`: Testing mode flag
 - `CRON`: update-sweep schedule, standard 5-field expression (default `0 * * * *`). `main.go` also derives the health staleness window from it (twice the longest gap among the next `staleRunSamples` firings, so a clustered schedule such as `0 9,10 * * *` is not judged by its 1h gap; `staleRunFallback` 2h + a WARN log when it cannot be parsed)
 - `WATCH_CRON`: watcher-sweep schedule, standard 5-field expression (default `20 * * * *` — offset from the files job at `0 * * * *` so the two never start together). `main.go` derives the watch health staleness window from it with the same `staleRunAfter` helper the files sweep uses (2× the longest gap among the next firings; 2h fallback + WARN when unparseable)
+- `DOWNLOAD_CRON`: download-sweep schedule, standard 5-field expression (default `*/10 * * * *`). Declared like `WATCH_CRON` — an empty value falls back to the constant. Ten minutes is a latency choice, not a load one: an idle tick costs one SQL query and no qBittorrent call, and the latency is noise against a download measured in tens of minutes
 - `JACKETT_URL`: Jackett instance base URL (optional, include API key in URL query string)
 - `JACKETT_API_KEY`: Jackett api key for the watcher's torznab search. `JACKETT_URL` carries no key, so without this the Jackett watch source is disabled with a startup warning
 - `JACKETT_PUBLIC_URL`: public Jackett base used to rewrite the scheme+host of a search result's download link (defaults to `JACKETT_URL`). Jackett emits its own *internal* base there, which would resolve nowhere at download time
-- `NATS_URL`: JetStream endpoint for watch notifications, e.g. `nats://nats:4222`. **Empty disables publishing** (warned once at startup); the service still starts and still runs cycles
+- `NATS_URL`: JetStream endpoint for watch, download and release-update notifications, e.g. `nats://nats:4222`. **Empty disables publishing** (warned once at startup); the service still starts and still runs cycles, but a request asking for `notify: true` is refused with 503 rather than accepted with an event that could never arrive
 - `FLARESOLVERR_URL`: FlareSolverr command endpoint including the `/v1` path (optional). Empty = RuTracker gets `blockedFetcher` **and the ext.to watch source is disabled** (it refreshes its cookie through the same solver); the service still starts
 - `OTEL_SERVICE_NAME`: OpenTelemetry service name (default: "magnet-feed-sync")
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP HTTP endpoint for trace export (optional, tracing disabled when empty)

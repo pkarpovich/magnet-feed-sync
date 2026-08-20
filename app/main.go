@@ -17,8 +17,11 @@ import (
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/database"
 	"magnet-feed-sync/app/download-client/qbittorrent"
+	downloadStore "magnet-feed-sync/app/download-store"
+	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/events"
 	"magnet-feed-sync/app/http"
+	"magnet-feed-sync/app/notify"
 	"magnet-feed-sync/app/observability"
 	"magnet-feed-sync/app/schedular"
 	taskStore "magnet-feed-sync/app/task-store"
@@ -119,13 +122,19 @@ func run(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create watch store: %w", err)
 	}
+	downloadRepo, err := downloadStore.NewRepository(db)
+	if err != nil {
+		return fmt.Errorf("failed to create download store: %w", err)
+	}
 
 	messagesForSend := make(chan string)
 
 	sources := watcherSources(cfg, pageSolver)
 
-	publisher := watcher.NewPublisher(watcher.PublisherOptions{URL: cfg.NatsURL})
-	defer publisher.Close()
+	notifier := notify.NewClient(notify.Options{URL: cfg.NatsURL})
+	defer notifier.Close()
+
+	publisher := watcher.NewPublisher(watcher.PublisherOptions{Transport: notifier})
 
 	engine := watcher.NewEngine(watcher.EngineDeps{
 		Sources:   sources.list,
@@ -134,11 +143,18 @@ func run(cfg *config.Config) error {
 		Messages:  messagesForSend,
 	})
 
+	sweeper := downloads.NewSweeper(downloads.SweeperDeps{
+		Store:    downloadRepo,
+		Torrents: dClient,
+		Notifier: notifier,
+	})
+
 	downloadTasksClient := downloadTasks.NewClient(&downloadTasks.ClientCtx{
 		Tracker:         t,
 		DClient:         dClient,
 		Store:           store,
 		Breaker:         breaker,
+		Notifier:        notifier,
 		DryMode:         cfg.DryMode,
 		MessagesForSend: messagesForSend,
 	})
@@ -154,6 +170,9 @@ func run(cfg *config.Config) error {
 		return fmt.Errorf("scheduler failed: %w", err)
 	}
 	if err := s.AddJob("watcher", cfg.WatchCron, func() { runWatchCycle(ctx, engine) }); err != nil {
+		return fmt.Errorf("scheduler failed: %w", err)
+	}
+	if err := s.AddJob("downloads", cfg.DownloadCron, func() { runDownloadCycle(ctx, sweeper) }); err != nil {
 		return fmt.Errorf("scheduler failed: %w", err)
 	}
 	s.Start()
@@ -176,6 +195,10 @@ func run(cfg *config.Config) error {
 		Store:            store,
 		TaskCreator:      downloadTasksClient,
 		DownloadClient:   dClient,
+		DownloadStore:    downloadRepo,
+		TorrentLookup:    dClient,
+		Notifier:         notifier,
+		DryMode:          cfg.DryMode,
 		Breaker:          breaker,
 		RunState:         store,
 		WatchStore:       watchRepo,
@@ -269,6 +292,12 @@ func watcherSources(cfg *config.Config, solver watchSolver) watchSourceSet {
 func runWatchCycle(ctx context.Context, engine *watcher.Engine) {
 	if err := engine.RunCycle(ctx); err != nil {
 		slog.ErrorContext(ctx, "watcher cycle failed", "error", err)
+	}
+}
+
+func runDownloadCycle(ctx context.Context, sweeper *downloads.Sweeper) {
+	if err := sweeper.RunCycle(ctx); err != nil {
+		slog.ErrorContext(ctx, "download cycle failed", "error", err)
 	}
 }
 

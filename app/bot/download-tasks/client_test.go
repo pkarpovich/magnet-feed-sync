@@ -3,8 +3,11 @@ package download_tasks
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -13,6 +16,8 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"magnet-feed-sync/app/bot"
+	"magnet-feed-sync/app/notify"
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
@@ -116,10 +121,11 @@ func (m *mockFileStore) SetLastRun(_ time.Time, ok bool) error {
 
 type mockDownloadClient struct {
 	createDownloadTaskFunc func(url, destination string) error
+	hash                   string
 }
 
-func (m *mockDownloadClient) CreateDownloadTask(url, destination string) error {
-	return m.createDownloadTaskFunc(url, destination)
+func (m *mockDownloadClient) CreateDownloadTask(url, destination string) (string, error) {
+	return m.hash, m.createDownloadTaskFunc(url, destination)
 }
 
 func (m *mockDownloadClient) SetLocation(taskID, location string) error {
@@ -153,9 +159,10 @@ func TestDownloadNow_DryMode_SkipsDownloadClient(t *testing.T) {
 		DryMode:         true,
 	})
 
-	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+	hash, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
 
 	require.NoError(t, err)
+	assert.Empty(t, hash, "dry mode adds no torrent, so there is no hash to report")
 	assert.False(t, downloadCalled, "download client should not be called in dry mode")
 }
 
@@ -163,6 +170,7 @@ func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
 	var gotURL, gotDestination string
 	callCount := 0
 	dClient := &mockDownloadClient{
+		hash: "474d1403945c0768506233481557516e7af8d136",
 		createDownloadTaskFunc: func(url, destination string) error {
 			callCount++
 			gotURL = url
@@ -178,9 +186,10 @@ func TestDownloadNow_ForwardsSourceAndLocation(t *testing.T) {
 	})
 
 	source := "https://jackett.example/dl/tpb/torrent.torrent?apikey=secret"
-	err := client.DownloadNow(context.Background(), source, "/downloads/movies")
+	hash, err := client.DownloadNow(context.Background(), source, "/downloads/movies")
 
 	require.NoError(t, err)
+	assert.Equal(t, "474d1403945c0768506233481557516e7af8d136", hash, "the add response hash is what identifies the row")
 	assert.Equal(t, 1, callCount, "download client should be called exactly once")
 	assert.Equal(t, source, gotURL, "source should be forwarded verbatim")
 	assert.Equal(t, "/downloads/movies", gotDestination, "location should be forwarded verbatim")
@@ -199,10 +208,30 @@ func TestDownloadNow_PropagatesError(t *testing.T) {
 		DryMode:         false,
 	})
 
-	err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+	_, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "qbittorrent unavailable")
+}
+
+// pins the intermediate state: a duplicate add is still an ordinary error here, which is what
+// makes POST /api/downloads answer 500 for it until task 6 resolves the duplicate instead
+func TestDownloadNow_PropagatesAlreadyExists(t *testing.T) {
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(url, destination string) error {
+			return fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)
+		},
+	}
+
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		DClient:         dClient,
+	})
+
+	_, err := client.DownloadNow(context.Background(), "magnet:?xt=urn:btih:abc123", "/downloads")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, types.ErrTorrentAlreadyExists))
 }
 
 func TestProcessFileMetadata_SameMagnetDifferentDate_NoRedownload(t *testing.T) {
@@ -1367,7 +1396,7 @@ func TestNotifyAgainAfterTaskRecreated(t *testing.T) {
 
 	// the user re-adds the url; the parse succeeds and the counters go back to zero
 	parseErr = nil
-	_, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=3304959", "/movies")
+	_, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=3304959", "/movies", false)
 	require.NoError(t, err)
 
 	parseErr = &providers.ProviderError{Kind: providers.KindBlocked, Err: fmt.Errorf("challenge")}
@@ -1876,4 +1905,324 @@ func TestCheckForUpdates_TaskFailureKeepsRunOk(t *testing.T) {
 
 	require.Equal(t, []bool{true}, store.runs)
 	require.Len(t, store.failureIds, 1)
+}
+
+type recordingNotifier struct {
+	messages []notify.Message
+	err      error
+}
+
+func (r *recordingNotifier) Publish(_ context.Context, m notify.Message) error {
+	r.messages = append(r.messages, m)
+	return r.err
+}
+
+const (
+	releaseOldMagnet = "magnet:?xt=urn:btih:abc123"
+	releaseNewMagnet = "magnet:?xt=urn:btih:def456"
+)
+
+type releaseScenario struct {
+	fileID       string
+	storedNotify bool
+	newMagnet    string
+	dryMode      bool
+	location     string
+	downloadErr  error
+}
+
+type releaseRun struct {
+	client   *Client
+	notifier *recordingNotifier
+	saved    func() *tracker.FileMetadata
+	stored   *tracker.FileMetadata
+}
+
+func newReleaseRun(s releaseScenario) releaseRun {
+	id := s.fileID
+	if id == "" {
+		id = "3304959"
+	}
+	newMagnet := s.newMagnet
+	if newMagnet == "" {
+		newMagnet = releaseNewMagnet
+	}
+
+	stored := &tracker.FileMetadata{
+		ID:               id,
+		OriginalUrl:      "https://rutracker.org/forum/viewtopic.php?t=" + id,
+		Magnet:           releaseOldMagnet,
+		Name:             "Test Torrent",
+		LastComment:      "old comment",
+		Location:         s.location,
+		Notify:           s.storedNotify,
+		TorrentUpdatedAt: time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC),
+	}
+
+	var saved *tracker.FileMetadata
+	store := &mockFileStore{
+		getByIdFunc: func(string) (*tracker.FileMetadata, error) { return stored, nil },
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			copied := *metadata
+			saved = &copied
+			return nil
+		},
+		getAllFunc: func() ([]*tracker.FileMetadata, error) {
+			return []*tracker.FileMetadata{stored}, nil
+		},
+	}
+
+	parser := &mockFileParser{
+		parseFunc: func(string, string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{
+				ID:               id,
+				OriginalUrl:      "https://rutracker.org/forum/viewtopic.php?t=" + id,
+				Magnet:           newMagnet,
+				Name:             "Test Torrent v2",
+				LastComment:      "new comment",
+				TorrentUpdatedAt: time.Date(2026, 3, 22, 12, 59, 0, 0, time.UTC),
+			}, nil
+		},
+	}
+
+	dClient := &mockDownloadClient{
+		createDownloadTaskFunc: func(string, string) error { return s.downloadErr },
+	}
+
+	notifier := &recordingNotifier{}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         dClient,
+		Store:           store,
+		Notifier:        notifier,
+		DryMode:         s.dryMode,
+	})
+
+	return releaseRun{
+		client:   client,
+		notifier: notifier,
+		saved:    func() *tracker.FileMetadata { return saved },
+		stored:   stored,
+	}
+}
+
+func TestPublishReleaseUpdate_MagnetUnchanged_NoEvent(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true, newMagnet: releaseOldMagnet})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	assert.Empty(t, run.notifier.messages)
+}
+
+func TestPublishReleaseUpdate_NotifyOff_NoEvent(t *testing.T) {
+	run := newReleaseRun(releaseScenario{})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	assert.Empty(t, run.notifier.messages)
+}
+
+func TestPublishReleaseUpdate_FromCron_PublishesOnce(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true, location: "/downloads/tv shows"})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	require.Len(t, run.notifier.messages, 1)
+	msg := run.notifier.messages[0]
+	assert.Equal(t, "tuclaw.releases.updated.3304959", msg.Subject)
+
+	digest := sha256.Sum256([]byte(releaseNewMagnet))
+	assert.Equal(t, "3304959:"+hex.EncodeToString(digest[:]), msg.MsgID)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, "3304959", payload["file_id"])
+	assert.Equal(t, "Test Torrent v2", payload["name"])
+	assert.Equal(t, "https://rutracker.org/forum/viewtopic.php?t=3304959", payload["page_url"])
+	assert.Equal(t, "new comment", payload["last_comment"])
+	assert.Equal(t, "/downloads/tv shows", payload["location"])
+	assert.Equal(t, "2026-03-22T12:59:00Z", payload["torrent_updated_at"])
+
+	updatedAt, err := time.Parse(time.RFC3339, payload["updated_at"].(string))
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), updatedAt, time.Minute)
+}
+
+func TestPublishReleaseUpdate_ManualRefresh_NoEvent(t *testing.T) {
+	t.Run("refresh all", func(t *testing.T) {
+		run := newReleaseRun(releaseScenario{storedNotify: true})
+
+		run.client.RefreshAll(context.Background())
+
+		assert.Empty(t, run.notifier.messages)
+	})
+
+	t.Run("single file refresh", func(t *testing.T) {
+		run := newReleaseRun(releaseScenario{storedNotify: true})
+
+		run.client.CheckFileForUpdates(context.Background(), "3304959")
+
+		assert.Empty(t, run.notifier.messages)
+	})
+}
+
+func TestPublishReleaseUpdate_DryMode_NoEvent(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true, dryMode: true})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	assert.Empty(t, run.notifier.messages)
+}
+
+func TestPublishReleaseUpdate_DownloadFailed_NoEvent(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true, downloadErr: fmt.Errorf("qbittorrent is down")})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	assert.Empty(t, run.notifier.messages)
+	require.NotNil(t, run.saved())
+	assert.Equal(t, releaseOldMagnet, run.saved().Magnet, "the revert must leave the stored magnet alone")
+}
+
+func TestPublishReleaseUpdate_InvalidSubjectToken_LogsAndSkips(t *testing.T) {
+	logs := captureLogs(t)
+	run := newReleaseRun(releaseScenario{storedNotify: true, fileID: "3304959.2"})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	assert.Empty(t, run.notifier.messages)
+
+	found := false
+	for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal(line, &entry))
+		if entry["msg"] == "file id is not a valid subject token, release update skipped" {
+			found = true
+			assert.Equal(t, "3304959.2", entry["id"])
+			assert.Equal(t, "ERROR", entry["level"])
+		}
+	}
+	assert.True(t, found, "an invalid subject token must be logged as an error")
+}
+
+func TestPublishReleaseUpdate_PublishError_DoesNotAbortSweep(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true})
+	run.notifier.err = fmt.Errorf("nats is unreachable")
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	require.Len(t, run.notifier.messages, 1)
+	require.NotNil(t, run.saved())
+	assert.Equal(t, releaseNewMagnet, run.saved().Magnet, "a publish failure must not revert the re-download")
+}
+
+func TestPublishReleaseUpdate_NilNotifier_NoPanic(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true})
+	run.client.notifier = nil
+
+	assert.NotPanics(t, func() {
+		run.client.processFileMetadata(context.Background(), run.stored, true)
+	})
+}
+
+func TestProcessFileMetadata_EmptyLocation_KeepsNotify(t *testing.T) {
+	run := newReleaseRun(releaseScenario{storedNotify: true})
+
+	run.client.processFileMetadata(context.Background(), run.stored, true)
+
+	require.NotNil(t, run.saved())
+	assert.True(t, run.saved().Notify, "an empty location must not clear the notify flag")
+}
+
+func TestCreateFromURL_CarriesNotifyFlag(t *testing.T) {
+	for _, notifyFlag := range []bool{true, false} {
+		t.Run(fmt.Sprintf("notify=%v", notifyFlag), func(t *testing.T) {
+			var saved *tracker.FileMetadata
+			store := &mockFileStore{
+				getByIdFunc: func(string) (*tracker.FileMetadata, error) { return nil, sql.ErrNoRows },
+				createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+					saved = metadata
+					return nil
+				},
+			}
+			parser := &mockFileParser{
+				parseFunc: func(string, string) (*tracker.FileMetadata, error) {
+					return &tracker.FileMetadata{ID: "1", Magnet: releaseNewMagnet}, nil
+				},
+			}
+			client := NewClient(&ClientCtx{
+				MessagesForSend: make(chan string, 10),
+				Tracker:         parser,
+				DClient:         &mockDownloadClient{createDownloadTaskFunc: func(string, string) error { return nil }},
+				Store:           store,
+			})
+
+			metadata, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", "", notifyFlag)
+
+			require.NoError(t, err)
+			assert.Equal(t, notifyFlag, metadata.Notify)
+			require.NotNil(t, saved)
+			assert.Equal(t, notifyFlag, saved.Notify)
+		})
+	}
+}
+
+func TestCreateFromURL_RePostTakesRequestFlagVerbatim(t *testing.T) {
+	existing := &tracker.FileMetadata{ID: "1", Magnet: releaseOldMagnet, Notify: true}
+
+	var saved *tracker.FileMetadata
+	store := &mockFileStore{
+		getByIdFunc: func(string) (*tracker.FileMetadata, error) { return existing, nil },
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			saved = metadata
+			return nil
+		},
+	}
+	parser := &mockFileParser{
+		parseFunc: func(string, string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: releaseNewMagnet}, nil
+		},
+	}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{createDownloadTaskFunc: func(string, string) error { return nil }},
+		Store:           store,
+	})
+
+	_, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", "", false)
+
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.False(t, saved.Notify, "a create takes the request's flag, it does not inherit the stored one")
+}
+
+func TestOnMessage_NeverArmsTheAgent(t *testing.T) {
+	var saved *tracker.FileMetadata
+	store := &mockFileStore{
+		getByIdFunc: func(string) (*tracker.FileMetadata, error) { return nil, sql.ErrNoRows },
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			saved = metadata
+			return nil
+		},
+	}
+	parser := &mockFileParser{
+		parseFunc: func(string, string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: releaseNewMagnet, Notify: true}, nil
+		},
+	}
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient:         &mockDownloadClient{createDownloadTaskFunc: func(string, string) error { return nil }},
+		Store:           store,
+	})
+
+	ok, _, err := client.OnMessage(context.Background(), bot.Message{Text: "https://rutracker.org/forum/viewtopic.php?t=1"}, "")
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, saved)
+	assert.False(t, saved.Notify)
 }

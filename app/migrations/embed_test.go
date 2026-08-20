@@ -93,12 +93,24 @@ func appliedIDs(t *testing.T, db *sql.DB) []string {
 	return ids
 }
 
+func assertDownloadsSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	require.True(t, hasTable(t, db, "downloads"))
+	assert.ElementsMatch(t, []string{
+		"id", "source", "location", "hash", "name", "content_path", "size",
+		"status", "reason", "created_at", "completed_at", "published_at",
+	}, columns(t, db, "downloads"))
+
+	assert.Contains(t, columns(t, db, "files"), "notify")
+}
+
 func TestApplyOnEmptyDatabase(t *testing.T) {
 	db := newTestDB(t)
 
 	applied, err := Apply(db)
 	require.NoError(t, err)
-	assert.Positive(t, applied)
+	assert.Equal(t, totalMigrations(t), applied)
 
 	names := columns(t, db, "files")
 	for _, name := range []string{"consecutive_failures", "last_error", "last_error_at", "last_comment", "location"} {
@@ -107,6 +119,7 @@ func TestApplyOnEmptyDatabase(t *testing.T) {
 	assert.NotContains(t, names, "rss_url")
 
 	assert.True(t, hasTable(t, db, "app_state"))
+	assertDownloadsSchema(t, db)
 }
 
 func TestApplyIsIdempotent(t *testing.T) {
@@ -192,6 +205,7 @@ func TestApplyAdoptsDatabaseCreatedByTheOldServer(t *testing.T) {
 	assert.Equal(t, totalMigrations(t)-legacyAdopted, applied)
 
 	assert.Len(t, appliedIDs(t, db), totalMigrations(t))
+	assertDownloadsSchema(t, db)
 
 	var title string
 	err = db.QueryRow("SELECT name FROM files WHERE id = ?", "id-1").Scan(&title)

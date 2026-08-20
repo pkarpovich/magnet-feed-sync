@@ -15,6 +15,22 @@ func ExtractBtihHash(magnet string) string {
 	return strings.ToLower(hash)
 }
 
+// IsInfoHash reports whether s is a 40-char hex infohash — the only form qbittorrent's
+// torrents/info reports, so a base32 magnet hash must never be matched against it
+func IsInfoHash(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+
+	return true
+}
+
 func ExtractXtParam(magnet string) string {
 	lower := strings.ToLower(magnet)
 	for _, prefix := range []string{"?xt=", "&xt="} {

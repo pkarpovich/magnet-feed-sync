@@ -248,3 +248,42 @@ func TestSetLastRunRoundTrips(t *testing.T) {
 	assert.True(t, second.Equal(at))
 	assert.False(t, ok)
 }
+
+func TestCreateOrReplacePreservesNotify(t *testing.T) {
+	repo := newTestRepo(t)
+
+	m := testMetadata()
+	m.Notify = true
+	require.NoError(t, repo.CreateOrReplace(m))
+
+	stored, err := repo.GetById(m.ID)
+	require.NoError(t, err)
+	require.True(t, stored.Notify)
+
+	stored.Location = "/downloads/movies"
+	require.NoError(t, repo.CreateOrReplace(stored))
+
+	reread, err := repo.GetById(m.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "/downloads/movies", reread.Location)
+	assert.True(t, reread.Notify, "notify must survive the INSERT OR REPLACE column reset")
+
+	all, err := repo.GetAll()
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	assert.True(t, all[0].Notify)
+}
+
+func TestNewRepositoryWithoutNotifyColumn(t *testing.T) {
+	db := newTestDB(t)
+
+	_, err := migrations.Apply(db.DB())
+	require.NoError(t, err)
+
+	_, err = db.Exec(`ALTER TABLE files DROP COLUMN notify`)
+	require.NoError(t, err)
+
+	_, err = NewRepository(db)
+	require.ErrorIs(t, err, ErrSchemaNotInitialised)
+	assert.Contains(t, err.Error(), "files.notify is missing")
+}

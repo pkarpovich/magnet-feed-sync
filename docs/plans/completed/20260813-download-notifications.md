@@ -374,6 +374,7 @@ POST /api/downloads, duplicate + hash known  200 {"status":"ok","duplicate":true
 POST /api/downloads, duplicate, hash known
   but absent from the lookup or lookup failed 200 {"status":"ok","duplicate":true,"hash":"<hash>",
                                                   "state":"unknown","completed":false}
+  (a lookup that *failed* also carries download_id + subject under notify - see the correction below)
 POST /api/downloads, duplicate + no hash     409 {"error":"torrent already present and its hash could not be resolved from the source"}
 POST /api/downloads, notify + NATS disabled  503 {"error":"notifications are not configured"}
 POST /api/downloads, notify + dry mode       503 {"error":"dry mode: no download is created, so no event can be published"}
@@ -389,13 +390,26 @@ A duplicate reported with `notify: true` is resolved by all three `Classify` out
 |---|---|---|
 | empty status - still downloading | yes, unpublished | **yes** - an event is genuinely coming |
 | `completed` | yes, with terminal outcome and `published_at` set to now | **no** |
-| `failed`, or hash absent from the lookup, or the lookup errored | **no row** | **no** |
+| `failed`, or hash absent from a lookup that succeeded | **no row** | **no** |
+| the lookup **errored**, or is not wired | yes, unpublished | **yes** - see the correction below |
 
 The rule behind all three: a `download_id` and a subject are handed back only when something will
 actually be published there, and a row is written only when the sweep still has work to do. Writing
 a row for a `failed` duplicate would make the sweep publish a failure on a subject the caller was
 never given - the same broken promise the 503 rules exist to prevent - while the 200 body already
 tells the caller the state inline.
+
+**Correction, applied during review.** The row above for an errored lookup replaces this plan's
+original rule, which lumped "lookup errored" in with "hash absent from the lookup" and gave both no
+row and no subject (see also the response block above, and task 9's checklist). That was wrong for
+the same reason the sweep aborts its cycle on a failed `TorrentStates` instead of reading an empty
+map as "everything was deleted by hand": a lookup that errored established *nothing*, while the 409
+just proved the torrent is present. Answering it as a terminal failure returned `200 ok` with no
+subject and no row, so a `notify: true` caller was told success and then waited forever - the
+"event that never arrives" this feature exists to prevent. An errored or unwired lookup is now left
+undecided: the body still reports `state: "unknown"`, and with `notify: true` the row is written and
+the subject handed back, so the sweep publishes the real outcome on its next tick. Only a lookup
+that *succeeded* and did not list the hash still classifies as `failed`.
 
 Every timestamp in every payload and response this plan introduces is RFC3339 UTC, produced by
 explicit formatting rather than by marshalling a `time.Time` as-is. `torrent_updated_at` is the
@@ -590,37 +604,37 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Modify: `app/main.go`
 - Modify: `app/main_test.go`
 
-- [ ] create `app/notify` holding the connect logic, the JetStream adapter and the message type
+- [x] create `app/notify` holding the connect logic, the JetStream adapter and the message type
       currently private to `app/watcher/publisher.go`: `NewClient(Options{URL string}) *Client`,
       `Publish(ctx context.Context, m Message) error`, `Enabled() bool`, `Close()`, and exported
       `ErrDisabled`
-- [ ] preserve today's semantics exactly: an empty URL warns once and disables publishing, a failed
+- [x] preserve today's semantics exactly: an empty URL warns once and disables publishing, a failed
       connect logs an error and returns a disabled client, and `Publish` on a disabled client
       returns `ErrDisabled` rather than a silent success
-- [ ] change `watcher.NewPublisher` to take the transport instead of a URL:
+- [x] change `watcher.NewPublisher` to take the transport instead of a URL:
       `PublisherOptions{Transport publisherTransport}` where `publisherTransport` is
       `interface{ Publish(ctx context.Context, m notify.Message) error }`. Delete the dial code, the
       `URL` field and `Publisher.Close()` from `app/watcher` - `main.go` owns and closes the single
       connection. Keep `payload`, the trimming loop and `messageID` byte-identical
-- [ ] keep the existing unexported `jetStream` seam and its `natsMessage` type inside `app/watcher`,
+- [x] keep the existing unexported `jetStream` seam and its `natsMessage` type inside `app/watcher`,
       with a small adapter mapping `natsMessage` to `notify.Message`, so the fake substituted by
       `TestPublisherPayloadFields`, `TestPublisherSubjectAndMessageID` and
       `TestPublisherReturnsStreamError` keeps working untouched
-- [ ] move the three URL-driven tests - `TestPublisherDisabledWithoutURL`,
+- [x] move the three URL-driven tests - `TestPublisherDisabledWithoutURL`,
       `TestNewPublisherSurvivesUnreachableNats`, `TestNewPublisherSurvivesInvalidURL` - from
       `app/watcher/publisher_test.go` to `app/notify/client_test.go`, retargeted at `notify.Client`
       and `ErrDisabled`. Delete `errPublisherDisabled` from `app/watcher` and add one new test there,
       `TestPublisherForwardsDisabledTransport`: a transport stub returning `notify.ErrDisabled` makes
       `Publisher.Publish` return an error satisfying `errors.Is(err, notify.ErrDisabled)`
-- [ ] retarget `TestDegradedNoNATS` in `app/main_test.go`, which today calls
+- [x] retarget `TestDegradedNoNATS` in `app/main_test.go`, which today calls
       `watcher.NewPublisher(watcher.PublisherOptions{URL: ""})` and `t.Cleanup(publisher.Close)` -
       both of which this task deletes. Point it at a disabled `notify.Client` instead; without this
       edit package `main` does not compile and this task's own gate cannot pass
-- [ ] update `app/main.go` to build the `notify.Client` once, hand it to the watcher publisher, and
+- [x] update `app/main.go` to build the `notify.Client` once, hand it to the watcher publisher, and
       `defer` its `Close`
-- [ ] write tests for `notify.Client`: disabled when the URL is empty, `Publish` forwards subject,
+- [x] write tests for `notify.Client`: disabled when the URL is empty, `Publish` forwards subject,
       message id and payload to the JetStream layer, `Enabled` reflects both states
-- [ ] run `go test ./... -race` - must pass before task 2
+- [x] run `go test ./... -race` - must pass before task 2
 
 ### Task 2: Migration for `downloads` and `files.notify`
 
@@ -628,20 +642,20 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Create: `app/migrations/20260813120000-add-downloads.sql`
 - Modify: `app/migrations/embed_test.go`
 
-- [ ] add the migration exactly as written in Technical Details -> Schema, Up and Down. It is the
+- [x] add the migration exactly as written in Technical Details -> Schema, Up and Down. It is the
       eighth in `app/migrations/`, so `Apply` on an empty database now reports **8**
-- [ ] extend `app/migrations/embed_test.go`: after `Apply` on a fresh database, `PRAGMA
+- [x] extend `app/migrations/embed_test.go`: after `Apply` on a fresh database, `PRAGMA
       table_info(downloads)` lists all twelve columns of the new table and `PRAGMA table_info(files)`
       contains `notify`
-- [ ] extend `TestApplyAdoptsDatabaseCreatedByTheOldServer` in `app/migrations/embed_test.go` - the
+- [x] extend `TestApplyAdoptsDatabaseCreatedByTheOldServer` in `app/migrations/embed_test.go` - the
       case seeded by `seedLegacyServerSchema`, a `files` table with no `gorp_migrations`, which is
       what production looked like before the migration runner existed - with the same two
       assertions, so adoption plus the new migration is proven on the shape production actually has.
       Adjust whatever migration-count bookkeeping the adoption tests share. Do not touch
       `app/migrations/isolation_test.go`; it holds only the linker-isolation test
-- [ ] confirm the runner end to end: from an empty temp directory, `go run ./cmd/migrate` applies 8
+- [x] confirm the runner end to end: from an empty temp directory, `go run ./cmd/migrate` applies 8
       and an immediate second run applies 0
-- [ ] run `go test ./... -race` - must pass before task 3
+- [x] run `go test ./... -race` - must pass before task 3
 
 ### Task 3: `app/downloads` domain type and `app/download-store` repository
 
@@ -654,29 +668,29 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Create: `app/download-store/repository.go`
 - Create: `app/download-store/repository_test.go`
 
-- [ ] define `downloads.Download` with the fields of the table (id, source, location, hash, name,
+- [x] define `downloads.Download` with the fields of the table (id, source, location, hash, name,
       content path, size, status, reason, created/completed/published timestamps), plus
       `Classification` as defined in Technical Details and `Outcome` as spelled out in the query
       surface below
-- [ ] define the single classifier `Classify(s types.TorrentState, found bool) Classification` here,
+- [x] define the single classifier `Classify(s types.TorrentState, found bool) Classification` here,
       so the sweep and the HTTP duplicate path share one implementation of the rule; an empty
       `Status` means nothing terminal yet
-- [ ] `Classify` never matches a state against a list of known ones. It applies the deny list from
+- [x] `Classify` never matches a state against a list of known ones. It applies the deny list from
       the criterion, so a state qBittorrent introduces later, carrying `progress >= 1` and a real
       `completion_on`, still classifies as `completed` - that is the entire point of a deny list,
       and an unrecognised-state branch would reintroduce exactly the silent stall it avoids
-- [ ] test `Classify` with a table that enumerates **all 21 states** from the Verified Facts
+- [x] test `Classify` with a table that enumerates **all 21 states** from the Verified Facts
       vocabulary, declared as a package-level `knownTorrentStates []string` in `app/downloads` so
       the list is code rather than prose. Assert `len(knownTorrentStates) == 21`, and cover each
       state twice - once with `progress 1 / completion_on > 0`, once with `progress 0 /
       completion_on -1` - against the outcome the criterion table prescribes, plus `found == false`
       for any state. Add one case for a state string absent from the vocabulary, asserting it
       behaves like the last table row rather than being swallowed
-- [ ] implement `Repository` following `app/watch-store/repository.go`: `NewRepository(db)` verifies
+- [x] implement `Repository` following `app/watch-store/repository.go`: `NewRepository(db)` verifies
       the table exists **and then** each required column, returning `ErrSchemaNotInitialised`;
       `PRAGMA table_info` on a missing table returns no rows and no error, so the table check must
       come first
-- [ ] implement exactly this query surface, which is what tasks 5-10 call:
+- [x] implement exactly this query surface, which is what tasks 5-10 call:
       `Create(d *downloads.Download) error`;
       `Pending() ([]*downloads.Download, error)` - `published_at IS NULL`, oldest first;
       `MarkPublished(id string, o downloads.Outcome) error` with
@@ -689,12 +703,12 @@ Each consumer declares its own narrow interface over it rather than taking `*not
       `NewestBySource(source string) (*downloads.Download, error)` - newest `created_at`, any
       status, used only to resolve a duplicate add;
       `CountPending() (int, error)`
-- [ ] make `MarkPublished` carry `WHERE id = ? AND published_at IS NULL`, so a repeat after a
+- [x] make `MarkPublished` carry `WHERE id = ? AND published_at IS NULL`, so a repeat after a
       crash-retry is a no-op that reports no error - this is what makes publish-then-mark safe to
       run twice. It writes `status`, `reason`, `name`, `content_path`, `size`, `completed_at` and
       `published_at` in that single statement
-- [ ] use explicit `UPDATE`s for outcome writes - never `INSERT OR REPLACE`
-- [ ] write tests through the `newTestRepo(t)` pattern (`t.Chdir(t.TempDir())` + `migrations.Apply`):
+- [x] use explicit `UPDATE`s for outcome writes - never `INSERT OR REPLACE`
+- [x] write tests through the `newTestRepo(t)` pattern (`t.Chdir(t.TempDir())` + `migrations.Apply`):
       round-trip a row; `Pending` excludes published rows and orders oldest first; a second
       `MarkPublished` on the same id changes nothing and returns nil; `NewestBySource` picks the
       newest of three rows sharing a source **created within the same second**, which is what the
@@ -702,7 +716,7 @@ Each consumer declares its own narrow interface over it rather than taking `*not
       a database
       missing the `downloads` table and one missing a single column both return
       `ErrSchemaNotInitialised`
-- [ ] run `go test ./... -race` - must pass before task 4
+- [x] run `go test ./... -race` - must pass before task 4
 
 ### Task 4: qBittorrent client returns the hash and reports duplicates
 
@@ -714,32 +728,35 @@ Each consumer declares its own narrow interface over it rather than taking `*not
 - Modify: `app/bot/download-tasks/client_test.go` (its `mockDownloadClient` must match the new
   signature or the package stops compiling)
 
-- [ ] change `CreateDownloadTask(url, destination string) error` to
+- [x] change `CreateDownloadTask(url, destination string) error` to
       `CreateDownloadTask(url, destination string) (string, error)`, returning
       `TorrentAddResponse.AddedTorrentIds[0]`; when that slice comes back empty, fall back to
       `utils.ExtractBtihHash` for a `magnet:` source and otherwise return an explicit error - a row
       whose torrent we cannot identify later must never be created
-- [ ] add `types.ErrTorrentAlreadyExists` beside `ErrTorrentNotFound`, and return it **only** when
+- [x] add `types.ErrTorrentAlreadyExists` beside `ErrTorrentNotFound`, and return it **only** when
       `errors.Is(err, qbt.ErrTorrentAddFailed)` and the message contains `conflicts detected`. Every
       other `ErrTorrentAddFailed` - notably the 415 "torrent file not valid" case that shares the
       sentinel, see Verified Facts - is returned as an ordinary failure
-- [ ] add `TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error)`
+- [x] add `TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error)`
       using `qbt.GetTorrentsCtx` with `TorrentFilterOptions{Hashes: hashes}`, keyed by hash. A hash
       qBittorrent does not know must be **absent from the map** - never a zero-valued entry, because
       absence is what task 7 reads as "deleted by hand"
-- [ ] update the `DownloadClient` interface in `app/bot/download-tasks/client.go` and its call sites
+- [x] update the `DownloadClient` interface in `app/bot/download-tasks/client.go` and its call sites
       for the new signature. In this task the callers assign the hash to `_` and behaviour is
       unchanged. Do not pre-implement task 6: after this task a duplicate add must **still** answer
       500, which is asserted by a test here that task 6 then flips - that assertion, not a diff
       against an unnamed baseline, is what pins the intermediate state, and a reviewer must not flag
       the still-500 duplicate as a defect
-- [ ] write tests against an `httptest.Server` serving the bodies recorded in Verified Facts:
+      (`TestDownloadNow_PropagatesAlreadyExists` in `app/bot/download-tasks/client_test.go` pins it:
+      a duplicate stays an error out of `DownloadNow`, and the handler turns every such error into
+      500)
+- [x] write tests against an `httptest.Server` serving the bodies recorded in Verified Facts:
       JSON add response -> hash returned; JSON add response with an empty `added_torrent_ids` +
       magnet -> btih fallback; same + `.torrent` URL -> explicit error; 409 `Conflict` ->
       `ErrTorrentAlreadyExists`; **415 -> not `ErrTorrentAlreadyExists`**; `torrents/info` completed
       and unfinished entries -> all seven `TorrentState` fields populated; a requested hash missing
       from the response -> missing from the map
-- [ ] run `go test ./... -race` - must pass before task 5
+- [x] run `go test ./... -race` - must pass before task 5
 
 ### Task 5: `notify` flag on `POST /api/downloads`
 
@@ -768,24 +785,24 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
   an empty hash also arises from a qBittorrent response without ids, and conflating the two would
   make a real failure look like dry mode.
 
-- [ ] add optional `notify` to the request body; when it is absent or false the handler responds
+- [x] add optional `notify` to the request body; when it is absent or false the handler responds
       `201` with body exactly `{"status":"ok"}`, inserts no `downloads` row, and makes no notifier
       call - asserted, not asserted-about
-- [ ] when true and `Notifier.Enabled()` is false, or `DryMode` is set, answer `503` with the body
+- [x] when true and `Notifier.Enabled()` is false, or `DryMode` is set, answer `503` with the body
       fixed under "Subjects and payloads" **before** touching qBittorrent: a promised event nobody
       can deliver must be refused, not accepted
-- [ ] when true, generate the 16-char hex `download_id` (8 random bytes), add the torrent, record
+- [x] when true, generate the 16-char hex `download_id` (8 random bytes), add the torrent, record
       the row with the returned hash, and answer the `notify` body fixed under "Subjects and
       payloads"
-- [ ] dry mode: `DownloadNow` keeps its short-circuit and returns an empty hash with a nil error;
+- [x] dry mode: `DownloadNow` keeps its short-circuit and returns an empty hash with a nil error;
       the handler refuses `notify: true` on the `DryMode` field above and records no row. There is
       no torrent to ever complete, so an id would be a promise that cannot be kept
-- [ ] write handler tests asserting the **full decoded body**, not just the status: flag absent ->
+- [x] write handler tests asserting the **full decoded body**, not just the status: flag absent ->
       `201 {"status":"ok"}`, `SELECT COUNT(*) FROM downloads` is 0, recorder saw no publish; flag
       true + notifier disabled -> 503 with the fixed error body, no row; flag true + dry mode -> 503
       with its fixed error body, no row; flag true -> row created carrying the hash and the response
       body matches the fixed shape; add failure -> 500, no row
-- [ ] run `go test ./... -race` - must pass before task 6
+- [x] run `go test ./... -race` - must pass before task 6
 
 ### Task 6: Treat an already-present torrent as success
 
@@ -794,33 +811,35 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/http/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] on `types.ErrTorrentAlreadyExists` from task 4, resolve the hash: `ExtractBtihHash` for a
+- [x] on `types.ErrTorrentAlreadyExists` from task 4, resolve the hash: `ExtractBtihHash` for a
       magnet source, otherwise `NewestBySource` from the download store
-- [ ] declare a third consumer-side interface in `app/http` -
+- [x] declare a third consumer-side interface in `app/http` -
       `torrentLookup{ TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) }` -
       give `ClientCtx` a `TorrentLookup` field, and pass the existing qBittorrent client into it
       from `main.go`. Without this the handler tests pass with a fake while production nil-panics on
       the first 409
-- [ ] answer `200` with the duplicate body fixed under "Subjects and payloads", deciding `completed`
+- [x] answer `200` with the duplicate body fixed under "Subjects and payloads", deciding `completed`
       with `downloads.Classify` - never a second copy of the rule. When the hash is not in the
       returned map, or the lookup errors, use the `state: "unknown"` body from that same block
-- [ ] with `notify: true`, follow the three-outcome table under "Subjects and payloads" exactly:
+- [x] with `notify: true`, follow the three-outcome table under "Subjects and payloads" exactly:
       empty status -> row unpublished, body carries `download_id` and `subject`; `completed` -> row
       with its terminal outcome and `published_at` set to now, no id and no subject, so the sweep
       publishes nothing and the caller is not woken twice for what it was just told; `failed` (or
-      hash absent, or lookup error) -> **no row at all**, no id and no subject
-- [ ] when the hash cannot be resolved at all, answer `409` with the reason body - never the old
+      hash absent from a lookup that succeeded) -> **no row at all**, no id and no subject. A lookup
+      that *errored* is undecided, not `failed` - see the correction under "Subjects and payloads"
+- [x] when the hash cannot be resolved at all, answer `409` with the reason body - never the old
       blanket 500
-- [ ] write tests for every branch: `notify: false` duplicate (answered 500 both before this plan
+- [x] write tests for every branch: `notify: false` duplicate (answered 500 both before this plan
       and after task 4) -> 200 with the duplicate body and no row; `notify: true` duplicate still
       downloading -> row written with `published_at` NULL and returned by `Pending()`; `notify: true`
       duplicate already complete -> row with `published_at` non-NULL, `status` and `completed_at`
       set, **not** returned by `Pending()`, and a body carrying `"completed": true` with **no**
       `download_id` and no `subject`; `notify: true` duplicate in state `error` -> **no row** and no
       subject; `notify: true` duplicate whose hash is absent from the lookup -> the
-      `state: "unknown"` body, no row, no subject; unresolvable duplicate -> 409; a 415 add failure
+      `state: "unknown"` body, no row, no subject; `notify: true` duplicate whose lookup **errored**
+      -> the `state: "unknown"` body **with** a row and a subject; unresolvable duplicate -> 409; a 415 add failure
       -> still 500, proving the sentinel is not over-matched
-- [ ] run `go test ./... -race` - must pass before task 7
+- [x] run `go test ./... -race` - must pass before task 7
 
 ### Task 7: The download sweep
 
@@ -828,35 +847,35 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Create: `app/downloads/sweeper.go`
 - Create: `app/downloads/sweeper_test.go`
 
-- [ ] implement `Sweeper` with `RunCycle(ctx) error`, built from a deps struct carrying the store,
+- [x] implement `Sweeper` with `RunCycle(ctx) error`, built from a deps struct carrying the store,
       the torrent lookup (`TorrentStates`) and the notifier (`Publish`), each behind a
       consumer-side interface declared in this package
-- [ ] read `Pending()` first and **return without calling qBittorrent at all** when it is empty;
+- [x] read `Pending()` first and **return without calling qBittorrent at all** when it is empty;
       otherwise make exactly one `TorrentStates(ctx, hashes)` call for the whole set and match in
       memory. Propagate `ctx` into that call - the lookup is context-aware for this reason
-- [ ] a failed `TorrentStates` call aborts the cycle: log, return the error, publish nothing, mark
+- [x] a failed `TorrentStates` call aborts the cycle: log, return the error, publish nothing, mark
       nothing, retry on the next tick. Proceeding with an empty map would read as "every torrent was
       deleted by hand" and publish a false `failed` for every pending row, then mark them published
       - losing every real completion permanently
-- [ ] classify each row with `downloads.Classify` from task 3 - the sweep does not re-derive the
+- [x] classify each row with `downloads.Classify` from task 3 - the sweep does not re-derive the
       rule; build the payload from the fields listed under "Subjects and payloads"; publish both
       outcomes on `tuclaw.downloads.completed.<download_id>`, and only afterwards call
       `MarkPublished` - never the reverse
-- [ ] honour context cancellation between rows so shutdown mid-sweep publishes nothing by halves,
+- [x] honour context cancellation between rows so shutdown mid-sweep publishes nothing by halves,
       and let a single row's publish failure leave that row unmarked for the next tick instead of
       aborting the cycle
-- [ ] write sweep-level tests over `knownTorrentStates` (the classifier's own 21-state table is
+- [x] write sweep-level tests over `knownTorrentStates` (the classifier's own 21-state table is
       tested in task 3): a state that classifies terminal publishes exactly one message and marks
       the row; one that does not publishes nothing and leaves the row pending
-- [ ] write tests for the ordering guarantee: a publisher error leaves `published_at` empty and the
+- [x] write tests for the ordering guarantee: a publisher error leaves `published_at` empty and the
       next cycle retries; a successful publish marks the row and the next cycle publishes nothing;
       a row seeded already-published (what task 6 writes for an already-complete duplicate) is never
       picked up; a lookup error publishes nothing, marks nothing, and leaves every row pending
-- [ ] assert the exact subject, message id and payload of both event kinds - including that the
+- [x] assert the exact subject, message id and payload of both event kinds - including that the
       **failed** event goes to `tuclaw.downloads.completed.<download_id>` and not to any
       failure-specific subject, the three literal `reason` strings, and that `completed_at` equals
       `completion_on` converted to RFC3339 UTC on success while a failure carries the sweep clock
-- [ ] run `go test ./... -race` - must pass before task 8
+- [x] run `go test ./... -race` - must pass before task 8
 
 ### Task 8: `notify` flag on tracked files and the release-update event
 
@@ -871,46 +890,46 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/bot/download-tasks/client_test.go`
 - Modify: `app/main.go`
 
-- [ ] add `Notify` to `tracker.FileMetadata`, to `CreateOrReplace`'s column list and values, and to
+- [x] add `Notify` to `tracker.FileMetadata`, to `CreateOrReplace`'s column list and values, and to
       the row scan; add `notify` to the store's required columns
-- [ ] carry `Notify` from the stored row into the freshly parsed metadata in `processFileMetadata`,
+- [x] carry `Notify` from the stored row into the freshly parsed metadata in `processFileMetadata`,
       immediately after the `if current.Location != ""` block and **outside** it (locate it by that
       code, not by a line number - earlier tasks have already edited this file). The assignment is
       unconditional: `notify` has no sentinel value, so guarding it the way `Location` is guarded
       would silently clear the flag for every tracked file with an empty location. Without the
       carry-over at all, the flag is wiped on the first sweep
-- [ ] widen `CreateFromURL(ctx, url, location string, notify bool)`; the Telegram path (`OnMessage`)
+- [x] widen `CreateFromURL(ctx, url, location string, notify bool)`; the Telegram path (`OnMessage`)
       passes `false` explicitly, since a message from a human must never arm the agent. A re-post of
       an already-tracked URL takes the request's flag verbatim - a create is a create - which is
       worth a test of its own so the behaviour is pinned rather than accidental
-- [ ] accept optional `notify` on `POST /api/files`, defaulting to false, and add `"notify"` to
+- [x] accept optional `notify` on `POST /api/files`, defaulting to false, and add `"notify"` to
       `FileMetadataResponse` - which `GET /api/files` shares through `toResponse`, and which the
       backward-compatibility bar allows as an additive key
-- [ ] `POST /api/files` with `notify: true` and the notifier disabled answers the same `503` as
+- [x] `POST /api/files` with `notify: true` and the notifier disabled answers the same `503` as
       `/api/downloads`. Dry mode is **not** a refusal here, unlike `/api/downloads`: the tracked row
       outlives the dry run and the flag becomes live at the next real sweep, so nothing is promised
       that cannot be delivered
-- [ ] give `downloadTasks.ClientCtx` a `Notifier` field over a consumer-side interface
+- [x] give `downloadTasks.ClientCtx` a `Notifier` field over a consumer-side interface
       `interface{ Publish(ctx context.Context, m notify.Message) error }` declared in
       `app/bot/download-tasks`; `main.go` passes the same `notify.Client` the watcher publisher and
       the sweeper use. A nil notifier is a no-op, never a panic
-- [ ] publish `tuclaw.releases.updated.<file_id>` from `processFileMetadata` under **all** of these
+- [x] publish `tuclaw.releases.updated.<file_id>` from `processFileMetadata` under **all** of these
       conditions, and no others: `fromCron` is true (a human pressing refresh must not wake the
       agent - the same rule the breaker and the run state already follow), dry mode is off, the
       magnet actually changed, `CreateDownloadTask` returned nil (so the revert path publishes
       nothing), and the file id matches `^[A-Za-z0-9_-]+$`. A publish failure is logged and never
       aborts the sweep or the re-download
-- [ ] add `TestCreateOrReplacePreservesNotify` beside the existing counter-preservation test
-- [ ] write tests: magnet unchanged -> no event; magnet changed with the flag off -> no event; flag
+- [x] add `TestCreateOrReplacePreservesNotify` beside the existing counter-preservation test
+- [x] write tests: magnet unchanged -> no event; magnet changed with the flag off -> no event; flag
       on via cron -> exactly one event with the documented payload; **flag on via `RefreshAll` or
       `CheckFileForUpdates` -> no event**; dry mode -> no event; re-download failed and metadata
       reverted -> no event; a file id containing a dot -> no publish and an error logged; a tracked
       file with an **empty location** and `notify` set still has `notify` after a sweep
-- [ ] write handler tests in `app/http/client_test.go`: `POST /api/files` with `notify: true` and a
+- [x] write handler tests in `app/http/client_test.go`: `POST /api/files` with `notify: true` and a
       disabled notifier -> 503 with the fixed body and no `CreateFromURL` call; with an enabled
       notifier -> the flag reaches `CreateFromURL` and the decoded body carries `"notify": true`;
       without the flag -> `"notify": false`; `GET /api/files` carries the key through `toResponse`
-- [ ] run `go test ./... -race` - must pass before task 9
+- [x] run `go test ./... -race` - must pass before task 9
 
 ### Task 9: Configuration and wiring
 
@@ -920,14 +939,14 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/main.go`
 - Modify: `compose.yaml`
 
-- [ ] add `DOWNLOAD_CRON` with default `*/10 * * * *`, following how `WATCH_CRON` is declared and
+- [x] add `DOWNLOAD_CRON` with default `*/10 * * * *`, following how `WATCH_CRON` is declared and
       defaulted (an empty value falls back to the constant, rather than an `env-default` tag)
-- [ ] construct the sweeper in `main.go` from the store, the qBittorrent client and the
+- [x] construct the sweeper in `main.go` from the store, the qBittorrent client and the
       `notify.Client` already built in earlier tasks, and register a third job named `downloads`
       beside `files` and `watcher`; a failed registration must remain a boot failure
-- [ ] add `DOWNLOAD_CRON` to `compose.yaml` alongside the other cron variables
-- [ ] write a config test asserting the default and an explicit override
-- [ ] run `go test ./... -race` - must pass before task 10
+- [x] add `DOWNLOAD_CRON` to `compose.yaml` alongside the other cron variables
+- [x] write a config test asserting the default and an explicit override
+- [x] run `go test ./... -race` - must pass before task 10
 
 ### Task 10: Health reporting
 
@@ -935,42 +954,42 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `app/http/client.go`
 - Modify: `app/http/client_test.go`
 
-- [ ] add exactly `"downloads": {"pending": <int>}` to `GET /api/health`, where `pending` is
+- [x] add exactly `"downloads": {"pending": <int>}` to `GET /api/health`, where `pending` is
       `CountPending()`. No other keys
-- [ ] follow the shape `watches` already uses: a `*downloadsHealth` field with `json:"...,omitempty"`,
+- [x] follow the shape `watches` already uses: a `*downloadsHealth` field with `json:"...,omitempty"`,
       so a nil store omits the key instead of panicking. This is not cosmetic - `app/http/client_test.go`
       builds 25 ad-hoc `ClientCtx` literals, most of which will not set the new field. A
       `CountPending` error logs and omits the key
-- [ ] leave the existing `status` derivation untouched: a pending download is normal operation, not
+- [x] leave the existing `status` derivation untouched: a pending download is normal operation, not
       degradation
-- [ ] write tests asserting the full decoded `downloads` object for 0 and 2 pending rows, that the
+- [x] write tests asserting the full decoded `downloads` object for 0 and 2 pending rows, that the
       key is absent when the store is nil, and that the top-level `status` string is unchanged in
       every case
-- [ ] run `go test ./... -race` - must pass before task 11
+- [x] run `go test ./... -race` - must pass before task 11
 
 ### Task 11: Verify acceptance criteria
 
 **Files:**
 - Create: `app/downloads/acceptance_test.go`
 
-- [ ] add `TestAcceptanceMagnetNotifyToCompletedEvent` in `app/downloads/acceptance_test.go`,
+- [x] add `TestAcceptanceMagnetNotifyToCompletedEvent` in `app/downloads/acceptance_test.go`,
       declared as **`package downloads_test`** - an in-package test cannot import `app/http`, which
       itself imports `app/downloads`, and the cycle would not build. Post a magnet with
       `notify: true` through the handler, assert one `downloads` row and a 16-hex `download_id` in
       the response; serve the completed `torrents/info` fixture from Verified Facts; run one cycle
       and assert the recorder captured exactly one message, on
       `tuclaw.downloads.completed.<download_id>`, whose `content_path` equals the fixture path
-- [ ] establish the baseline as the first of these that resolves:
+- [x] establish the baseline as the first of these that resolves:
       `git log --format=%H --diff-filter=A -- docs/plans/20260813-download-notifications.md | tail -1`,
       then `git merge-base origin/master HEAD`, then the oldest commit on this branch absent from
       `master`
-- [ ] stage this task's own new file first (`git add -A`), then
+- [x] stage this task's own new file first (`git add -A`), then
       `git diff --cached <baseline> --name-only --diff-filter=A -- '*_test.go'` must list exactly:
       `app/notify/client_test.go`, `app/downloads/download_test.go`, `app/downloads/sweeper_test.go`,
       `app/download-store/repository_test.go`, `app/downloads/acceptance_test.go`. A plain
       `<baseline>..HEAD` diff cannot see the acceptance test this task just wrote, and would fail
       with four entries
-- [ ] `git diff --cached <baseline> --name-only --diff-filter=M -- '*_test.go'` must list only these,
+- [x] `git diff --cached <baseline> --name-only --diff-filter=M -- '*_test.go'` must list only these,
       for these reasons: `app/watcher/publisher_test.go` (task 1 moves three tests out, adds
       `TestPublisherForwardsDisabledTransport`), `app/main_test.go` (task 1 retargets
       `TestDegradedNoNATS`), `app/migrations/embed_test.go` (task 2),
@@ -979,18 +998,18 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
       `app/task-store/repository_test.go` (task 8's `TestCreateOrReplacePreservesNotify`),
       `app/http/client_test.go` (tasks 5, 6, 8 and 10), `app/config/config_test.go` (task 9's
       `DOWNLOAD_CRON` test). Any other modified existing test file is a defect
-- [ ] assert the flagless behaviours directly rather than from memory: `POST /api/downloads` without
+- [x] assert the flagless behaviours directly rather than from memory: `POST /api/downloads` without
       `notify` -> `201 {"status":"ok"}` and no `downloads` row; `POST /api/files` without `notify`
       -> 201 with every pre-existing key byte-identical plus exactly one new key, `"notify": false`
-- [ ] run the classifier's own table test - `go test ./app/downloads -run TestClassify` - which is
+- [x] run the classifier's own table test - `go test ./app/downloads -run TestClassify` - which is
       where `len(knownTorrentStates) == 21` is asserted; it is unexported, so the external
       acceptance test cannot re-assert it
-- [ ] run the visibility check from Code-Quality Rules over every identifier this plan exported;
+- [x] run the visibility check from Code-Quality Rules over every identifier this plan exported;
       this is the one place it runs, because most of them get their first cross-package caller
       several tasks after they are created
-- [ ] run the full suite: `go test ./... -race`
-- [ ] run `go build ./...` and `gofmt -s -l app cmd` (must print nothing)
-- [ ] run the three gate checks and the comment-density command from Code-Quality Rules over exactly
+- [x] run the full suite: `go test ./... -race`
+- [x] run `go build ./...` and `gofmt -s -l app cmd` (must print nothing)
+- [x] run the three gate checks and the comment-density command from Code-Quality Rules over exactly
       these files: `app/notify/client.go`, `app/downloads/download.go`, `app/downloads/sweeper.go`,
       `app/download-store/repository.go`, `app/types/torrent.go`; record the ratios in the progress
       log
@@ -1001,15 +1020,15 @@ The seam is fixed here rather than left to judgement, because tasks 6, 7, 9 and 
 - Modify: `CLAUDE.md`
 - Modify: `README.md`
 
-- [ ] document `DOWNLOAD_CRON` in the environment variable list
-- [ ] update the `/api/downloads` description: it is still fire-and-forget by default, with
+- [x] document `DOWNLOAD_CRON` in the environment variable list
+- [x] update the `/api/downloads` description: it is still fire-and-forget by default, with
       `notify: true` as the explicit exception that persists a row and publishes one terminal event
-- [ ] document the two new subjects, the fact that a failed download publishes on the *same* subject
+- [x] document the two new subjects, the fact that a failed download publishes on the *same* subject
       as a completed one and is told apart by `status`, the completion criterion and the
       publish-before-mark ordering, beside the existing watcher notes
-- [ ] document `files.notify` and the `CreateOrReplace` column-reset trap it shares with the failure
+- [x] document `files.notify` and the `CreateOrReplace` column-reset trap it shares with the failure
       counters
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 

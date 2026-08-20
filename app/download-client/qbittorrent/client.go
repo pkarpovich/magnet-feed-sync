@@ -1,13 +1,20 @@
 package qbittorrent
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	qbt "github.com/autobrr/go-qbittorrent"
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/types"
 	"magnet-feed-sync/app/utils"
 )
+
+// ErrTorrentAddFailed is shared by the 409 and the 415 branch of AddTorrentFromUrl, so only the
+// message tail tells a duplicate from a torrent file qBittorrent refused to parse
+const duplicateAddMarker = "conflicts detected"
 
 type Client struct {
 	qbt                *qbt.Client
@@ -25,12 +32,93 @@ func NewClient(config config.QBittorrentConfig) *Client {
 	}
 }
 
-func (c *Client) CreateDownloadTask(url, destination string) error {
-	if _, err := c.qbt.AddTorrentFromUrl(url, map[string]string{"savepath": destination}); err != nil {
-		return fmt.Errorf("add torrent: %w", err)
+func (c *Client) CreateDownloadTask(url, destination string) (string, error) {
+	res, err := c.qbt.AddTorrentFromUrl(url, map[string]string{"savepath": destination})
+	if err != nil {
+		if errors.Is(err, qbt.ErrTorrentAddFailed) && strings.Contains(err.Error(), duplicateAddMarker) {
+			return "", fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists)
+		}
+
+		return "", fmt.Errorf("add torrent: %w", withoutSource(err, url))
 	}
 
-	return nil
+	// qbittorrent answers 200 with a failure count for a source it refused to take; without this
+	// the magnet fallback below would hand back a hash for a torrent that was never added, and the
+	// sweep would publish that as a torrent deleted by hand ten minutes later
+	if res != nil && res.FailureCount > 0 && len(res.AddedTorrentIds) == 0 {
+		return "", errors.New("add torrent: qbittorrent refused the source")
+	}
+
+	if res != nil && len(res.AddedTorrentIds) > 0 {
+		return res.AddedTorrentIds[0], nil
+	}
+
+	if strings.HasPrefix(strings.ToLower(url), "magnet:") {
+		// only a hex infohash can be matched against what torrents/info reports: a base32
+		// magnet would be stored as a hash the sweep never finds and published as a false failure
+		if hash := utils.ExtractBtihHash(url); utils.IsInfoHash(hash) {
+			return hash, nil
+		}
+	}
+
+	// the torrent is added; only `added_torrent_ids` is missing, which every qbittorrent below
+	// the WebAPI version that introduced it omits by answering `text/plain`. The add is a success
+	// for every caller that does not need the hash, and refusing it here would fail a plain
+	// `.torrent` add outright. Callers that promise an event check for the empty hash instead
+	return "", nil
+}
+
+// every add error the client library builds embeds the source verbatim, and a jackett `.torrent`
+// link carries its api key in the query string, so the message is redacted here rather than at
+// each caller that logs it. The library error stays underneath, so errors.Is still sees it
+func withoutSource(err error, source string) error {
+	redacted := utils.RedactURL(source)
+	if source == "" || redacted == source {
+		return err
+	}
+
+	return &sanitisedError{err: err, msg: strings.ReplaceAll(err.Error(), source, redacted)}
+}
+
+type sanitisedError struct {
+	err error
+	msg string
+}
+
+func (e *sanitisedError) Error() string { return e.msg }
+
+func (e *sanitisedError) Unwrap() error { return e.err }
+
+// the library joins the hashes into the query string of a GET torrents/info, ~41 chars each, so
+// an unbounded pending set would eventually exceed the request-line limit of qbittorrent or any
+// proxy in front of it — and one failed lookup aborts the whole sweep, stalling every pending row
+const hashBatchSize = 100
+
+func (c *Client) TorrentStates(ctx context.Context, hashes []string) (map[string]types.TorrentState, error) {
+	states := make(map[string]types.TorrentState, len(hashes))
+
+	for start := 0; start < len(hashes); start += hashBatchSize {
+		end := min(start+hashBatchSize, len(hashes))
+
+		torrents, err := c.qbt.GetTorrentsCtx(ctx, qbt.TorrentFilterOptions{Hashes: hashes[start:end]})
+		if err != nil {
+			return nil, fmt.Errorf("get torrents: %w", err)
+		}
+
+		for _, torrent := range torrents {
+			states[torrent.Hash] = types.TorrentState{
+				Hash:         torrent.Hash,
+				Name:         torrent.Name,
+				State:        string(torrent.State),
+				ContentPath:  torrent.ContentPath,
+				Progress:     torrent.Progress,
+				CompletionOn: torrent.CompletionOn,
+				Size:         torrent.Size,
+			}
+		}
+	}
+
+	return states, nil
 }
 
 func (c *Client) GetHashByMagnet(magnet string) (string, error) {
