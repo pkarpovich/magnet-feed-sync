@@ -76,6 +76,7 @@ type mockFileStore struct {
 	createOrReplaceFunc func(metadata *tracker.FileMetadata) error
 	getAllFunc          func() ([]*tracker.FileMetadata, error)
 	removeFunc          func(id string) error
+	updateSettingsFunc  func(id string, notify bool, location string) error
 	successes           []string
 	failures            []taskStore.SyncFailure
 	failureIds          []string
@@ -117,6 +118,13 @@ func (m *mockFileStore) RecordSyncFailure(id string, failure taskStore.SyncFailu
 func (m *mockFileStore) SetLastRun(_ time.Time, ok bool) error {
 	m.runs = append(m.runs, ok)
 	return m.setLastRunErr
+}
+
+func (m *mockFileStore) UpdateSettings(id string, notify bool, location string) error {
+	if m.updateSettingsFunc == nil {
+		return nil
+	}
+	return m.updateSettingsFunc(id, notify, location)
 }
 
 type mockDownloadClient struct {
@@ -2168,8 +2176,47 @@ func TestCreateFromURL_CarriesNotifyFlag(t *testing.T) {
 	}
 }
 
-func TestCreateFromURL_RePostTakesRequestFlagVerbatim(t *testing.T) {
+func TestCreateFromURL_ActiveRowIsRefused(t *testing.T) {
 	existing := &tracker.FileMetadata{ID: "1", Magnet: releaseOldMagnet, Notify: true}
+
+	var saved *tracker.FileMetadata
+	store := &mockFileStore{
+		getByIdFunc: func(string) (*tracker.FileMetadata, error) { return existing, nil },
+		createOrReplaceFunc: func(metadata *tracker.FileMetadata) error {
+			saved = metadata
+			return nil
+		},
+	}
+	parser := &mockFileParser{
+		parseFunc: func(string, string) (*tracker.FileMetadata, error) {
+			return &tracker.FileMetadata{ID: "1", Magnet: releaseNewMagnet}, nil
+		},
+	}
+	downloads := 0
+	client := NewClient(&ClientCtx{
+		MessagesForSend: make(chan string, 10),
+		Tracker:         parser,
+		DClient: &mockDownloadClient{createDownloadTaskFunc: func(string, string) error {
+			downloads++
+			return nil
+		}},
+		Store: store,
+	})
+
+	_, err := client.CreateFromURL(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", "", false)
+
+	require.ErrorIs(t, err, types.ErrFileAlreadyTracked)
+	assert.Nil(t, saved, "a refused create writes nothing")
+	assert.Equal(t, 0, downloads, "a refused create never reaches qbittorrent")
+}
+
+func TestCreateFromURL_SoftDeletedRowIsRecreatedWithRequestFlag(t *testing.T) {
+	existing := &tracker.FileMetadata{
+		ID:       "1",
+		Magnet:   releaseOldMagnet,
+		Notify:   true,
+		DeleteAt: sql.NullTime{Time: time.Now(), Valid: true},
+	}
 
 	var saved *tracker.FileMetadata
 	store := &mockFileStore{
@@ -2195,7 +2242,75 @@ func TestCreateFromURL_RePostTakesRequestFlagVerbatim(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, saved)
-	assert.False(t, saved.Notify, "a create takes the request's flag, it does not inherit the stored one")
+	assert.False(t, saved.Notify, "a re-create takes the request's flag, it does not inherit the dead row's")
+}
+
+func TestUpdateTaskSettings(t *testing.T) {
+	on := true
+	movies := "/downloads/movies"
+
+	tests := []struct {
+		name         string
+		notify       *bool
+		location     *string
+		wantNotify   bool
+		wantLocation string
+	}{
+		{name: "notify only", notify: &on, wantNotify: true, wantLocation: "/downloads/cinema-prep"},
+		{name: "location only", location: &movies, wantNotify: false, wantLocation: "/downloads/movies"},
+		{name: "both", notify: &on, location: &movies, wantNotify: true, wantLocation: "/downloads/movies"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotNotify bool
+			var gotLocation string
+			store := &mockFileStore{
+				getByIdFunc: func(string) (*tracker.FileMetadata, error) {
+					return &tracker.FileMetadata{ID: "1", Location: "/downloads/cinema-prep"}, nil
+				},
+				updateSettingsFunc: func(_ string, notify bool, location string) error {
+					gotNotify, gotLocation = notify, location
+					return nil
+				},
+			}
+			client := NewClient(&ClientCtx{MessagesForSend: make(chan string, 10), Store: store})
+
+			file, err := client.UpdateTaskSettings("1", tt.notify, tt.location)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantNotify, gotNotify)
+			assert.Equal(t, tt.wantLocation, gotLocation)
+			assert.Equal(t, tt.wantNotify, file.Notify)
+			assert.Equal(t, tt.wantLocation, file.Location)
+		})
+	}
+}
+
+func TestUpdateTaskSettings_DeletedOrMissingIsNotFound(t *testing.T) {
+	on := true
+	updates := 0
+	store := &mockFileStore{
+		getByIdFunc: func(id string) (*tracker.FileMetadata, error) {
+			if id == "missing" {
+				return nil, sql.ErrNoRows
+			}
+			return &tracker.FileMetadata{ID: id, DeleteAt: sql.NullTime{Time: time.Now(), Valid: true}}, nil
+		},
+		updateSettingsFunc: func(string, bool, string) error {
+			updates++
+			return nil
+		},
+	}
+	client := NewClient(&ClientCtx{MessagesForSend: make(chan string, 10), Store: store})
+
+	_, err := client.UpdateTaskSettings("missing", &on, nil)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	_, err = client.UpdateTaskSettings("deleted", &on, nil)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	assert.Equal(t, 0, updates, "a dead or missing task is never written")
 }
 
 func TestOnMessage_NeverArmsTheAgent(t *testing.T) {

@@ -92,6 +92,10 @@ func (t *acceptanceTaskCreator) RemoveTask(string) error { return nil }
 
 func (t *acceptanceTaskCreator) UpdateTaskLocation(string, string) error { return nil }
 
+func (t *acceptanceTaskCreator) UpdateTaskSettings(string, *bool, *string) (*tracker.FileMetadata, error) {
+	return nil, nil
+}
+
 func (t *acceptanceTaskCreator) CheckFileForUpdates(context.Context, string) {}
 
 func (t *acceptanceTaskCreator) RefreshAll(context.Context) {}

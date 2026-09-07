@@ -19,6 +19,7 @@ import (
 	"magnet-feed-sync/app/config"
 	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/types"
 	"magnet-feed-sync/app/utils"
 	watch_store "magnet-feed-sync/app/watch-store"
@@ -30,6 +31,7 @@ type TaskCreator interface {
 	DownloadNow(ctx context.Context, source, location string) (string, error)
 	RemoveTask(id string) error
 	UpdateTaskLocation(id, location string) error
+	UpdateTaskSettings(id string, notify *bool, location *string) (*tracker.FileMetadata, error)
 	CheckFileForUpdates(ctx context.Context, fileId string)
 	RefreshAll(ctx context.Context)
 }
@@ -171,6 +173,7 @@ func (c *Client) Start(ctx context.Context, done chan struct{}) {
 	mux.HandleFunc("GET /api/files", c.handleFiles)
 	mux.HandleFunc("POST /api/files", c.handleCreateFile)
 	mux.HandleFunc("POST /api/downloads", c.handleCreateDownload)
+	mux.HandleFunc("PATCH /api/files/{fileId}", c.handleUpdateFile)
 	mux.HandleFunc("PATCH /api/files/{fileId}/refresh", c.handleRefreshFile)
 	mux.HandleFunc("PATCH /api/files/refresh", c.handleRefreshAllFiles)
 	mux.HandleFunc("DELETE /api/files/{fileId}", c.handleRemoveFiles)
@@ -279,30 +282,27 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 
 	var req CreateFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		c.encodeError(ctx, w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
 	if req.URL == "" {
-		http.Error(w, "url is required", http.StatusBadRequest)
+		c.encodeError(ctx, w, http.StatusBadRequest, "url is required")
 		return
 	}
 
 	// dry mode is not a refusal here, unlike /api/downloads: the tracked row outlives the dry
 	// run and the flag becomes live at the next real sweep
 	if req.Notify && !c.notifyEnabled() {
-		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnavailable})
+		c.encodeError(ctx, w, http.StatusServiceUnavailable, notifyUnavailable)
 		return
 	}
 
 	metadata, err := c.taskCreator.CreateFromURL(ctx, req.URL, req.Location, req.Notify)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to create file from URL", "error", err)
-		if errors.Is(err, tracker.ErrProviderNotFound) {
-			http.Error(w, "unsupported URL", http.StatusBadRequest)
-			return
-		}
-		http.Error(w, "failed to create file from URL", http.StatusInternalServerError)
+		code, reason := createFileFailure(err)
+		c.encodeError(ctx, w, code, reason)
 		return
 	}
 
@@ -313,12 +313,97 @@ func (c *Client) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type updateFileRequest struct {
+	Notify   *bool   `json:"notify"`
+	Location *string `json:"location"`
+}
+
+type moveResult struct {
+	Moved  bool   `json:"moved"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type updateFileResponse struct {
+	FileMetadataResponse
+	Move *moveResult `json:"move,omitempty"`
+}
+
+func (c *Client) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
+	ctx, span := otel.Tracer("http").Start(r.Context(), "PATCH /api/files/{fileId}")
+	defer span.End()
+
+	var req updateFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.encodeError(ctx, w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Notify == nil && req.Location == nil {
+		c.encodeError(ctx, w, http.StatusBadRequest, "nothing to update: pass notify and/or location")
+		return
+	}
+
+	if req.Location != nil && !c.isKnownLocation(*req.Location) {
+		c.encodeError(ctx, w, http.StatusBadRequest, "unknown location: "+*req.Location+", see GET /api/file-locations")
+		return
+	}
+
+	fileID := r.PathValue("fileId")
+	file, err := c.taskCreator.UpdateTaskSettings(fileID, req.Notify, req.Location)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.encodeError(ctx, w, http.StatusNotFound, "file not found")
+			return
+		}
+
+		slog.ErrorContext(ctx, "failed to update file", "id", fileID, "error", err)
+		c.encodeError(ctx, w, http.StatusInternalServerError, "failed to update file: "+err.Error())
+		return
+	}
+
+	resp := updateFileResponse{FileMetadataResponse: toResponse(file)}
+	if req.Location != nil {
+		moved, reason := c.moveDownloadedFiles(ctx, file.Magnet, *req.Location)
+		resp.Move = &moveResult{Moved: moved, Reason: reason}
+	}
+
+	c.encodeJSON(ctx, w, http.StatusOK, resp)
+}
+
 const (
-	notifyUnavailable   = "notifications are not configured"
-	notifyDryMode       = "dry mode: no download is created, so no event can be published"
-	duplicateUnresolved = "torrent already present and its hash could not be resolved from the source"
-	notifyUnidentified  = "download created, but qbittorrent named no torrent for it, so no event can be published"
+	fileAlreadyTracked   = "file already tracked: change notify or location with PATCH /api/files/{id}"
+	notifyUnavailable    = "notifications are not configured"
+	notifyDryMode        = "dry mode: no download is created, so no event can be published"
+	duplicateUnresolved  = "torrent already present and its hash could not be resolved from the source"
+	notifyUnidentified   = "download created, but qbittorrent named no torrent for it, so no event can be published"
+	unsupportedURL       = "unsupported URL: no tracker provider handles it; /api/files takes a tracker topic page, a magnet or .torrent link goes to /api/downloads"
+	trackedAlreadyExists = "torrent already exists in qbittorrent: a tracked file adds its own download, so it cannot be created for a torrent that was added another way, e.g. through /api/downloads"
 )
+
+func createFileFailure(err error) (int, string) {
+	if errors.Is(err, tracker.ErrProviderNotFound) {
+		return http.StatusBadRequest, unsupportedURL
+	}
+
+	if errors.Is(err, types.ErrFileAlreadyTracked) {
+		return http.StatusConflict, fileAlreadyTracked
+	}
+
+	if errors.Is(err, types.ErrTorrentAlreadyExists) {
+		return http.StatusConflict, trackedAlreadyExists
+	}
+
+	var providerErr *providers.ProviderError
+	if errors.As(err, &providerErr) {
+		if providerErr.Kind == providers.KindPermanent {
+			return http.StatusUnprocessableEntity, "tracker page unusable: " + err.Error()
+		}
+
+		return http.StatusBadGateway, "tracker unavailable: " + err.Error()
+	}
+
+	return http.StatusInternalServerError, err.Error()
+}
 
 const stateUnknown = "unknown"
 
@@ -360,12 +445,12 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 
 	var req CreateDownloadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		c.encodeError(ctx, w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
 	if !isValidDownloadSource(req.Source) {
-		http.Error(w, "source is required and must be a magnet or http(s) URL", http.StatusBadRequest)
+		c.encodeError(ctx, w, http.StatusBadRequest, "source is required and must be a magnet or http(s) URL")
 		return
 	}
 
@@ -388,7 +473,7 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.ErrorContext(ctx, "failed to create one-shot download", "error", err)
-		http.Error(w, "failed to create download", http.StatusInternalServerError)
+		c.encodeError(ctx, w, http.StatusInternalServerError, "failed to create download: "+err.Error())
 		return
 	}
 
@@ -400,14 +485,14 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		if hash == "" {
 			// the source is not logged: a jackett `.torrent` link carries its api key in the query
 			slog.ErrorContext(ctx, "download added but its torrent could not be identified")
-			c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnidentified})
+			c.encodeError(ctx, w, http.StatusServiceUnavailable, notifyUnidentified)
 			return
 		}
 
 		id, err := c.recordDownload(&downloads.Download{Source: req.Source, Location: location, Hash: hash})
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to record download", "error", err)
-			http.Error(w, "failed to record download", http.StatusInternalServerError)
+			c.encodeError(ctx, w, http.StatusInternalServerError, "failed to record download: "+err.Error())
 			return
 		}
 
@@ -423,7 +508,7 @@ func (c *Client) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req CreateDownloadRequest, location string) {
 	hash := c.duplicateHash(ctx, req.Source)
 	if hash == "" {
-		c.encodeJSON(ctx, w, http.StatusConflict, map[string]string{"error": duplicateUnresolved})
+		c.encodeError(ctx, w, http.StatusConflict, duplicateUnresolved)
 		return
 	}
 
@@ -461,7 +546,7 @@ func (c *Client) answerDuplicate(ctx context.Context, w http.ResponseWriter, req
 		})
 		if err != nil {
 			slog.ErrorContext(ctx, "failed to record duplicate download", "error", err)
-			http.Error(w, "failed to record download", http.StatusInternalServerError)
+			c.encodeError(ctx, w, http.StatusInternalServerError, "failed to record download: "+err.Error())
 			return
 		}
 
@@ -546,12 +631,12 @@ func (c *Client) notifyEnabled() bool {
 
 func (c *Client) refuseNotify(ctx context.Context, w http.ResponseWriter) bool {
 	if !c.notifyEnabled() || c.downloadStore == nil {
-		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyUnavailable})
+		c.encodeError(ctx, w, http.StatusServiceUnavailable, notifyUnavailable)
 		return true
 	}
 
 	if c.dryMode {
-		c.encodeJSON(ctx, w, http.StatusServiceUnavailable, map[string]string{"error": notifyDryMode})
+		c.encodeError(ctx, w, http.StatusServiceUnavailable, notifyDryMode)
 		return true
 	}
 
@@ -1079,6 +1164,15 @@ func (c *Client) encodeJSON(ctx context.Context, w http.ResponseWriter, code int
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		slog.ErrorContext(ctx, "failed to encode response", "error", err)
 	}
+}
+
+type errorResponse struct {
+	IsError bool   `json:"isError"`
+	Error   string `json:"error"`
+}
+
+func (c *Client) encodeError(ctx context.Context, w http.ResponseWriter, code int, reason string) {
+	c.encodeJSON(ctx, w, code, errorResponse{IsError: true, Error: reason})
 }
 
 func toWatchResponse(watch *watcher.Watch) watchResponse {

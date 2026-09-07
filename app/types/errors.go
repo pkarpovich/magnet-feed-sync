@@ -7,3 +7,5 @@ import "errors"
 var ErrTorrentNotFound = errors.New("torrent not found")
 
 var ErrTorrentAlreadyExists = errors.New("torrent already exists")
+
+var ErrFileAlreadyTracked = errors.New("file already tracked")

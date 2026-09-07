@@ -22,6 +22,7 @@ import (
 	taskStore "magnet-feed-sync/app/task-store"
 	"magnet-feed-sync/app/tracker"
 	"magnet-feed-sync/app/tracker/providers"
+	"magnet-feed-sync/app/types"
 	"magnet-feed-sync/app/utils"
 )
 
@@ -46,6 +47,7 @@ type ProviderBreaker interface {
 type FileStore interface {
 	GetById(id string) (*tracker.FileMetadata, error)
 	CreateOrReplace(metadata *tracker.FileMetadata) error
+	UpdateSettings(id string, notify bool, location string) error
 	GetAll() ([]*tracker.FileMetadata, error)
 	Remove(id string) error
 	RecordSyncSuccess(id string, syncedAt time.Time) error
@@ -158,7 +160,10 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 		c.mu.Unlock()
 		return nil, fmt.Errorf("check existing task: %w", getErr)
 	}
-	hadActiveRow := existing != nil && !existing.DeleteAt.Valid
+	if existing != nil && !existing.DeleteAt.Valid {
+		c.mu.Unlock()
+		return nil, types.ErrFileAlreadyTracked
+	}
 
 	err := c.store.CreateOrReplace(metadata)
 	if err != nil {
@@ -178,7 +183,7 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 
 	_, err = c.dClient.CreateDownloadTask(metadata.Magnet, metadata.Location)
 	if err != nil {
-		c.rollbackCreate(ctx, metadata.ID, existing, hadActiveRow)
+		c.rollbackCreate(ctx, metadata.ID)
 		return nil, err
 	}
 
@@ -187,28 +192,12 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 	return metadata, nil
 }
 
-func (c *Client) rollbackCreate(ctx context.Context, id string, existing *tracker.FileMetadata, hadActiveRow bool) {
+func (c *Client) rollbackCreate(ctx context.Context, id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	current, err := c.store.GetById(id)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to read task for rollback", "error", err)
-		return
-	}
-
-	if current.DeleteAt.Valid {
-		return
-	}
-
-	if hadActiveRow {
-		if restoreErr := c.store.CreateOrReplace(existing); restoreErr != nil {
-			slog.ErrorContext(ctx, "failed to restore previous file after download error", "error", restoreErr)
-		}
-	} else {
-		if removeErr := c.store.Remove(id); removeErr != nil {
-			slog.ErrorContext(ctx, "failed to remove file after download error", "error", removeErr)
-		}
+	if err := c.store.Remove(id); err != nil {
+		slog.ErrorContext(ctx, "failed to remove file after download error", "error", err)
 	}
 }
 
@@ -648,20 +637,35 @@ func (c *Client) RemoveTask(id string) error {
 }
 
 func (c *Client) UpdateTaskLocation(id, location string) error {
+	_, err := c.UpdateTaskSettings(id, nil, &location)
+	return err
+}
+
+func (c *Client) UpdateTaskSettings(id string, notify *bool, location *string) (*tracker.FileMetadata, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	file, err := c.store.GetById(id)
 	if err != nil {
-		return fmt.Errorf("get task: %w", err)
+		return nil, fmt.Errorf("get task: %w", err)
 	}
 
 	if file.DeleteAt.Valid {
-		return fmt.Errorf("task %s has been deleted", id)
+		return nil, fmt.Errorf("task %s: %w", id, sql.ErrNoRows)
 	}
 
-	file.Location = location
-	return c.store.CreateOrReplace(file)
+	if notify != nil {
+		file.Notify = *notify
+	}
+	if location != nil {
+		file.Location = *location
+	}
+
+	if err := c.store.UpdateSettings(id, file.Notify, file.Location); err != nil {
+		return nil, fmt.Errorf("update task settings: %w", err)
+	}
+
+	return file, nil
 }
 
 func (c *Client) CheckFileForUpdates(ctx context.Context, fileId string) {
