@@ -19,11 +19,11 @@ var ErrSchemaNotInitialised = errors.New("watch schema not initialised: run the 
 
 var ErrNotFound = errors.New("watch not found")
 
-const watchColumns = `id, queries, include_regex, exclude_regex, sources, rev, seeded_at, expires_at, disabled_at, last_run_at, last_status`
+const watchColumns = `id, queries, include_regex, exclude_regex, sources, rev, seeded_at, expires_at, disabled_at, last_run_at, last_status, created_at`
 
 // column by column, not table by table: the incident had the table present and columns missing
 var requiredColumns = map[string][]string{
-	"watches":    {"id", "queries", "include_regex", "exclude_regex", "sources", "rev", "seeded_at", "expires_at", "disabled_at", "last_run_at", "last_status"},
+	"watches":    {"id", "queries", "include_regex", "exclude_regex", "sources", "rev", "seeded_at", "expires_at", "disabled_at", "last_run_at", "last_status", "created_at"},
 	"watch_seen": {"watch_id", "source", "external_id", "title", "first_seen_at"},
 }
 
@@ -146,7 +146,7 @@ func (r *Repository) Disable(id string) error {
 func (r *Repository) Revive(id string) error {
 	res, err := r.db.Exec(`
 		UPDATE watches
-		SET disabled_at = NULL, seeded_at = NULL, last_run_at = NULL, last_status = ''
+		SET disabled_at = NULL, seeded_at = NULL, last_run_at = NULL, last_status = '', created_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, id)
 	if err != nil {
@@ -243,9 +243,9 @@ type rowScanner interface {
 
 func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 	var (
-		w                                          watcher.Watch
-		queries, sources                           string
-		seededAt, expiresAt, disabledAt, lastRunAt sql.NullTime
+		w                                                     watcher.Watch
+		queries, sources                                      string
+		seededAt, expiresAt, disabledAt, lastRunAt, createdAt sql.NullTime
 	)
 
 	err := row.Scan(
@@ -260,6 +260,7 @@ func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 		&disabledAt,
 		&lastRunAt,
 		&w.LastStatus,
+		&createdAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -278,6 +279,7 @@ func (r *Repository) scanWatch(row rowScanner) (*watcher.Watch, error) {
 	w.ExpiresAt = timePtr(expiresAt)
 	w.DisabledAt = timePtr(disabledAt)
 	w.LastRunAt = timePtr(lastRunAt)
+	w.CreatedAt = createdAt.Time
 
 	return &w, nil
 }

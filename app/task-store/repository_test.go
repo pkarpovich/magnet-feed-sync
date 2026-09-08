@@ -287,3 +287,39 @@ func TestNewRepositoryWithoutNotifyColumn(t *testing.T) {
 	require.ErrorIs(t, err, ErrSchemaNotInitialised)
 	assert.Contains(t, err.Error(), "files.notify is missing")
 }
+
+func TestUpdateSettingsChangesOnlyNotifyAndLocation(t *testing.T) {
+	repo := newTestRepo(t)
+
+	m := testMetadata()
+	require.NoError(t, repo.CreateOrReplace(m))
+	require.NoError(t, repo.RecordSyncFailure(m.ID, SyncFailure{Text: "Blocked: 403", At: time.Now()}))
+
+	require.NoError(t, repo.UpdateSettings(m.ID, true, "/downloads/movies"))
+
+	stored, err := repo.GetById(m.ID)
+	require.NoError(t, err)
+	assert.True(t, stored.Notify)
+	assert.Equal(t, "/downloads/movies", stored.Location)
+	assert.Equal(t, m.Magnet, stored.Magnet)
+	assert.Equal(t, m.Name, stored.Name)
+	assert.Equal(t, 1, stored.ConsecutiveFailures, "a settings update must not touch the sync state")
+}
+
+func TestUpdateSettingsOnMissingOrDeletedTaskIsNotFound(t *testing.T) {
+	repo := newTestRepo(t)
+
+	require.ErrorIs(t, repo.UpdateSettings("missing", true, "/downloads/movies"), sql.ErrNoRows)
+
+	m := testMetadata()
+	require.NoError(t, repo.CreateOrReplace(m))
+	require.NoError(t, repo.Remove(m.ID))
+
+	require.ErrorIs(t, repo.UpdateSettings(m.ID, true, "/downloads/movies"), sql.ErrNoRows)
+
+	stored, err := repo.GetById(m.ID)
+	require.NoError(t, err)
+	assert.False(t, stored.Notify)
+	assert.Equal(t, m.Location, stored.Location)
+	assert.True(t, stored.DeleteAt.Valid)
+}

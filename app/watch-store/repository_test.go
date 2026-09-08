@@ -348,3 +348,32 @@ func TestMalformedStoredQueries(t *testing.T) {
 	_, err = repo.GetAll()
 	require.Error(t, err)
 }
+
+func TestCreateStampsCreatedAt(t *testing.T) {
+	repo := newTestRepo(t)
+	w := testWatch()
+	require.NoError(t, repo.Create(w))
+
+	stored, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), stored.CreatedAt, time.Minute)
+}
+
+func TestReviveRestampsCreatedAt(t *testing.T) {
+	repo := newTestRepo(t)
+	w := testWatch()
+	require.NoError(t, repo.Create(w))
+	_, err := repo.db.Exec(`UPDATE watches SET created_at = '2026-01-01 00:00:00' WHERE id = ?`, w.ID)
+	require.NoError(t, err)
+	require.NoError(t, repo.Disable(w.ID))
+
+	backdated, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	require.Equal(t, time.January, backdated.CreatedAt.Month())
+
+	require.NoError(t, repo.Revive(w.ID))
+
+	revived, err := repo.GetByID(w.ID)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), revived.CreatedAt, time.Minute, "a revive is a create, so the pending grace restarts")
+}

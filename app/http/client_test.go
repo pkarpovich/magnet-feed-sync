@@ -24,6 +24,7 @@ import (
 	"magnet-feed-sync/app/downloads"
 	"magnet-feed-sync/app/migrations"
 	"magnet-feed-sync/app/tracker"
+	"magnet-feed-sync/app/tracker/providers"
 	"magnet-feed-sync/app/types"
 	watch_store "magnet-feed-sync/app/watch-store"
 	"magnet-feed-sync/app/watcher"
@@ -45,6 +46,18 @@ type mockTaskCreator struct {
 	updateLocationCalls  int
 	lastUpdatedLocation  string
 	updateLocationErr    error
+	updateSettingsCalls  int
+	lastUpdateNotify     *bool
+	lastUpdateLocation   *string
+	updateSettingsMeta   *tracker.FileMetadata
+	updateSettingsErr    error
+}
+
+func (m *mockTaskCreator) UpdateTaskSettings(_ string, notify *bool, location *string) (*tracker.FileMetadata, error) {
+	m.updateSettingsCalls++
+	m.lastUpdateNotify = notify
+	m.lastUpdateLocation = location
+	return m.updateSettingsMeta, m.updateSettingsErr
 }
 
 func (m *mockTaskCreator) CreateFromURL(_ context.Context, url, location string, notify bool) (*tracker.FileMetadata, error) {
@@ -206,6 +219,7 @@ func TestHandleCreateFile_URLProviderNotFound(t *testing.T) {
 	c.handleCreateFile(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, map[string]any{"isError": true, "error": unsupportedURL}, decodeBody(t, w))
 }
 
 func TestHandleCreateFile_URLServerError(t *testing.T) {
@@ -222,6 +236,63 @@ func TestHandleCreateFile_URLServerError(t *testing.T) {
 	c.handleCreateFile(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, map[string]any{"isError": true, "error": "network timeout"}, decodeBody(t, w))
+}
+
+func TestHandleCreateFile_FailureIsExplained(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		code   int
+		reason string
+	}{
+		{
+			name:   "file already tracked",
+			err:    types.ErrFileAlreadyTracked,
+			code:   http.StatusConflict,
+			reason: fileAlreadyTracked,
+		},
+		{
+			name:   "torrent already in qbittorrent",
+			err:    fmt.Errorf("add torrent: %w", types.ErrTorrentAlreadyExists),
+			code:   http.StatusConflict,
+			reason: trackedAlreadyExists,
+		},
+		{
+			name:   "tracker blocked the fetch",
+			err:    fmt.Errorf("failed to fetch nnm page: %w", &providers.ProviderError{Kind: providers.KindBlocked, Err: errors.New("cloudflare challenge")}),
+			code:   http.StatusBadGateway,
+			reason: "tracker unavailable: failed to fetch nnm page: Blocked: cloudflare challenge",
+		},
+		{
+			name:   "tracker transiently down",
+			err:    fmt.Errorf("failed to fetch nnm page: %w", &providers.ProviderError{Kind: providers.KindTransient, Err: errors.New("bad status: 502 Bad Gateway")}),
+			code:   http.StatusBadGateway,
+			reason: "tracker unavailable: failed to fetch nnm page: Transient: bad status: 502 Bad Gateway",
+		},
+		{
+			name:   "page has no magnet",
+			err:    &providers.ProviderError{Kind: providers.KindPermanent, Err: errors.New("no magnet link found in nnm page")},
+			code:   http.StatusUnprocessableEntity,
+			reason: "tracker page unusable: Permanent: no magnet link found in nnm page",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &mockTaskCreator{returnErr: tt.err}
+			c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
+
+			body := `{"url":"https://nnmclub.to/forum/viewtopic.php?t=1888800"}`
+			req := httptest.NewRequest(http.MethodPost, "/api/files", bytes.NewBufferString(body))
+			w := httptest.NewRecorder()
+
+			c.handleCreateFile(w, req)
+
+			assert.Equal(t, tt.code, w.Code)
+			assert.Equal(t, map[string]any{"isError": true, "error": tt.reason}, decodeBody(t, w))
+		})
+	}
 }
 
 func TestHandleCreateDownload_Magnet(t *testing.T) {
@@ -325,6 +396,9 @@ func TestHandleCreateDownload_InvalidBody(t *testing.T) {
 	c.handleCreateDownload(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	resp := decodeBody(t, w)
+	assert.Equal(t, true, resp["isError"])
+	assert.Contains(t, resp["error"], "invalid request body: ")
 }
 
 func TestHandleCreateDownload_DownloadError(t *testing.T) {
@@ -341,6 +415,7 @@ func TestHandleCreateDownload_DownloadError(t *testing.T) {
 	c.handleCreateDownload(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, map[string]any{"isError": true, "error": "failed to create download: qbittorrent unreachable"}, decodeBody(t, w))
 	assert.Equal(t, 1, creator.downloadCalls)
 	assert.Equal(t, "/downloads/default", creator.lastDownloadLocation)
 }
@@ -466,7 +541,7 @@ func TestHandleCreateDownload_NotifyWithoutNotifier(t *testing.T) {
 			w := postDownload(t, c, `{"source":"magnet:?xt=urn:btih:abc123","notify":true}`)
 
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-			assert.Equal(t, map[string]any{"error": "notifications are not configured"}, decodeBody(t, w))
+			assert.Equal(t, map[string]any{"isError": true, "error": "notifications are not configured"}, decodeBody(t, w))
 			assert.Equal(t, 0, creator.downloadCalls, "qbittorrent must not be touched by a refused request")
 
 			pending, err := store.CountPending()
@@ -493,7 +568,8 @@ func TestHandleCreateDownload_NotifyInDryMode(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assert.Equal(t, map[string]any{
-		"error": "dry mode: no download is created, so no event can be published",
+		"isError": true,
+		"error":   "dry mode: no download is created, so no event can be published",
 	}, decodeBody(t, w))
 	assert.Equal(t, 0, creator.downloadCalls)
 
@@ -888,7 +964,8 @@ func TestHandleCreateDownload_DuplicateUnresolvableHash(t *testing.T) {
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Equal(t, map[string]any{
-		"error": "torrent already present and its hash could not be resolved from the source",
+		"isError": true,
+		"error":   "torrent already present and its hash could not be resolved from the source",
 	}, decodeBody(t, w))
 	assert.Equal(t, 0, lookup.lookupCalls)
 
@@ -911,7 +988,8 @@ func TestHandleCreateDownload_DuplicateBase32MagnetIsNotAHash(t *testing.T) {
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Equal(t, map[string]any{
-		"error": "torrent already present and its hash could not be resolved from the source",
+		"isError": true,
+		"error":   "torrent already present and its hash could not be resolved from the source",
 	}, decodeBody(t, w))
 	assert.Equal(t, 0, lookup.lookupCalls)
 
@@ -1007,6 +1085,7 @@ func TestHTTPHandlers_CreateTracingSpans(t *testing.T) {
 		{"handleGetFileLocations", http.MethodGet, "/api/file-locations", func(c *Client) http.HandlerFunc { return c.handleGetFileLocations }, "GET /api/file-locations"},
 		{"healthHandler", http.MethodGet, "/api/health", func(c *Client) http.HandlerFunc { return c.healthHandler }, "GET /api/health"},
 		{"handleRefreshAllFiles", http.MethodPatch, "/api/files/refresh", func(c *Client) http.HandlerFunc { return c.handleRefreshAllFiles }, "PATCH /api/files/refresh"},
+		{"handleUpdateFile", http.MethodPatch, "/api/files/1", func(c *Client) http.HandlerFunc { return c.handleUpdateFile }, "PATCH /api/files/{fileId}"},
 	}
 
 	for _, tt := range tests {
@@ -1226,6 +1305,7 @@ func watchWithRun(id string, lastRunAt *time.Time, status string) *watcher.Watch
 		Queries:    []string{"One Night Only 2026"},
 		Sources:    []string{"jackett"},
 		Rev:        1,
+		CreatedAt:  time.Now(),
 		LastRunAt:  lastRunAt,
 		LastStatus: status,
 	}
@@ -1276,6 +1356,7 @@ func TestHealthWatchesOKWhenFresh(t *testing.T) {
 	assert.Equal(t, "ok", resp.Status)
 	require.NotNil(t, resp.Watches)
 	assert.Equal(t, 2, resp.Watches.Active)
+	assert.Equal(t, 0, resp.Watches.Pending)
 	assert.Equal(t, 0, resp.Watches.WithErrors)
 	require.NotNil(t, resp.Watches.OldestRunAt)
 	assert.WithinDuration(t, *oldest, *resp.Watches.OldestRunAt, time.Second)
@@ -1309,29 +1390,58 @@ func TestHealthWatchesDegradedOnErrorStatus(t *testing.T) {
 	assert.Equal(t, 1, resp.Watches.WithErrors)
 }
 
-// a watch created through the API seconds ago has no last_run_at yet, and reporting the
-// service degraded before its first tick could possibly have run would be a false alarm
-func TestHealthWatchesNeverRanWithinGrace(t *testing.T) {
+// a watch created through the API seconds ago has no last_run_at yet: it is pending, not a
+// fault, until its own creation is older than the staleness window. The process start must
+// not enter into it: the process runs for weeks, and a start-time grace read every watch the
+// agent created as degraded until the next watcher tick and paged Gatus each time
+func TestHealthWatchesPendingUntilFirstRun(t *testing.T) {
 	tests := []struct {
 		name       string
-		startedAt  time.Time
+		createdAt  time.Time
 		wantStatus string
 	}{
-		{name: "within grace", startedAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok"},
-		{name: "past grace", startedAt: time.Now().Add(-3 * time.Hour), wantStatus: "degraded"},
+		{name: "created minutes ago", createdAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok"},
+		{name: "never ran for hours", createdAt: time.Now().Add(-3 * time.Hour), wantStatus: "degraded"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := newMockWatchStore(watchWithRun("fresh", nil, ""))
+			fresh := watchWithRun("fresh", nil, "")
+			fresh.CreatedAt = tt.createdAt
+			store := newMockWatchStore(fresh)
 
-			w, resp := callHealth(t, watchHealthCtx(store, tt.startedAt))
+			w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
 
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.Equal(t, tt.wantStatus, resp.Status)
 			require.NotNil(t, resp.Watches)
 			assert.Equal(t, 1, resp.Watches.Active)
+			assert.Equal(t, 1, resp.Watches.Pending)
 			assert.Nil(t, resp.Watches.OldestRunAt)
+		})
+	}
+}
+
+func TestWatchState(t *testing.T) {
+	expired := watchWithRun("expired", ago(time.Minute), "")
+	expired.ExpiresAt = ago(time.Minute)
+	disabled := watchWithRun("disabled", ago(time.Minute), "")
+	disabled.DisabledAt = ago(time.Minute)
+
+	tests := []struct {
+		name  string
+		watch *watcher.Watch
+		want  string
+	}{
+		{name: "never ran", watch: watchWithRun("fresh", nil, ""), want: "pending"},
+		{name: "ran", watch: watchWithRun("running", ago(time.Minute), ""), want: "active"},
+		{name: "expired", watch: expired, want: "expired"},
+		{name: "disabled", watch: disabled, want: "disabled"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, toWatchResponse(tt.watch).State)
 		})
 	}
 }
@@ -1520,6 +1630,9 @@ func (m *mockWatchStore) Create(w *watcher.Watch) error {
 
 	stored := *w
 	stored.Rev = 1
+	if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = time.Now()
+	}
 	m.watches[w.ID] = &stored
 	m.order = append(m.order, w.ID)
 
@@ -1572,6 +1685,7 @@ func (m *mockWatchStore) Revive(id string) error {
 	w.SeededAt = nil
 	w.LastRunAt = nil
 	w.LastStatus = ""
+	w.CreatedAt = time.Now()
 	m.revived = append(m.revived, id)
 
 	return nil
@@ -2623,10 +2737,7 @@ func TestHandleCreateFile_NotifyWithDisabledNotifier(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assert.Equal(t, 0, creator.createFromURLCalls)
-
-	var resp map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Equal(t, map[string]string{"error": notifyUnavailable}, resp)
+	assert.Equal(t, map[string]any{"isError": true, "error": notifyUnavailable}, decodeBody(t, w))
 }
 
 func TestHandleCreateFile_NotifyReachesTaskCreator(t *testing.T) {
@@ -2858,4 +2969,141 @@ func TestHealthDownloadsDoNotChangeStatus(t *testing.T) {
 			assert.Equal(t, tt.wantDownloads, body["downloads"])
 		})
 	}
+}
+
+func patchFile(t *testing.T, c *Client, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/files/"+id, bytes.NewBufferString(body))
+	req.SetPathValue("fileId", id)
+	w := httptest.NewRecorder()
+
+	c.handleUpdateFile(w, req)
+
+	return w
+}
+
+func trackedFall2() *tracker.FileMetadata {
+	return &tracker.FileMetadata{
+		ID:          "1888800",
+		Name:        "Fall 2: Deadpoint",
+		Magnet:      "magnet:?xt=urn:btih:49B33C7AB6EDE0948C757EEF058F15F663F8BFAF",
+		OriginalUrl: "https://nnmclub.to/forum/viewtopic.php?t=1888800",
+		Location:    "/downloads/cinema-prep",
+		Notify:      true,
+	}
+}
+
+func TestHandleUpdateFile_NotifyOnly(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsMeta: trackedFall2()}
+	dlClient := &mockDownloadClient{}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
+
+	w := patchFile(t, c, "1888800", `{"notify":true}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, creator.updateSettingsCalls)
+	require.NotNil(t, creator.lastUpdateNotify)
+	assert.True(t, *creator.lastUpdateNotify)
+	assert.Nil(t, creator.lastUpdateLocation)
+	assert.Equal(t, 0, dlClient.setLocationCalls)
+
+	resp := decodeBody(t, w)
+	assert.Equal(t, "1888800", resp["id"])
+	assert.Equal(t, true, resp["notify"])
+	assert.Equal(t, "/downloads/cinema-prep", resp["location"])
+	_, hasMove := resp["move"]
+	assert.False(t, hasMove, "no location in the request, nothing to move")
+}
+
+func TestHandleUpdateFile_LocationMovesDownloadedFiles(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsMeta: trackedFall2()}
+	dlClient := &mockDownloadClient{locations: []types.Location{{ID: "/downloads/movies"}}, hash: "49b33c7a"}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
+
+	w := patchFile(t, c, "1888800", `{"location":"/downloads/movies"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, creator.lastUpdateLocation)
+	assert.Equal(t, "/downloads/movies", *creator.lastUpdateLocation)
+	assert.Nil(t, creator.lastUpdateNotify)
+	assert.Equal(t, 1, dlClient.setLocationCalls)
+	assert.Equal(t, "/downloads/movies", dlClient.lastSetLocation)
+	assert.Equal(t, map[string]any{"moved": true}, decodeBody(t, w)["move"])
+}
+
+func TestHandleUpdateFile_LocationWhenTorrentIsGone(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsMeta: trackedFall2()}
+	dlClient := &mockDownloadClient{locations: []types.Location{{ID: "/downloads/movies"}}, hashErr: types.ErrTorrentNotFound}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
+
+	w := patchFile(t, c, "1888800", `{"location":"/downloads/movies"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, creator.updateSettingsCalls, "the stored location is never held hostage by the move")
+	assert.Equal(t, 0, dlClient.setLocationCalls)
+	assert.Equal(t, map[string]any{
+		"moved":  false,
+		"reason": "torrent is no longer in the download client",
+	}, decodeBody(t, w)["move"])
+}
+
+func TestHandleUpdateFile_BothFields(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsMeta: trackedFall2()}
+	dlClient := &mockDownloadClient{locations: []types.Location{{ID: "/downloads/movies"}}, hash: "49b33c7a"}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
+
+	w := patchFile(t, c, "1888800", `{"notify":false,"location":"/downloads/movies"}`)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, creator.lastUpdateNotify)
+	assert.False(t, *creator.lastUpdateNotify)
+	require.NotNil(t, creator.lastUpdateLocation)
+	assert.Equal(t, "/downloads/movies", *creator.lastUpdateLocation)
+}
+
+func TestHandleUpdateFile_Rejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{name: "nothing to update", body: `{}`, reason: "nothing to update: pass notify and/or location"},
+		{name: "unknown location", body: `{"location":"/nope"}`, reason: "unknown location: /nope, see GET /api/file-locations"},
+		{name: "invalid body", body: `not json`, reason: "invalid request body: invalid character 'o' in literal null (expecting 'u')"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creator := &mockTaskCreator{updateSettingsMeta: trackedFall2()}
+			dlClient := &mockDownloadClient{locations: []types.Location{{ID: "/downloads/movies"}}}
+			c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: dlClient})
+
+			w := patchFile(t, c, "1888800", tt.body)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Equal(t, map[string]any{"isError": true, "error": tt.reason}, decodeBody(t, w))
+			assert.Equal(t, 0, creator.updateSettingsCalls)
+		})
+	}
+}
+
+func TestHandleUpdateFile_NotFound(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsErr: fmt.Errorf("get task: %w", sql.ErrNoRows)}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
+
+	w := patchFile(t, c, "missing", `{"notify":true}`)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, map[string]any{"isError": true, "error": "file not found"}, decodeBody(t, w))
+}
+
+func TestHandleUpdateFile_StoreError(t *testing.T) {
+	creator := &mockTaskCreator{updateSettingsErr: errors.New("update task settings: disk full")}
+	c := NewClient(&ClientCtx{Store: &mockFileStore{}, TaskCreator: creator, DownloadClient: &mockDownloadClient{}})
+
+	w := patchFile(t, c, "1888800", `{"notify":true}`)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, map[string]any{"isError": true, "error": "failed to update file: update task settings: disk full"}, decodeBody(t, w))
 }

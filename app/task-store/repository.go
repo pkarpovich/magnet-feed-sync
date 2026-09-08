@@ -317,3 +317,20 @@ func (r *Repository) Remove(id string) error {
 	_, err := r.db.Exec(`UPDATE files SET delete_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	return err
 }
+
+func (r *Repository) UpdateSettings(id string, notify bool, location string) error {
+	res, err := r.db.Exec(`UPDATE files SET notify = ?, location = ? WHERE id = ? AND delete_at IS NULL`, notify, location, id)
+	if err != nil {
+		return err
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+
+	return nil
+}

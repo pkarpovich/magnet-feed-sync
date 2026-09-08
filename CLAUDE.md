@@ -88,7 +88,25 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything).
   It also serves the watch CRUD routes (`/api/watches`), the two search entry points
   (`POST /api/watches/{id}/search` reproduces a stored watch, `POST /api/search` is ad-hoc), and the
-  `watches` and `downloads` objects on `/api/health`
+  `watches` and `downloads` objects on `/api/health`. A watch that has not run yet is `pending`: counted
+  separately in `watches.pending` (and reported as `state: pending` on `/api/watches`, a value derived
+  from the timestamps, never stored), and `degraded` only once it is older than the watch staleness
+  window measured from its **own** `created_at`. Never from process start: the process runs for weeks,
+  so a start-time grace read every watch the agent created as degraded until the next `:20` tick and
+  paged Gatus each time. Every error the two download entry points answer
+  is JSON `{"isError": true, "error": "<reason>"}` written by `encodeError` - the agent reads the body,
+  not the status, and a fixed `failed to create file from URL` hid a 409 behind a 500 for two days.
+  `createFileFailure` picks the status for `POST /api/files`: 400 no provider, 409 file already
+  tracked (`createWithLock` is a strict create: an active row is refused before qBittorrent is touched,
+  a soft-deleted one is re-created) or torrent already in qBittorrent (a tracked file adds its own
+  download, so it is **not** created for a torrent added through `/api/downloads` first), 422
+  permanent provider error, 502 blocked/transient, 500 otherwise; the reason carries the error chain,
+  which is already redacted at the source (`WithoutURL`, `withoutSource`, `stripAPIKey`).
+  `PATCH /api/files/{fileId}` is the consumer's edit: `notify` and/or `location`, both optional and an
+  omitted one unchanged, written with the targeted `UpdateSettings` rather than `CreateOrReplace`,
+  which stays the sweep's whole-row primitive. A location is validated against `GET /api/file-locations`,
+  stored first, and then the downloaded files are moved best-effort with the outcome under `move`
+  (`POST /api/file-locations` does the same for the web UI and delegates to the same store call)
 - **schedular/**: Cron job scheduling via gocron. `AddJob(name, cronExpr, cb)` registers one job and
   `Start()` runs them all; there are three — the files sweep on `CRON`, the watcher sweep on
   `WATCH_CRON` and the download sweep on `DOWNLOAD_CRON`. Every job runs in singleton mode — a sweep can
@@ -119,7 +137,8 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   table check passes a table whose columns a half-applied migration never added. `Disable` / `Revive` are
   a pair: nothing else writes `disabled_at`, and without `Revive` a soft-deleted id could never be
   re-created, since the row still exists and a create is a conflict. `Revive` clears the run lifecycle
-  (`seeded_at`, `last_run_at`, `last_status`) along with the soft delete — a re-create is a *create*, so it
+  (`seeded_at`, `last_run_at`, `last_status`) and re-stamps `created_at`, which the health grace for a
+  watch that has not run yet is measured from, along with the soft delete — a re-create is a *create*, so it
   seeds silently again (`Update` names the request's columns only and would leave a re-created watch
   publishing whatever its new queries or wider regex match) and does not report the dead watch's status as
   its own on `/api/health`. `watch_seen` is deliberately untouched, which is what keeps that seed from
@@ -316,10 +335,11 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   one-shot event task on the single subject it was given, so a failure published anywhere else would
   never fire it, which is the "event that never arrives" this feature exists to prevent. Message ids for
   JetStream dedup are `<download_id>:<status>` and `<file_id>:<sha256 of the new magnet>`. On a tracked
-  file the flag lives on the `files` row and is *replaced* by every create — `CreateFromURL` assigns the
-  request's value unconditionally and `OnMessage` passes `false` — so a flagless re-`POST /api/files`, or
-  a Telegram re-post of the same URL, disarms it; there is no endpoint that toggles it. Only the
-  carry-over in `processFileMetadata` protects it during a sweep
+  file the flag lives on the `files` row: `POST /api/files` sets it from the request (`OnMessage` passes
+  `false`) and `PATCH /api/files/{id}` is the only way to change it afterwards. A re-`POST` of an active
+  file is refused with 409 (`types.ErrFileAlreadyTracked`, checked in `createWithLock` before qBittorrent
+  is touched), so nothing disarms the flag by accident; a soft-deleted row is re-created and takes the
+  request's flag. Only the carry-over in `processFileMetadata` protects it during a sweep
 - The completion criterion lives in **one** function, `downloads.Classify`, called by both the sweep and
   the HTTP duplicate path — a second copy is how one call site quietly ends up with `!= 0`. Failure rules
   run first (`error` / `missingFiles`, or the hash absent from a lookup that *succeeded*), so a row that
