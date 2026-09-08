@@ -836,8 +836,16 @@ type watchRequest struct {
 	ExpiresAt    *time.Time `json:"expires_at"`
 }
 
+const (
+	watchStateDisabled = "disabled"
+	watchStateExpired  = "expired"
+	watchStatePending  = "pending"
+	watchStateActive   = "active"
+)
+
 type watchResponse struct {
 	ID           string     `json:"id"`
+	State        string     `json:"state"`
 	Queries      []string   `json:"queries"`
 	Sources      []string   `json:"sources"`
 	IncludeRegex string     `json:"include_regex"`
@@ -1175,9 +1183,23 @@ func (c *Client) encodeError(ctx context.Context, w http.ResponseWriter, code in
 	c.encodeJSON(ctx, w, code, errorResponse{IsError: true, Error: reason})
 }
 
+func watchState(watch *watcher.Watch) string {
+	switch {
+	case watch.DisabledAt != nil:
+		return watchStateDisabled
+	case watch.ExpiresAt != nil && !watch.ExpiresAt.After(time.Now()):
+		return watchStateExpired
+	case watch.LastRunAt == nil:
+		return watchStatePending
+	default:
+		return watchStateActive
+	}
+}
+
 func toWatchResponse(watch *watcher.Watch) watchResponse {
 	return watchResponse{
 		ID:           watch.ID,
+		State:        watchState(watch),
 		Queries:      watch.Queries,
 		Sources:      watch.Sources,
 		IncludeRegex: watch.IncludeRegex,
@@ -1412,6 +1434,7 @@ type healthResponse struct {
 
 type watchesHealth struct {
 	Active      int        `json:"active"`
+	Pending     int        `json:"pending"`
 	OldestRunAt *time.Time `json:"oldest_run_at,omitempty"`
 	WithErrors  int        `json:"with_errors"`
 }
@@ -1523,7 +1546,7 @@ func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
 
 	now := time.Now()
 	health := &watchesHealth{}
-	neverRan := false
+	stalePending := false
 	for _, watch := range watches {
 		if watch.ExpiresAt != nil && !watch.ExpiresAt.After(now) {
 			continue
@@ -1533,9 +1556,14 @@ func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
 		if watch.LastStatus != "" {
 			health.WithErrors++
 		}
-		// a watch created seconds ago has no timestamp: it must not read as the oldest run
+		// the grace runs from the watch's own creation, never from process start: the process
+		// runs for weeks, so a start-time grace read every watch the agent created as degraded
+		// until the next watcher tick and paged the operator each time
 		if watch.LastRunAt == nil {
-			neverRan = true
+			health.Pending++
+			if now.Sub(watch.CreatedAt) > c.staleWatchAfter {
+				stalePending = true
+			}
 
 			continue
 		}
@@ -1545,20 +1573,15 @@ func (c *Client) watchHealth(ctx context.Context) (*watchesHealth, bool) {
 		}
 	}
 
-	return health, c.watchesAreDegraded(health, neverRan)
+	return health, c.watchesAreDegraded(health, stalePending)
 }
 
-func (c *Client) watchesAreDegraded(health *watchesHealth, neverRan bool) bool {
-	if health.WithErrors > 0 {
+func (c *Client) watchesAreDegraded(health *watchesHealth, stalePending bool) bool {
+	if stalePending || health.WithErrors > 0 {
 		return true
 	}
 
-	if health.OldestRunAt != nil && time.Since(*health.OldestRunAt) > c.staleWatchAfter {
-		return true
-	}
-
-	// before the grace period a watch that never ran is expected, not a fault
-	return neverRan && !c.startedAt.IsZero() && time.Since(c.startedAt) > c.staleWatchAfter
+	return health.OldestRunAt != nil && time.Since(*health.OldestRunAt) > c.staleWatchAfter
 }
 
 type runInfo struct {

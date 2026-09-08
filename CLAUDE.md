@@ -88,7 +88,12 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything).
   It also serves the watch CRUD routes (`/api/watches`), the two search entry points
   (`POST /api/watches/{id}/search` reproduces a stored watch, `POST /api/search` is ad-hoc), and the
-  `watches` and `downloads` objects on `/api/health`. Every error the two download entry points answer
+  `watches` and `downloads` objects on `/api/health`. A watch that has not run yet is `pending`: counted
+  separately in `watches.pending` (and reported as `state: pending` on `/api/watches`, a value derived
+  from the timestamps, never stored), and `degraded` only once it is older than the watch staleness
+  window measured from its **own** `created_at`. Never from process start: the process runs for weeks,
+  so a start-time grace read every watch the agent created as degraded until the next `:20` tick and
+  paged Gatus each time. Every error the two download entry points answer
   is JSON `{"isError": true, "error": "<reason>"}` written by `encodeError` - the agent reads the body,
   not the status, and a fixed `failed to create file from URL` hid a 409 behind a 500 for two days.
   `createFileFailure` picks the status for `POST /api/files`: 400 no provider, 409 file already
@@ -132,7 +137,8 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   table check passes a table whose columns a half-applied migration never added. `Disable` / `Revive` are
   a pair: nothing else writes `disabled_at`, and without `Revive` a soft-deleted id could never be
   re-created, since the row still exists and a create is a conflict. `Revive` clears the run lifecycle
-  (`seeded_at`, `last_run_at`, `last_status`) along with the soft delete — a re-create is a *create*, so it
+  (`seeded_at`, `last_run_at`, `last_status`) and re-stamps `created_at`, which the health grace for a
+  watch that has not run yet is measured from, along with the soft delete — a re-create is a *create*, so it
   seeds silently again (`Update` names the request's columns only and would leave a re-created watch
   publishing whatever its new queries or wider regex match) and does not report the dead watch's status as
   its own on `/api/health`. `watch_seen` is deliberately untouched, which is what keeps that seed from

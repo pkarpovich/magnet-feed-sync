@@ -12,6 +12,7 @@ type Watch struct {
 	IncludeRegex string
 	ExcludeRegex string
 	Rev          int
+	CreatedAt    time.Time
 	SeededAt     *time.Time
 	ExpiresAt    *time.Time
 	DisabledAt   *time.Time

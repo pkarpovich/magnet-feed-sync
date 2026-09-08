@@ -1305,6 +1305,7 @@ func watchWithRun(id string, lastRunAt *time.Time, status string) *watcher.Watch
 		Queries:    []string{"One Night Only 2026"},
 		Sources:    []string{"jackett"},
 		Rev:        1,
+		CreatedAt:  time.Now(),
 		LastRunAt:  lastRunAt,
 		LastStatus: status,
 	}
@@ -1355,6 +1356,7 @@ func TestHealthWatchesOKWhenFresh(t *testing.T) {
 	assert.Equal(t, "ok", resp.Status)
 	require.NotNil(t, resp.Watches)
 	assert.Equal(t, 2, resp.Watches.Active)
+	assert.Equal(t, 0, resp.Watches.Pending)
 	assert.Equal(t, 0, resp.Watches.WithErrors)
 	require.NotNil(t, resp.Watches.OldestRunAt)
 	assert.WithinDuration(t, *oldest, *resp.Watches.OldestRunAt, time.Second)
@@ -1388,29 +1390,58 @@ func TestHealthWatchesDegradedOnErrorStatus(t *testing.T) {
 	assert.Equal(t, 1, resp.Watches.WithErrors)
 }
 
-// a watch created through the API seconds ago has no last_run_at yet, and reporting the
-// service degraded before its first tick could possibly have run would be a false alarm
-func TestHealthWatchesNeverRanWithinGrace(t *testing.T) {
+// a watch created through the API seconds ago has no last_run_at yet: it is pending, not a
+// fault, until its own creation is older than the staleness window. The process start must
+// not enter into it: the process runs for weeks, and a start-time grace read every watch the
+// agent created as degraded until the next watcher tick and paged Gatus each time
+func TestHealthWatchesPendingUntilFirstRun(t *testing.T) {
 	tests := []struct {
 		name       string
-		startedAt  time.Time
+		createdAt  time.Time
 		wantStatus string
 	}{
-		{name: "within grace", startedAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok"},
-		{name: "past grace", startedAt: time.Now().Add(-3 * time.Hour), wantStatus: "degraded"},
+		{name: "created minutes ago", createdAt: time.Now().Add(-10 * time.Minute), wantStatus: "ok"},
+		{name: "never ran for hours", createdAt: time.Now().Add(-3 * time.Hour), wantStatus: "degraded"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := newMockWatchStore(watchWithRun("fresh", nil, ""))
+			fresh := watchWithRun("fresh", nil, "")
+			fresh.CreatedAt = tt.createdAt
+			store := newMockWatchStore(fresh)
 
-			w, resp := callHealth(t, watchHealthCtx(store, tt.startedAt))
+			w, resp := callHealth(t, watchHealthCtx(store, time.Now().Add(-5*time.Hour)))
 
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.Equal(t, tt.wantStatus, resp.Status)
 			require.NotNil(t, resp.Watches)
 			assert.Equal(t, 1, resp.Watches.Active)
+			assert.Equal(t, 1, resp.Watches.Pending)
 			assert.Nil(t, resp.Watches.OldestRunAt)
+		})
+	}
+}
+
+func TestWatchState(t *testing.T) {
+	expired := watchWithRun("expired", ago(time.Minute), "")
+	expired.ExpiresAt = ago(time.Minute)
+	disabled := watchWithRun("disabled", ago(time.Minute), "")
+	disabled.DisabledAt = ago(time.Minute)
+
+	tests := []struct {
+		name  string
+		watch *watcher.Watch
+		want  string
+	}{
+		{name: "never ran", watch: watchWithRun("fresh", nil, ""), want: "pending"},
+		{name: "ran", watch: watchWithRun("running", ago(time.Minute), ""), want: "active"},
+		{name: "expired", watch: expired, want: "expired"},
+		{name: "disabled", watch: disabled, want: "disabled"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, toWatchResponse(tt.watch).State)
 		})
 	}
 }
@@ -1599,6 +1630,9 @@ func (m *mockWatchStore) Create(w *watcher.Watch) error {
 
 	stored := *w
 	stored.Rev = 1
+	if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = time.Now()
+	}
 	m.watches[w.ID] = &stored
 	m.order = append(m.order, w.ID)
 
@@ -1651,6 +1685,7 @@ func (m *mockWatchStore) Revive(id string) error {
 	w.SeededAt = nil
 	w.LastRunAt = nil
 	w.LastStatus = ""
+	w.CreatedAt = time.Now()
 	m.revived = append(m.revived, id)
 
 	return nil
