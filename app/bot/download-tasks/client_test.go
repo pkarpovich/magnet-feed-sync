@@ -1553,7 +1553,7 @@ func TestBreakerNotifiesOncePerProvider(t *testing.T) {
 	require.Len(t, msgChan, 1, "a tripped provider notifies once, not once per skipped task")
 	msg := <-msgChan
 	assert.Contains(t, msg, "rutracker")
-	assert.Contains(t, msg, `2 task\(s\) skipped`, "reserved MarkdownV2 chars must be escaped")
+	assert.Contains(t, msg, `1 task\(s\) skipped`, "the second blocked fetch trips, only the third is skipped; reserved MarkdownV2 chars must be escaped")
 
 	client.CheckForUpdates(context.Background())
 	assert.Empty(t, msgChan, "an already blocked provider does not re-notify")
