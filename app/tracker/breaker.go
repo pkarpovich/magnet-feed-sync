@@ -10,6 +10,11 @@ import (
 const (
 	initialCooldown = time.Hour
 	maxCooldown     = 24 * time.Hour
+	// A lone Blocked fetch is far more often a solver timeout than a refusal (5 of alpha's 18
+	// timeout runs between July and September were singles, each costing an hour of skipped
+	// tasks), while a real block fails every fetch in a row. The streak spans runs and only a
+	// successful fetch clears it.
+	tripAfter = 2
 )
 
 // State is the observable circuit state of a single provider.
@@ -22,6 +27,7 @@ type State struct {
 type breakerEntry struct {
 	state         State
 	probedThisRun bool
+	blockedStreak int
 }
 
 // Breaker keeps one circuit per provider so a blocked tracker stops burning requests every sweep.
@@ -86,7 +92,10 @@ func (b *Breaker) RecordFailure(name string, kind providers.ErrorKind) {
 	defer b.mu.Unlock()
 
 	entry := b.entry(name)
+	entry.blockedStreak++
 	switch {
+	case !entry.state.Tripped && entry.blockedStreak < tripAfter:
+		return
 	case !entry.state.Tripped:
 		entry.state.Tripped = true
 		entry.state.Cooldown = initialCooldown
@@ -105,6 +114,7 @@ func (b *Breaker) RecordSuccess(name string) {
 	defer b.mu.Unlock()
 
 	entry := b.entry(name)
+	entry.blockedStreak = 0
 	entry.state.Tripped = false
 	entry.state.Cooldown = initialCooldown
 	entry.state.NextProbeAt = time.Time{}

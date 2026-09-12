@@ -1666,7 +1666,11 @@ func TestBreakerNotifiesOnRecovery(t *testing.T) {
 	})
 
 	client.CheckForUpdates(context.Background())
-	require.Len(t, msgChan, 1)
+	require.Empty(t, msgChan, "one blocked fetch is not a trip, so there is nothing to announce")
+
+	now = now.Add(time.Hour)
+	client.CheckForUpdates(context.Background())
+	require.Len(t, msgChan, 1, "the second blocked fetch in a row trips and announces it")
 	<-msgChan
 
 	blocked = false
