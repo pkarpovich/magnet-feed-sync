@@ -21,6 +21,40 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+func trip(b *Breaker, name string) {
+	for range tripAfter {
+		b.RecordFailure(name, providers.KindBlocked)
+	}
+}
+
+func TestBreakerOneBlockedFetchIsNotATrip(t *testing.T) {
+	b := NewBreaker(nil, "rutracker")
+
+	b.RecordFailure("rutracker", providers.KindBlocked)
+
+	assert.False(t, b.Snapshot()["rutracker"].Tripped, "a lone blocked fetch is a solver timeout until proven otherwise")
+	assert.True(t, b.Allow("rutracker"))
+
+	b.RecordSuccess("rutracker")
+	b.RecordFailure("rutracker", providers.KindBlocked)
+	assert.False(t, b.Snapshot()["rutracker"].Tripped, "a success clears the streak")
+
+	b.RecordFailure("rutracker", providers.KindBlocked)
+	assert.True(t, b.Snapshot()["rutracker"].Tripped, "the second blocked fetch in a row trips")
+}
+
+func TestBreakerStreakSpansRuns(t *testing.T) {
+	b := NewBreaker(nil, "rutracker")
+
+	b.BeginRun()
+	b.RecordFailure("rutracker", providers.KindBlocked)
+	b.RecordFailure("rutracker", providers.KindTransient)
+	b.BeginRun()
+	b.RecordFailure("rutracker", providers.KindBlocked)
+
+	assert.True(t, b.Snapshot()["rutracker"].Tripped, "a block that starts at the end of one run trips in the next")
+}
+
 func TestBreakerSeededProvidersAreOK(t *testing.T) {
 	b := NewBreaker(nil, "rutracker", "nnm")
 
@@ -36,7 +70,7 @@ func TestBreakerTripSkipsWithoutFetch(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}
 	b := NewBreaker(clock.Now, "rutracker", "nnm")
 
-	b.RecordFailure("rutracker", providers.KindBlocked)
+	trip(b, "rutracker")
 
 	assert.False(t, b.Allow("rutracker"), "blocked provider should be skipped before the cooldown expires")
 	assert.True(t, b.Allow("nnm"), "an unrelated provider must stay allowed")
@@ -62,7 +96,7 @@ func TestBreakerProbeAfterCooldown(t *testing.T) {
 	b := NewBreaker(clock.Now, "rutracker")
 
 	b.BeginRun()
-	b.RecordFailure("rutracker", providers.KindBlocked)
+	trip(b, "rutracker")
 	assert.False(t, b.Allow("rutracker"))
 
 	clock.advance(time.Hour)
@@ -85,6 +119,7 @@ func TestBreakerCooldownSequence(t *testing.T) {
 	expected := []time.Duration{time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 16 * time.Hour, 24 * time.Hour, 24 * time.Hour}
 
 	got := make([]time.Duration, 0, len(expected))
+	b.RecordFailure("rutracker", providers.KindBlocked)
 	for range expected {
 		b.BeginRun()
 		b.RecordFailure("rutracker", providers.KindBlocked)
@@ -108,7 +143,7 @@ func TestBreakerUnknownProviderIsTracked(t *testing.T) {
 	b := NewBreaker(nil)
 
 	assert.True(t, b.Allow("jackett"))
-	b.RecordFailure("jackett", providers.KindBlocked)
+	trip(b, "jackett")
 
 	assert.False(t, b.Allow("jackett"))
 	assert.True(t, b.Snapshot()["jackett"].Tripped)

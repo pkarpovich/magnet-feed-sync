@@ -278,9 +278,12 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   A failed `request.get` is not automatically a refusal either — most of them are the solver's own
   browser/DNS/timeout trouble, so it counts as `Blocked` only when FlareSolverr's message names a
   challenge (`challengeMarkers`), and a response missing `solution` is a version mismatch, so `Transient`
-- Circuit breaker (`tracker.Breaker`) — trips a provider on the first `Blocked` error, then skips its tasks
-  without issuing requests until a half-open probe is allowed; cooldown doubles `1h → 24h` and resets on
-  success. It gates only the cron sweep — manual refresh and task creation bypass it. Failure state is
+- Circuit breaker (`tracker.Breaker`) — trips a provider on the second `Blocked` error in a row
+  (`tripAfter`), then skips its tasks without issuing requests until a half-open probe is allowed;
+  cooldown doubles `1h → 24h` and resets on success. A lone `Blocked` is far more often a FlareSolverr
+  timeout than a refusal (5 of alpha's 18 timeout runs between July and September were singles, and
+  each cost an hour of skipped tasks), while a real block fails every fetch in a row, so the streak
+  spans runs, ignores other error kinds, and only a successful fetch clears it. It gates only the cron sweep — manual refresh and task creation bypass it. Failure state is
   persisted per task (`consecutive_failures` / `last_error` / `last_error_at`); a task is *failing* at
   `FailureThreshold` (3) consecutive failures, which drives the 24h retry stretch, the health `failing`
   count, and one-shot Telegram transition messages. "Once" is held by an in-memory set
