@@ -26,10 +26,18 @@ import (
 	"magnet-feed-sync/app/utils"
 )
 
-// FailureThreshold is the consecutive failure count at which a task counts as failing.
-const FailureThreshold = 3
-
-const deadTaskInterval = 24 * time.Hour
+const (
+	// A torrent that changed within freshFor is checked every sweep; one quiet for longer is
+	// checked every settledEvery, and past settledFor once a day. Most tracked pages are years
+	// old, and asking Cloudflare about them hourly was the bulk of the solver timeouts.
+	freshFor     = 14 * 24 * time.Hour
+	settledFor   = 90 * 24 * time.Hour
+	settledEvery = 6 * time.Hour
+	dormantEvery = 24 * time.Hour
+	// dueSlack absorbs sweep jitter: an interval measured against sweeps an hour apart would
+	// otherwise slip by a whole sweep whenever the previous one finished a minute late.
+	dueSlack = 5 * time.Minute
+)
 
 type FileParser interface {
 	Parse(ctx context.Context, url, location string) (*tracker.FileMetadata, error)
@@ -73,10 +81,10 @@ type Client struct {
 	notifier        notifier
 	dryMode         bool
 
-	// notifyMu guards failingNotified, the set of tasks the failing alert already went out
-	// for; it is separate from mu because the alert is decided outside the store critical section
-	notifyMu        sync.Mutex
-	failingNotified map[string]struct{}
+	// notifyMu guards staleNotified, the set of tasks the stale message already went out for;
+	// it is separate from mu because the message is decided outside the store critical section
+	notifyMu      sync.Mutex
+	staleNotified map[string]struct{}
 }
 
 type ClientCtx struct {
@@ -103,7 +111,7 @@ func NewClient(ctx *ClientCtx) *Client {
 		store:           ctx.Store,
 		breaker:         breaker,
 		notifier:        ctx.Notifier,
-		failingNotified: make(map[string]struct{}),
+		staleNotified:   make(map[string]struct{}),
 	}
 }
 
@@ -174,8 +182,8 @@ func (c *Client) createWithLock(ctx context.Context, metadata *tracker.FileMetad
 	c.mu.Unlock()
 
 	// CreateOrReplace wrote the freshly parsed metadata, so the failure counters are back to
-	// zero; leaving the id in the set would swallow the alert for the next failing streak
-	c.clearFailingNotified(metadata.ID)
+	// zero; leaving the id in the set would swallow the message for the next stale streak
+	c.clearStaleNotified(metadata.ID)
 
 	if c.dryMode {
 		return metadata, nil
@@ -218,13 +226,12 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 			return
 		}
 
-		text, recorded := c.recordSyncFailure(ctx, fileMetadata.ID, err)
+		text, kind, recorded := c.recordSyncFailure(ctx, fileMetadata.ID, err)
 		if fromCron {
 			c.recordParseFailure(fileMetadata.OriginalUrl, err)
-			// the counter never moved, so the alert would claim a streak the store does not
-			// have and would burn the one-shot slot the real crossing needs later
+			// the store did not move, so a message would describe a state it does not hold
 			if recorded {
-				c.notifyFailing(ctx, fileMetadata, text)
+				c.notifyFailure(ctx, fileMetadata, kind, text)
 			}
 		}
 		span.RecordError(err)
@@ -239,7 +246,6 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 		if name := c.tracker.ProviderName(fileMetadata.OriginalUrl); name != "" {
 			c.breaker.RecordSuccess(name)
 		}
-		c.notifyRecovered(ctx, fileMetadata)
 	}
 
 	c.mu.Lock()
@@ -293,6 +299,14 @@ func (c *Client) processFileMetadata(ctx context.Context, fileMetadata *tracker.
 	}
 
 	if _, err := c.dClient.CreateDownloadTask(updatedMetadata.Magnet, updatedMetadata.Location); err != nil {
+		// the new torrent is already in the client, added by hand or through /api/downloads:
+		// the store keeps the new magnet, otherwise every sweep would find it "changed" again
+		// and fail the same way for good (two tasks did exactly that, hourly, for a day)
+		if errors.Is(err, types.ErrTorrentAlreadyExists) {
+			slog.InfoContext(ctx, "torrent already in the download client, magnet accepted", "id", fileMetadata.ID)
+			return
+		}
+
 		slog.ErrorContext(ctx, "error creating download task", "error", err, "id", fileMetadata.ID, "url", utils.RedactURL(fileMetadata.OriginalUrl))
 
 		c.mu.Lock()
@@ -374,47 +388,64 @@ func (c *Client) recordSyncSuccess(ctx context.Context, id string) {
 		return
 	}
 
-	// the streak is over, so the next one has to be able to alert again — including when
-	// this success came from a manual refresh, which never alerts itself
-	c.clearFailingNotified(id)
+	// the streak is over, so the next one has to be able to speak again — including when
+	// this success came from a manual refresh, which never messages itself
+	c.clearStaleNotified(id)
 }
 
-// recordSyncFailure reports the error text it stored and whether the counter actually moved.
-func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) (string, bool) {
+// recordSyncFailure reports the error text and kind it stored and whether the store moved.
+// An error nobody classified is treated as transient: retrying is the cheap mistake.
+func (c *Client) recordSyncFailure(ctx context.Context, id string, cause error) (string, string, bool) {
 	text := cause.Error()
+	kind := providers.KindTransient
 
 	var providerErr *providers.ProviderError
 	if errors.As(cause, &providerErr) {
 		text = providerErr.Error()
+		kind = providerErr.Kind
 	}
 
-	failure := taskStore.SyncFailure{Text: text, At: time.Now()}
+	failure := taskStore.SyncFailure{Text: text, Kind: kind.Key(), At: time.Now()}
 	if err := c.store.RecordSyncFailure(id, failure); err != nil {
 		slog.ErrorContext(ctx, "error recording sync failure", "error", err, "id", id)
-		return text, false
+		return text, kind.Key(), false
 	}
 
-	return text, true
+	return text, kind.Key(), true
 }
 
-// notifyFailing fires once per failing streak, on the first cron run that observes the task
-// at or above the threshold. It cannot key off the exact 2→3 transition: a manual refresh
-// increments the counter without notifying, so the crossing run may not be a cron run at all,
-// and the alert would then be lost for good.
-func (c *Client) notifyFailing(ctx context.Context, metadata *tracker.FileMetadata, lastError string) {
-	// ConsecutiveFailures is the count read before this run's own increment
-	failures := metadata.ConsecutiveFailures + 1
-	if failures < FailureThreshold {
+// notifyFailure is the only place a failed check reaches the operator, and only for two
+// reasons. A permanent failure parks the task: it is said once, on the way in, and the
+// task is not checked again until a human acts (the previous kind is what metadata still
+// carries, this run's write is not in it yet). Anything else is the tracker's bad hour and
+// stays in the logs until the task has had no successful check for StaleAfter, when it is
+// said once per streak. The counters, the breaker and recoveries are never announced:
+// the operator learned to skip those, and then skipped the one that needed a decision.
+func (c *Client) notifyFailure(ctx context.Context, metadata *tracker.FileMetadata, kind, lastError string) {
+	if kind == providers.KindPermanent.Key() {
+		if metadata.Parked() {
+			return
+		}
+
+		c.send(ctx, escapeMarkdown(fmt.Sprintf(
+			"⛔ Parked: %s (%s)\n\n%s\n\nThe page cannot be read any more, so it is not checked again. Track the new page if the topic moved, or remove this one.",
+			metadata.Name, metadata.ID, lastError,
+		)))
 		return
 	}
 
-	if !c.markFailingNotified(metadata.ID) {
+	if !metadata.Stale(time.Now()) {
 		return
 	}
 
+	if !c.markStaleNotified(metadata.ID) {
+		return
+	}
+
+	days := int(time.Since(metadata.LastSyncAt).Hours() / 24)
 	c.send(ctx, escapeMarkdown(fmt.Sprintf(
-		"⚠️ Task is failing after %d attempts:\n\n%s (%s)\n\n%s",
-		failures, metadata.Name, metadata.ID, lastError,
+		"⏳ No successful check for %d days: %s (%s)\n\nlast error: %s",
+		days, metadata.Name, metadata.ID, lastError,
 	)))
 }
 
@@ -429,34 +460,23 @@ func (c *Client) send(ctx context.Context, msg string) {
 	}
 }
 
-// markFailingNotified claims the alert for id, reporting whether this caller won it.
-func (c *Client) markFailingNotified(id string) bool {
+// markStaleNotified claims the message for id, reporting whether this caller won it.
+func (c *Client) markStaleNotified(id string) bool {
 	c.notifyMu.Lock()
 	defer c.notifyMu.Unlock()
 
-	if _, done := c.failingNotified[id]; done {
+	if _, done := c.staleNotified[id]; done {
 		return false
 	}
-	c.failingNotified[id] = struct{}{}
-
+	c.staleNotified[id] = struct{}{}
 	return true
 }
 
-func (c *Client) clearFailingNotified(id string) {
+func (c *Client) clearStaleNotified(id string) {
 	c.notifyMu.Lock()
 	defer c.notifyMu.Unlock()
-	delete(c.failingNotified, id)
-}
 
-func (c *Client) notifyRecovered(ctx context.Context, metadata *tracker.FileMetadata) {
-	if metadata.ConsecutiveFailures < FailureThreshold {
-		return
-	}
-
-	c.send(ctx, escapeMarkdown(fmt.Sprintf(
-		"✅ Task recovered after %d failures:\n\n%s (%s)\n\nlast error: %s",
-		metadata.ConsecutiveFailures, metadata.Name, metadata.ID, metadata.LastError,
-	)))
+	delete(c.staleNotified, id)
 }
 
 // escapeMarkdown makes plain text safe for the MarkdownV2 parse mode every admin
@@ -524,7 +544,6 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 	}()
 
 	c.breaker.BeginRun()
-	before := c.breaker.Snapshot()
 
 	filesMetadata, err := c.store.GetAll()
 	if err != nil {
@@ -535,17 +554,24 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 		return
 	}
 
+	now := time.Now()
 	skipped := make(map[string]int)
+	var checked, parked, deferred int
 	for _, metadata := range filesMetadata {
 		// shutdown cancels the sweep context: stop instead of failing every remaining
-		// task, which would trip the breaker and notify on each restart
+		// task, which would trip the breaker on each restart
 		if ctx.Err() != nil {
 			slog.InfoContext(ctx, "update sweep interrupted", "error", ctx.Err())
 			return
 		}
 
-		if c.isStretched(metadata) {
-			slog.DebugContext(ctx, "task is failing, retry postponed", "id", metadata.ID, "failures", metadata.ConsecutiveFailures)
+		if metadata.Parked() {
+			parked++
+			continue
+		}
+
+		if !isDue(metadata, now) {
+			deferred++
 			continue
 		}
 
@@ -555,6 +581,7 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 			continue
 		}
 
+		checked++
 		c.processFileMetadata(ctx, metadata, true)
 	}
 
@@ -562,12 +589,45 @@ func (c *Client) CheckForUpdates(ctx context.Context) {
 		slog.InfoContext(ctx, "provider is blocked, tasks skipped", "provider", name, "skipped", count)
 	}
 
-	c.notifyBreakerTransitions(ctx, breakerDelta{before: before, after: c.breaker.Snapshot(), skipped: skipped})
+	slog.InfoContext(ctx, "update sweep finished", "checked", checked, "deferred", deferred, "parked", parked)
 }
 
-// RefreshAll re-checks every task on demand. It records store outcomes so the counters stay
-// truthful, but leaves the breaker, the alerts and the cron run state alone: a human pressing
-// refresh must not trip a provider, fire alerts, or hide a dead cron from the health endpoint.
+// checkInterval is how often a task is worth a request, from how recently its torrent changed.
+// Zero means every sweep.
+func checkInterval(torrentUpdatedAt, now time.Time) time.Duration {
+	if torrentUpdatedAt.IsZero() {
+		return 0
+	}
+
+	age := now.Sub(torrentUpdatedAt)
+	switch {
+	case age < freshFor:
+		return 0
+	case age < settledFor:
+		return settledEvery
+	default:
+		return dormantEvery
+	}
+}
+
+func isDue(metadata *tracker.FileMetadata, now time.Time) bool {
+	interval := checkInterval(metadata.TorrentUpdatedAt, now)
+	if interval == 0 {
+		return true
+	}
+
+	last := metadata.LastAttemptAt()
+	if last.IsZero() {
+		return true
+	}
+
+	return now.Sub(last) >= interval-dueSlack
+}
+
+// RefreshAll re-checks every task on demand, parked and deferred ones included. It records
+// store outcomes so the counters stay truthful, but leaves the breaker, the messages and the
+// cron run state alone: a human pressing refresh must not trip a provider, send messages, or
+// hide a dead cron from the health endpoint.
 func (c *Client) RefreshAll(ctx context.Context) {
 	ctx, span := otel.Tracer("download-tasks").Start(ctx, "RefreshAll")
 	defer span.End()
@@ -592,36 +652,10 @@ func (c *Client) RefreshAll(ctx context.Context) {
 	}
 }
 
-type breakerDelta struct {
-	before  map[string]tracker.State
-	after   map[string]tracker.State
-	skipped map[string]int
-}
-
-func (c *Client) notifyBreakerTransitions(ctx context.Context, delta breakerDelta) {
-	for name, state := range delta.after {
-		was := delta.before[name]
-		switch {
-		case state.Tripped && !was.Tripped:
-			c.send(ctx, escapeMarkdown(fmt.Sprintf(
-				"🚫 Provider %s is blocked, %d task(s) skipped this run, next probe at %s",
-				name, delta.skipped[name], state.NextProbeAt.Format(time.RFC3339),
-			)))
-		case was.Tripped && !state.Tripped:
-			c.send(ctx, escapeMarkdown(fmt.Sprintf("✅ Provider %s is reachable again", name)))
-		}
-	}
-}
-
 func (c *Client) recordRun(ctx context.Context, ok bool) {
 	if err := c.store.SetLastRun(time.Now(), ok); err != nil {
 		slog.ErrorContext(ctx, "error recording run state", "error", err)
 	}
-}
-
-func (c *Client) isStretched(metadata *tracker.FileMetadata) bool {
-	return metadata.ConsecutiveFailures >= FailureThreshold &&
-		time.Since(metadata.LastErrorAt.Time) < deadTaskInterval
 }
 
 func (c *Client) RemoveTask(id string) error {
@@ -631,7 +665,7 @@ func (c *Client) RemoveTask(id string) error {
 	if err := c.store.Remove(id); err != nil {
 		return err
 	}
-	c.clearFailingNotified(id)
+	c.clearStaleNotified(id)
 
 	return nil
 }
