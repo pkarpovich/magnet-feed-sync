@@ -20,6 +20,7 @@ const (
 // State is the observable circuit state of a single provider.
 type State struct {
 	Tripped     bool
+	TrippedAt   time.Time
 	NextProbeAt time.Time
 	Cooldown    time.Duration
 }
@@ -98,6 +99,7 @@ func (b *Breaker) RecordFailure(name string, kind providers.ErrorKind) {
 		return
 	case !entry.state.Tripped:
 		entry.state.Tripped = true
+		entry.state.TrippedAt = b.now()
 		entry.state.Cooldown = initialCooldown
 	case entry.state.Cooldown < maxCooldown:
 		entry.state.Cooldown *= 2
@@ -116,6 +118,7 @@ func (b *Breaker) RecordSuccess(name string) {
 	entry := b.entry(name)
 	entry.blockedStreak = 0
 	entry.state.Tripped = false
+	entry.state.TrippedAt = time.Time{}
 	entry.state.Cooldown = initialCooldown
 	entry.state.NextProbeAt = time.Time{}
 }

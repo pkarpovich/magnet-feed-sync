@@ -121,6 +121,7 @@ func TestCreateOrReplaceRoundTripsFailureFields(t *testing.T) {
 	m.ConsecutiveFailures = 2
 	m.LastError = "Blocked: flaresolverr not configured"
 	m.LastErrorAt = sql.NullTime{Time: errorAt, Valid: true}
+	m.LastErrorKind = "blocked"
 
 	require.NoError(t, repo.CreateOrReplace(m))
 
@@ -128,6 +129,7 @@ func TestCreateOrReplaceRoundTripsFailureFields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, byID.ConsecutiveFailures)
 	assert.Equal(t, "Blocked: flaresolverr not configured", byID.LastError)
+	assert.Equal(t, "blocked", byID.LastErrorKind)
 	assert.True(t, byID.LastErrorAt.Valid)
 	assert.True(t, errorAt.Equal(byID.LastErrorAt.Time))
 
@@ -136,6 +138,7 @@ func TestCreateOrReplaceRoundTripsFailureFields(t *testing.T) {
 	require.Len(t, all, 1)
 	assert.Equal(t, 2, all[0].ConsecutiveFailures)
 	assert.Equal(t, "Blocked: flaresolverr not configured", all[0].LastError)
+	assert.Equal(t, "blocked", all[0].LastErrorKind)
 	assert.True(t, all[0].LastErrorAt.Valid)
 }
 
@@ -181,12 +184,14 @@ func TestRecordSyncFailureIncrements(t *testing.T) {
 	assert.True(t, first.Equal(stored.LastErrorAt.Time))
 
 	second := first.Add(time.Hour)
-	require.NoError(t, repo.RecordSyncFailure(m.ID, SyncFailure{Text: "Blocked: 403", At: second}))
+	require.NoError(t, repo.RecordSyncFailure(m.ID, SyncFailure{Text: "Permanent: 404", Kind: "permanent", At: second}))
 
 	stored, err = repo.GetById(m.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, stored.ConsecutiveFailures)
-	assert.Equal(t, "Blocked: 403", stored.LastError)
+	assert.Equal(t, "Permanent: 404", stored.LastError)
+	assert.Equal(t, "permanent", stored.LastErrorKind)
+	assert.True(t, stored.Parked())
 	assert.True(t, second.Equal(stored.LastErrorAt.Time))
 }
 
@@ -197,7 +202,7 @@ func TestRecordSyncSuccessResetsFailureState(t *testing.T) {
 	require.NoError(t, repo.CreateOrReplace(m))
 
 	failedAt := time.Date(2026, 8, 6, 8, 0, 0, 0, time.UTC)
-	require.NoError(t, repo.RecordSyncFailure(m.ID, SyncFailure{Text: "Blocked: 403", At: failedAt}))
+	require.NoError(t, repo.RecordSyncFailure(m.ID, SyncFailure{Text: "Permanent: 404", Kind: "permanent", At: failedAt}))
 
 	syncedAt := failedAt.Add(2 * time.Hour)
 	require.NoError(t, repo.RecordSyncSuccess(m.ID, syncedAt))
@@ -206,6 +211,7 @@ func TestRecordSyncSuccessResetsFailureState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, stored.ConsecutiveFailures)
 	assert.Empty(t, stored.LastError)
+	assert.Empty(t, stored.LastErrorKind, "a success un-parks the task")
 	assert.False(t, stored.LastErrorAt.Valid)
 	assert.True(t, syncedAt.Equal(stored.LastSyncAt))
 }

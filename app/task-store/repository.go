@@ -16,7 +16,7 @@ import (
 var ErrSchemaNotInitialised = errors.New("database schema not initialised: run the migrate binary (`go run ./cmd/migrate`)")
 
 // the columns whose absence caused the incident: the table existed, they did not
-var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at", "notify"}
+var requiredFileColumns = []string{"consecutive_failures", "last_error", "last_error_at", "last_error_kind", "notify"}
 
 type Repository struct {
 	db *database.Client
@@ -87,8 +87,9 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 				consecutive_failures,
 				last_error,
 				last_error_at,
+				last_error_kind,
 				notify
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
 		metadata.ID,
 		metadata.OriginalUrl,
 		metadata.Magnet,
@@ -100,6 +101,7 @@ func (r *Repository) CreateOrReplace(metadata *tracker.FileMetadata) error {
 		metadata.ConsecutiveFailures,
 		metadata.LastError,
 		metadata.LastErrorAt,
+		metadata.LastErrorKind,
 		metadata.Notify,
 	)
 
@@ -122,6 +124,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			consecutive_failures,
 			last_error,
 			last_error_at,
+			last_error_kind,
 			notify
 		FROM
 			files
@@ -156,6 +159,7 @@ func (r *Repository) GetAll() ([]*tracker.FileMetadata, error) {
 			&m.ConsecutiveFailures,
 			&m.LastError,
 			&m.LastErrorAt,
+			&m.LastErrorKind,
 			&m.Notify,
 		); err != nil {
 			return nil, err
@@ -190,6 +194,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 			consecutive_failures,
 			last_error,
 			last_error_at,
+			last_error_kind,
 			notify
 		FROM
 			files
@@ -209,6 +214,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 		&m.ConsecutiveFailures,
 		&m.LastError,
 		&m.LastErrorAt,
+		&m.LastErrorKind,
 		&m.Notify,
 	)
 	if err != nil {
@@ -220,6 +226,7 @@ func (r *Repository) GetById(id string) (*tracker.FileMetadata, error) {
 
 type SyncFailure struct {
 	Text string
+	Kind string
 	At   time.Time
 }
 
@@ -230,6 +237,7 @@ func (r *Repository) RecordSyncSuccess(id string, syncedAt time.Time) error {
 			consecutive_failures = 0,
 			last_error = '',
 			last_error_at = NULL,
+			last_error_kind = '',
 			last_sync_at = ?
 		WHERE
 			id = ?
@@ -247,10 +255,11 @@ func (r *Repository) RecordSyncFailure(id string, failure SyncFailure) error {
 		SET
 			consecutive_failures = consecutive_failures + 1,
 			last_error = ?,
-			last_error_at = ?
+			last_error_at = ?,
+			last_error_kind = ?
 		WHERE
 			id = ?
-	`, failure.Text, failure.At, id)
+	`, failure.Text, failure.At, failure.Kind, id)
 	if err != nil {
 		return fmt.Errorf("record sync failure: %w", err)
 	}
