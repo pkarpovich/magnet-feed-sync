@@ -15,6 +15,11 @@ also monitors for updates on tracked pages and schedules new download tasks as n
 - Release watcher: saved cross-indexer hunts (Jackett + ext.to) that publish a NATS notification and a
   Telegram message when a genuinely new release shows up.
 - Opt-in NATS notifications when a download finishes and when a tracked topic gets a new magnet.
+- A quiet admin channel in Telegram: a new magnet being downloaded, a page that needs your decision
+  (parked), and a task that has not been read for three days. Tracker hiccups, breaker trips and
+  recoveries stay in the logs and on `/api/health`.
+- Tracked pages are checked as often as they change: every hour while the torrent is younger than two
+  weeks, every 6 hours up to 90 days, once a day after that.
 
 ## Usage
 
@@ -93,7 +98,8 @@ With a Jackett `/dl/` `.torrent` URL:
 {
   "status": "ok",
   "tracked": 42,
-  "failing": 0,
+  "parked": 0,
+  "stale": 0,
   "last_run_at": "2026-08-10T12:00:00Z",
   "providers": {"rutracker": "ok", "nnm": "ok"},
   "watches": {"active": 1, "oldest_run_at": "2026-08-10T12:20:00Z", "with_errors": 0},
@@ -102,17 +108,24 @@ With a Jackett `/dl/` `.torrent` URL:
 ```
 
 - `status` - `ok`, `degraded`, or `unhealthy`. Evaluated in order, first match wins:
-  1. `unhealthy` (HTTP **503**) - any provider circuit breaker is tripped, or the last cron run is stale
+  1. `unhealthy` (HTTP **503**) - a provider circuit breaker has stayed tripped for 2 hours or more (it
+     failed its first re-probe, so this is a real block, not a bad hour), or the last cron run is stale
      (older than twice the cron interval; before the first run the service start time is used instead)
-  2. `degraded` (HTTP 200) - at least one tracked task is failing, or the watcher is in trouble: a watch
-     cycle staler than twice the `WATCH_CRON` interval, an active watch carrying a non-empty
-     `last_status`, or an active watch that has never run once the service has been up longer than that
-     window. The watcher check can only move `ok` to `degraded`; it never lowers a verdict already
-     reached above, and never reports `unhealthy` itself. Zero watches is `ok`, not degraded
+  2. `degraded` (HTTP 200) - a provider breaker tripped less than 2 hours ago, the last sweep could not
+     read the task list, or the watcher is in trouble: a watch cycle staler than twice the `WATCH_CRON`
+     interval, an active watch carrying a non-empty `last_status`, or an active watch that has never run
+     once the service has been up longer than that window. The watcher check can only move `ok` to
+     `degraded`; it never lowers a verdict already reached above, and never reports `unhealthy` itself.
+     Zero watches is `ok`, not degraded
   3. `ok` (HTTP 200)
+
+  The status is about the service. A single tracked page in trouble never changes it: that is what the
+  two counters below and the Telegram messages are for.
 - `tracked` - number of tracked tasks.
-- `failing` - tasks with 3 or more consecutive sync failures. Fewer than 3 is a silent ramp-up and is not
-  counted here.
+- `parked` - tasks whose last check failed for good (the page is gone or has no magnet link). A parked
+  task is not checked again until you refresh it or track the new page; it was announced once when it
+  happened.
+- `stale` - tasks with no successful check for 3 days that are not parked. Announced once per streak.
 - `last_run_at` - when the cron sweep last finished; omitted until the first run completes.
 - `providers` - per-provider circuit breaker state, `ok` or `blocked`. Keys are the providers the service
   actually built, so `jackett` only appears when `JACKETT_URL` is set.
