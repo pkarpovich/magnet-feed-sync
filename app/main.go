@@ -191,22 +191,21 @@ func run(cfg *config.Config) error {
 	}
 
 	httpCtx := &http.ClientCtx{
-		Config:           cfg.Http,
-		Store:            store,
-		TaskCreator:      downloadTasksClient,
-		DownloadClient:   dClient,
-		DownloadStore:    downloadRepo,
-		TorrentLookup:    dClient,
-		Notifier:         notifier,
-		DryMode:          cfg.DryMode,
-		Breaker:          breaker,
-		RunState:         store,
-		WatchStore:       watchRepo,
-		Engine:           engine,
-		StaleRunAfter:    staleRunAfter(cfg.Cron),
-		StaleWatchAfter:  staleRunAfter(cfg.WatchCron),
-		StartedAt:        time.Now(),
-		FailureThreshold: downloadTasks.FailureThreshold,
+		Config:          cfg.Http,
+		Store:           store,
+		TaskCreator:     downloadTasksClient,
+		DownloadClient:  dClient,
+		DownloadStore:   downloadRepo,
+		TorrentLookup:   dClient,
+		Notifier:        notifier,
+		DryMode:         cfg.DryMode,
+		Breaker:         breaker,
+		RunState:        store,
+		WatchStore:      watchRepo,
+		Engine:          engine,
+		StaleRunAfter:   staleRunAfter(cfg.Cron),
+		StaleWatchAfter: staleRunAfter(cfg.WatchCron),
+		StartedAt:       time.Now(),
 	}
 	// a typed nil in the interface field would pass the handler's nil check and panic on the
 	// first magnet call, so a disabled ext.to source leaves the field unset
