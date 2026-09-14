@@ -148,3 +148,19 @@ func TestBreakerUnknownProviderIsTracked(t *testing.T) {
 	assert.False(t, b.Allow("jackett"))
 	assert.True(t, b.Snapshot()["jackett"].Tripped)
 }
+
+func TestBreakerRemembersWhenItTripped(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)}
+	b := NewBreaker(clock.Now, "rutracker")
+
+	trip(b, "rutracker")
+	assert.Equal(t, clock.now, b.Snapshot()["rutracker"].TrippedAt)
+
+	clock.advance(time.Hour)
+	b.Allow("rutracker")
+	b.RecordFailure("rutracker", providers.KindBlocked)
+	assert.Equal(t, clock.now.Add(-time.Hour), b.Snapshot()["rutracker"].TrippedAt, "a failed probe keeps the original trip time")
+
+	b.RecordSuccess("rutracker")
+	assert.True(t, b.Snapshot()["rutracker"].TrippedAt.IsZero())
+}

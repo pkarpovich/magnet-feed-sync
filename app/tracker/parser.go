@@ -28,6 +28,37 @@ type FileMetadata struct {
 	ConsecutiveFailures int          `json:"-"`
 	LastError           string       `json:"-"`
 	LastErrorAt         sql.NullTime `json:"-"`
+	LastErrorKind       string       `json:"-"`
+}
+
+// StaleAfter is how long a task may go without a successful check before it counts as stale:
+// one failed sweep is a bad hour at the tracker, three days is a page worth a look.
+const StaleAfter = 3 * 24 * time.Hour
+
+// Parked reports whether the last check failed for good (a page that is gone or has no magnet),
+// which is the one failure retrying cannot fix, so the sweep leaves the task to the operator.
+func (m *FileMetadata) Parked() bool {
+	return m.LastErrorKind == providers.KindPermanent.Key()
+}
+
+// Stale reports a task whose last successful check is older than StaleAfter. A parked task is
+// not stale: it is already reported, and it is not going to recover on its own.
+func (m *FileMetadata) Stale(now time.Time) bool {
+	if m.Parked() || m.LastSyncAt.IsZero() {
+		return false
+	}
+
+	return now.Sub(m.LastSyncAt) >= StaleAfter
+}
+
+// LastAttemptAt is the later of the last success and the last failure; zero when never checked.
+func (m *FileMetadata) LastAttemptAt() time.Time {
+	last := m.LastSyncAt
+	if m.LastErrorAt.Valid && m.LastErrorAt.Time.After(last) {
+		last = m.LastErrorAt.Time
+	}
+
+	return last
 }
 
 var ErrProviderNotFound = errors.New("provider not found")

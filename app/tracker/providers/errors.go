@@ -1,6 +1,9 @@
 package providers
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ErrorKind classifies why a provider call failed.
 type ErrorKind int
@@ -23,6 +26,11 @@ func (k ErrorKind) String() string {
 	default:
 		return "Transient"
 	}
+}
+
+// Key is the form stored in the database, so a renamed String never rewrites history.
+func (k ErrorKind) Key() string {
+	return strings.ToLower(k.String())
 }
 
 // ProviderError carries the classification alongside the underlying error.

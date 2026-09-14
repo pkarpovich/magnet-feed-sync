@@ -83,9 +83,15 @@ steps, so stage order no longer decides that, but keep the ordering anyway.
   and promises one terminal event, and it is **refused with 503 before qBittorrent is touched** when the
   notifier is disabled (and, on `/api/downloads` only, in dry mode) — a promise nobody can keep must not
   be accepted. `GET /api/health` reports real state (`ok` / `degraded` / `unhealthy` + 503), derived from
-  per-task failure counters, the breaker snapshot, and the last cron run — it is not a hardcoded string.
-  Both halves of the run state matter: a stale `last_run_at` is `unhealthy`, `last_run_ok = false` is
-  `degraded` (a sweep that died at `GetAll` still refreshed the timestamp without checking anything).
+  the breaker snapshot and the last cron run — it is not a hardcoded string, and it is about the
+  **service**, never about one tracked page: `parked` (a page that failed for good) and `stale` (no
+  successful check for `tracker.StaleAfter`) are counted for the dashboard and never move the status,
+  because the bot already said them and a single dead page painted the whole infrastructure board red
+  and paged twice for the same thing. A tripped breaker is `degraded` for its first
+  `blockedUnhealthyAfter` (2h) — one bad hour at the tracker — and `unhealthy` once it stays open past
+  the first probe. Both halves of the run state matter: a stale `last_run_at` is `unhealthy`,
+  `last_run_ok = false` is `degraded` (a sweep that died at `GetAll` still refreshed the timestamp
+  without checking anything).
   It also serves the watch CRUD routes (`/api/watches`), the two search entry points
   (`POST /api/watches/{id}/search` reproduces a stored watch, `POST /api/search` is ad-hoc), and the
   `watches` and `downloads` objects on `/api/health`. A watch that has not run yet is `pending`: counted
@@ -283,19 +289,35 @@ later. No config loading, no Loki, no tracing — the migrate image must not pul
   cooldown doubles `1h → 24h` and resets on success. A lone `Blocked` is far more often a FlareSolverr
   timeout than a refusal (5 of alpha's 18 timeout runs between July and September were singles, and
   each cost an hour of skipped tasks), while a real block fails every fetch in a row, so the streak
-  spans runs, ignores other error kinds, and only a successful fetch clears it. It gates only the cron sweep — manual refresh and task creation bypass it. Failure state is
-  persisted per task (`consecutive_failures` / `last_error` / `last_error_at`); a task is *failing* at
-  `FailureThreshold` (3) consecutive failures, which drives the 24h retry stretch, the health `failing`
-  count, and one-shot Telegram transition messages. "Once" is held by an in-memory set
-  (`Client.failingNotified`), not by the exact `2 → 3` transition: a manual refresh increments the
-  counter without notifying, so the crossing run is often not a cron run and an edge trigger loses the
-  alert for good. The set is cleared on any recorded success or removal, and it does not survive a
-  restart — a still-failing task alerts once more after one
+  spans runs, ignores other error kinds, and only a successful fetch clears it. It gates only the cron sweep — manual refresh and task creation bypass it. `State.TrippedAt`
+  is when the circuit opened; the health endpoint reads it to tell a bad hour from a lasting block.
+  Failure state is persisted per task (`consecutive_failures` / `last_error` / `last_error_at` /
+  `last_error_kind`, the last one being `providers.ErrorKind.Key()`), and **the kind decides what
+  happens next, not the count**. A `Permanent` failure (404, no magnet) *parks* the task
+  (`FileMetadata.Parked`): the sweep never asks about it again until a human refreshes it or tracks the
+  new page, and it is said in Telegram once, on the way in — the previous kind is what the row still
+  carries when the message is decided. `Blocked` and `Transient` are the tracker's bad hour: retried on
+  the normal schedule, never counted into a quarantine (the old 24h stretch cost a fresh series a day
+  for three solver timeouts) and never announced; only a task with no successful check for
+  `tracker.StaleAfter` (3d) gets one quiet line per streak, held by the in-memory `Client.staleNotified`
+  (cleared on success, removal or re-creation; it does not survive a restart, so a still-stale task
+  is said once more after one). Breaker trips, recoveries and counters are logs and `/api/health`,
+  never messages: the operator learned to skip those and then skipped the one that needed a decision
+- Check cadence — the sweep asks about a task only when it is due (`isDue`): a torrent that changed
+  within `freshFor` (14d) every sweep, one quiet for less than `settledFor` (90d) every `settledEvery`
+  (6h), older ones every `dormantEvery` (24h), measured from `FileMetadata.LastAttemptAt` (success or
+  failure, whichever is later) with `dueSlack` (5m) so sweep jitter never skips a whole interval. Most
+  tracked pages are years old, and asking Cloudflare about them hourly was the bulk of the solver
+  timeouts; the price is that a dormant topic's new release is noticed within a day, not an hour, after
+  which it is fresh again
+- A magnet change whose torrent qBittorrent already has (`ErrTorrentAlreadyExists`, added by hand or
+  through `/api/downloads`) keeps the **new** magnet and says nothing: reverting it, as the code used
+  to, made every sweep find the same change again and fail the same way for good
 - Cron sweep vs manual refresh — only the cron job calls `CheckForUpdates`, which drives the breaker, the
-  Telegram transitions and `last_run_at`. Both refresh endpoints are manual (`RefreshAll` /
-  `CheckFileForUpdates`): they record store outcomes so the counters stay truthful, bypass the breaker gate
-  and the 24h stretch so the button really retries, and touch neither the alerts nor the run state — a human
-  pressing refresh must not trip a provider or hide a dead cron from `/api/health`
+  Telegram messages and `last_run_at`. Both refresh endpoints are manual (`RefreshAll` /
+  `CheckFileForUpdates`): they record store outcomes so the counters stay truthful, bypass the breaker gate,
+  parking and the cadence so the button really retries, and touch neither the messages nor the run state — a
+  human pressing refresh must not trip a provider or hide a dead cron from `/api/health`
 - Context-based graceful shutdown — the cron sweep runs on the app context, so `CheckForUpdates` stops at
   the next task when it is cancelled and neither records the aborted parse as a task failure nor overwrites
   `last_run_at`; without those guards every restart mid-sweep would trip the breaker and notify

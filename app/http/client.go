@@ -90,52 +90,44 @@ type magnetResolver interface {
 }
 
 type Client struct {
-	config           config.HttpConfig
-	store            FileStore
-	taskCreator      TaskCreator
-	downloadClient   DownloadClient
-	downloadStore    downloadStore
-	torrents         torrentLookup
-	notifier         notifier
-	dryMode          bool
-	breaker          BreakerSnapshotter
-	runState         RunStateReader
-	watches          watchStore
-	engine           searchEngine
-	magnets          magnetResolver
-	staleRunAfter    time.Duration
-	staleWatchAfter  time.Duration
-	startedAt        time.Time
-	failureThreshold int
+	config          config.HttpConfig
+	store           FileStore
+	taskCreator     TaskCreator
+	downloadClient  DownloadClient
+	downloadStore   downloadStore
+	torrents        torrentLookup
+	notifier        notifier
+	dryMode         bool
+	breaker         BreakerSnapshotter
+	runState        RunStateReader
+	watches         watchStore
+	engine          searchEngine
+	magnets         magnetResolver
+	staleRunAfter   time.Duration
+	staleWatchAfter time.Duration
+	startedAt       time.Time
 }
 
 type ClientCtx struct {
-	Config           config.HttpConfig
-	Store            FileStore
-	TaskCreator      TaskCreator
-	DownloadClient   DownloadClient
-	DownloadStore    downloadStore
-	TorrentLookup    torrentLookup
-	Notifier         notifier
-	DryMode          bool
-	Breaker          BreakerSnapshotter
-	RunState         RunStateReader
-	WatchStore       watchStore
-	Engine           searchEngine
-	Magnets          magnetResolver
-	StaleRunAfter    time.Duration
-	StaleWatchAfter  time.Duration
-	StartedAt        time.Time
-	FailureThreshold int
+	Config          config.HttpConfig
+	Store           FileStore
+	TaskCreator     TaskCreator
+	DownloadClient  DownloadClient
+	DownloadStore   downloadStore
+	TorrentLookup   torrentLookup
+	Notifier        notifier
+	DryMode         bool
+	Breaker         BreakerSnapshotter
+	RunState        RunStateReader
+	WatchStore      watchStore
+	Engine          searchEngine
+	Magnets         magnetResolver
+	StaleRunAfter   time.Duration
+	StaleWatchAfter time.Duration
+	StartedAt       time.Time
 }
 
 func NewClient(ctx *ClientCtx) *Client {
-	// an unset threshold would make `>= 0` true for every row and pin health to degraded
-	threshold := ctx.FailureThreshold
-	if threshold < 1 {
-		threshold = 1
-	}
-
 	// an unset window would make every run older than zero, pinning health to unhealthy
 	staleRunAfter := ctx.StaleRunAfter
 	if staleRunAfter <= 0 {
@@ -148,23 +140,22 @@ func NewClient(ctx *ClientCtx) *Client {
 	}
 
 	return &Client{
-		config:           ctx.Config,
-		store:            ctx.Store,
-		taskCreator:      ctx.TaskCreator,
-		downloadClient:   ctx.DownloadClient,
-		downloadStore:    ctx.DownloadStore,
-		torrents:         ctx.TorrentLookup,
-		notifier:         ctx.Notifier,
-		dryMode:          ctx.DryMode,
-		breaker:          ctx.Breaker,
-		runState:         ctx.RunState,
-		watches:          ctx.WatchStore,
-		engine:           ctx.Engine,
-		magnets:          ctx.Magnets,
-		staleRunAfter:    staleRunAfter,
-		staleWatchAfter:  staleWatchAfter,
-		startedAt:        ctx.StartedAt,
-		failureThreshold: threshold,
+		config:          ctx.Config,
+		store:           ctx.Store,
+		taskCreator:     ctx.TaskCreator,
+		downloadClient:  ctx.DownloadClient,
+		downloadStore:   ctx.DownloadStore,
+		torrents:        ctx.TorrentLookup,
+		notifier:        ctx.Notifier,
+		dryMode:         ctx.DryMode,
+		breaker:         ctx.Breaker,
+		runState:        ctx.RunState,
+		watches:         ctx.WatchStore,
+		engine:          ctx.Engine,
+		magnets:         ctx.Magnets,
+		staleRunAfter:   staleRunAfter,
+		staleWatchAfter: staleWatchAfter,
+		startedAt:       ctx.StartedAt,
 	}
 }
 
@@ -1422,10 +1413,16 @@ const (
 // from the cron expression.
 const defaultStaleRunAfter = 2 * time.Hour
 
+// blockedUnhealthyAfter is how long a provider has to stay tripped before the service is
+// unhealthy: the first trip is one bad hour at the tracker and only degrades; a circuit still
+// open past the first probe is a real block worth paging for.
+const blockedUnhealthyAfter = 2 * time.Hour
+
 type healthResponse struct {
 	Status    string            `json:"status"`
 	Tracked   int               `json:"tracked"`
-	Failing   int               `json:"failing"`
+	Parked    int               `json:"parked"`
+	Stale     int               `json:"stale"`
 	LastRunAt *time.Time        `json:"last_run_at,omitempty"`
 	Providers map[string]string `json:"providers"`
 	Watches   *watchesHealth    `json:"watches,omitempty"`
@@ -1454,21 +1451,28 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	failing := 0
+	// parked and stale are counted for the dashboard and never move the status: both are
+	// about one tracked page, not about the service, and the bot has already said them
+	now := time.Now()
+	parked, stale := 0, 0
 	for _, f := range files {
-		if f.ConsecutiveFailures >= c.failureThreshold {
-			failing++
+		if f.Parked() {
+			parked++
+		}
+		if f.Stale(now) {
+			stale++
 		}
 	}
 
-	providerStates, anyBlocked := c.providerStates()
+	providerStates, blocked := c.providerStates(now)
 	run := c.lastRun(ctx)
 	watches, watchesDegraded := c.watchHealth(ctx)
 
 	resp := healthResponse{
 		Status:    statusOk,
 		Tracked:   len(files),
-		Failing:   failing,
+		Parked:    parked,
+		Stale:     stale,
 		Providers: providerStates,
 		Watches:   watches,
 		Downloads: c.downloadHealth(ctx),
@@ -1480,12 +1484,12 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 	// degraded arm only, so it can never lower an unhealthy verdict reached elsewhere
 	code := http.StatusOK
 	switch {
-	case anyBlocked || c.runIsStale(run):
+	case blocked == blockedLong || c.runIsStale(run):
 		resp.Status = statusUnhealthy
 		code = http.StatusServiceUnavailable
 	// a sweep that could not read the task list refreshed last_run_at without checking
 	// anything, so staleness alone would report it as healthy
-	case failing > 0 || (run.present && !run.ok) || watchesDegraded:
+	case blocked == blockedFresh || (run.present && !run.ok) || watchesDegraded:
 		resp.Status = statusDegraded
 	}
 
@@ -1497,23 +1501,40 @@ func (c *Client) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (c *Client) providerStates() (map[string]string, bool) {
+type blockedLevel int
+
+const (
+	blockedNone blockedLevel = iota
+	blockedFresh
+	blockedLong
+)
+
+// providerStates reports each provider's circuit and the worst block among them: a circuit
+// that opened within blockedUnhealthyAfter is fresh, an older one is long.
+func (c *Client) providerStates(now time.Time) (map[string]string, blockedLevel) {
 	states := make(map[string]string)
 	if c.breaker == nil {
-		return states, false
+		return states, blockedNone
 	}
 
-	anyBlocked := false
+	worst := blockedNone
 	for name, state := range c.breaker.Snapshot() {
-		if state.Tripped {
-			states[name] = statusBlocked
-			anyBlocked = true
+		if !state.Tripped {
+			states[name] = statusOk
 			continue
 		}
-		states[name] = statusOk
+
+		states[name] = statusBlocked
+		level := blockedFresh
+		if !state.TrippedAt.IsZero() && now.Sub(state.TrippedAt) >= blockedUnhealthyAfter {
+			level = blockedLong
+		}
+		if level > worst {
+			worst = level
+		}
 	}
 
-	return states, anyBlocked
+	return states, worst
 }
 
 func (c *Client) downloadHealth(ctx context.Context) *downloadsHealth {

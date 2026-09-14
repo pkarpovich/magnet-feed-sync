@@ -1163,57 +1163,31 @@ func callHealth(t *testing.T, ctx *ClientCtx) (*httptest.ResponseRecorder, healt
 
 func TestHealthOK(t *testing.T) {
 	w, resp := callHealth(t, &ClientCtx{
-		Store:            &mockFileStore{files: failingFiles(0, 1, 2)},
-		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}, "nnm": {}}},
-		RunState:         &mockRunState{at: time.Now().Add(-30 * time.Minute), ok: true},
-		StaleRunAfter:    2 * time.Hour,
-		StartedAt:        time.Now().Add(-5 * time.Hour),
-		FailureThreshold: 3,
+		Store:         &mockFileStore{files: failingFiles(0, 1, 2)},
+		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}, "nnm": {}}},
+		RunState:      &mockRunState{at: time.Now().Add(-30 * time.Minute), ok: true},
+		StaleRunAfter: 2 * time.Hour,
+		StartedAt:     time.Now().Add(-5 * time.Hour),
 	})
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "ok", resp.Status)
 	assert.Equal(t, 3, resp.Tracked)
-	assert.Equal(t, 0, resp.Failing)
+	assert.Equal(t, 0, resp.Parked)
+	assert.Equal(t, 0, resp.Stale)
 	assert.Equal(t, map[string]string{"rutracker": "ok", "nnm": "ok"}, resp.Providers)
 	require.NotNil(t, resp.LastRunAt)
 }
 
-func TestHealthDegraded(t *testing.T) {
+// a parked page and a stale one are the bot's story and the dashboard's numbers; neither is
+// the service being in trouble, so neither moves the status
+func TestHealthParkedAndStaleDoNotChangeStatus(t *testing.T) {
 	w, resp := callHealth(t, &ClientCtx{
-		Store:            &mockFileStore{files: failingFiles(0, 3, 7)},
-		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
-		StaleRunAfter:    2 * time.Hour,
-		FailureThreshold: 3,
-	})
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "degraded", resp.Status)
-	assert.Equal(t, 3, resp.Tracked)
-	assert.Equal(t, 2, resp.Failing)
-}
-
-// a sweep that could not read the task list still refreshes last_run_at, so staleness alone
-// would report a cron that checks nothing as healthy
-func TestHealthDegradedWhenLastRunFailed(t *testing.T) {
-	w, resp := callHealth(t, &ClientCtx{
-		Store:            &mockFileStore{files: failingFiles(0, 1)},
-		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: false},
-		StaleRunAfter:    2 * time.Hour,
-		FailureThreshold: 3,
-	})
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "degraded", resp.Status)
-	assert.Equal(t, 0, resp.Failing)
-}
-
-// an unset threshold would make `>= 0` true for every row and pin health to degraded forever
-func TestHealthThresholdDefaultsWhenUnset(t *testing.T) {
-	w, resp := callHealth(t, &ClientCtx{
-		Store:         &mockFileStore{files: failingFiles(0, 0)},
+		Store: &mockFileStore{files: []*tracker.FileMetadata{
+			{ID: "fine", LastSyncAt: time.Now().Add(-time.Hour)},
+			{ID: "parked", LastErrorKind: providers.KindPermanent.Key(), LastSyncAt: time.Now().Add(-10 * 24 * time.Hour)},
+			{ID: "stale", LastErrorKind: providers.KindBlocked.Key(), LastSyncAt: time.Now().Add(-4 * 24 * time.Hour)},
+		}},
 		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
 		RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
 		StaleRunAfter: 2 * time.Hour,
@@ -1221,25 +1195,56 @@ func TestHealthThresholdDefaultsWhenUnset(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "ok", resp.Status)
-	assert.Equal(t, 0, resp.Failing)
+	assert.Equal(t, 3, resp.Tracked)
+	assert.Equal(t, 1, resp.Parked)
+	assert.Equal(t, 1, resp.Stale)
 }
 
-func TestHealthUnhealthyBreaker(t *testing.T) {
-	nextProbe := time.Now().Add(time.Hour)
+// a sweep that could not read the task list still refreshes last_run_at, so staleness alone
+// would report a cron that checks nothing as healthy
+func TestHealthDegradedWhenLastRunFailed(t *testing.T) {
 	w, resp := callHealth(t, &ClientCtx{
-		Store: &mockFileStore{files: failingFiles(0)},
-		Breaker: &mockBreaker{states: map[string]tracker.State{
-			"rutracker": {Tripped: true, NextProbeAt: nextProbe, Cooldown: time.Hour},
-			"nnm":       {},
-		}},
-		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
-		StaleRunAfter:    2 * time.Hour,
-		FailureThreshold: 3,
+		Store:         &mockFileStore{files: failingFiles(0, 1)},
+		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: false},
+		StaleRunAfter: 2 * time.Hour,
 	})
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Equal(t, "unhealthy", resp.Status)
-	assert.Equal(t, map[string]string{"rutracker": "blocked", "nnm": "ok"}, resp.Providers)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "degraded", resp.Status)
+}
+
+// the first trip is one bad hour at the tracker and only degrades; a circuit still open past
+// the first probe is a real block and pages
+func TestHealthBreaker(t *testing.T) {
+	tests := []struct {
+		name       string
+		trippedAt  time.Time
+		wantStatus string
+		wantCode   int
+	}{
+		{name: "fresh trip", trippedAt: time.Now().Add(-10 * time.Minute), wantStatus: "degraded", wantCode: http.StatusOK},
+		{name: "still blocked after the first probe", trippedAt: time.Now().Add(-3 * time.Hour), wantStatus: "unhealthy", wantCode: http.StatusServiceUnavailable},
+		{name: "unknown trip time", trippedAt: time.Time{}, wantStatus: "degraded", wantCode: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, resp := callHealth(t, &ClientCtx{
+				Store: &mockFileStore{files: failingFiles(0)},
+				Breaker: &mockBreaker{states: map[string]tracker.State{
+					"rutracker": {Tripped: true, TrippedAt: tt.trippedAt, NextProbeAt: time.Now().Add(time.Hour), Cooldown: time.Hour},
+					"nnm":       {},
+				}},
+				RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+				StaleRunAfter: 2 * time.Hour,
+			})
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, tt.wantStatus, resp.Status)
+			assert.Equal(t, map[string]string{"rutracker": "blocked", "nnm": "ok"}, resp.Providers)
+		})
+	}
 }
 
 func TestHealthUnhealthyStale(t *testing.T) {
@@ -1256,12 +1261,11 @@ func TestHealthUnhealthyStale(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w, resp := callHealth(t, &ClientCtx{
-				Store:            &mockFileStore{},
-				Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-				RunState:         &mockRunState{at: tt.lastRunAt, ok: true},
-				StaleRunAfter:    2 * time.Hour,
-				StartedAt:        time.Now().Add(-10 * time.Hour),
-				FailureThreshold: 3,
+				Store:         &mockFileStore{},
+				Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+				RunState:      &mockRunState{at: tt.lastRunAt, ok: true},
+				StaleRunAfter: 2 * time.Hour,
+				StartedAt:     time.Now().Add(-10 * time.Hour),
 			})
 
 			assert.Equal(t, tt.wantCode, w.Code)
@@ -1284,12 +1288,11 @@ func TestHealthNeverRanWithinGrace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w, resp := callHealth(t, &ClientCtx{
-				Store:            &mockFileStore{},
-				Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-				RunState:         &mockRunState{},
-				StaleRunAfter:    2 * time.Hour,
-				StartedAt:        tt.startedAt,
-				FailureThreshold: 3,
+				Store:         &mockFileStore{},
+				Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+				RunState:      &mockRunState{},
+				StaleRunAfter: 2 * time.Hour,
+				StartedAt:     tt.startedAt,
 			})
 
 			assert.Equal(t, tt.wantCode, w.Code)
@@ -1321,14 +1324,13 @@ func ago(d time.Duration) *time.Time {
 // watcher tests observe can only have come from the watches themselves.
 func watchHealthCtx(store watchStore, startedAt time.Time) *ClientCtx {
 	return &ClientCtx{
-		Store:            &mockFileStore{},
-		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
-		WatchStore:       store,
-		StaleRunAfter:    2 * time.Hour,
-		StaleWatchAfter:  2 * time.Hour,
-		StartedAt:        startedAt,
-		FailureThreshold: 3,
+		Store:           &mockFileStore{},
+		Breaker:         &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:        &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		WatchStore:      store,
+		StaleRunAfter:   2 * time.Hour,
+		StaleWatchAfter: 2 * time.Hour,
+		StartedAt:       startedAt,
 	}
 }
 
@@ -1463,10 +1465,10 @@ func TestHealthWatchesIgnoreExpiredAndDisabled(t *testing.T) {
 	assert.Equal(t, 0, resp.Watches.WithErrors)
 }
 
-// the watcher check may only raise ok to degraded; a tripped breaker stays unhealthy
+// the watcher check may only raise ok to degraded; a long-tripped breaker stays unhealthy
 func TestHealthWatchesDoNotLowerUnhealthy(t *testing.T) {
 	ctx := watchHealthCtx(newMockWatchStore(watchWithRun("broken", ago(5*time.Minute), "boom")), time.Now().Add(-5*time.Hour))
-	ctx.Breaker = &mockBreaker{states: map[string]tracker.State{"rutracker": {Tripped: true}}}
+	ctx.Breaker = &mockBreaker{states: map[string]tracker.State{"rutracker": {Tripped: true, TrippedAt: time.Now().Add(-3 * time.Hour)}}}
 
 	w, resp := callHealth(t, ctx)
 
@@ -2836,13 +2838,12 @@ func TestHandleFiles_CarriesNotifyThroughToResponse(t *testing.T) {
 
 func downloadsHealthCtx(store downloadStore) *ClientCtx {
 	return &ClientCtx{
-		Store:            &mockFileStore{files: failingFiles(0, 1)},
-		Breaker:          &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
-		RunState:         &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
-		StaleRunAfter:    2 * time.Hour,
-		StartedAt:        time.Now().Add(-5 * time.Hour),
-		FailureThreshold: 3,
-		DownloadStore:    store,
+		Store:         &mockFileStore{files: failingFiles(0, 1)},
+		Breaker:       &mockBreaker{states: map[string]tracker.State{"rutracker": {}}},
+		RunState:      &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: true},
+		StaleRunAfter: 2 * time.Hour,
+		StartedAt:     time.Now().Add(-5 * time.Hour),
+		DownloadStore: store,
 	}
 }
 
@@ -2951,7 +2952,7 @@ func TestHealthDownloadsDoNotChangeStatus(t *testing.T) {
 			name: "count error does not lower a degraded verdict",
 			ctx: func(_ *testing.T) *ClientCtx {
 				ctx := downloadsHealthCtx(&failingDownloadStore{err: errors.New("db is down")})
-				ctx.Store = &mockFileStore{files: failingFiles(3, 4)}
+				ctx.RunState = &mockRunState{at: time.Now().Add(-10 * time.Minute), ok: false}
 
 				return ctx
 			},
